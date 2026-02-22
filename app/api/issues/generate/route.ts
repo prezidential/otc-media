@@ -34,6 +34,254 @@ function safeJsonParse<T>(text: string): T | null {
   }
 }
 
+const FALLBACK_THESIS = "Identity programs are misclassified, not underfunded.";
+
+const FORBIDDEN_THESIS_PATTERNS = [
+  "the real issue is",
+  "the real risk is",
+  "the real problem is",
+];
+
+const FORBIDDEN_LINT_PATTERNS = [
+  "the real issue is",
+  "the real risk is",
+  "the real problem is",
+];
+
+type LintViolation = { type: string; snippet: string; lineNumber: number };
+
+function isLintExcludedLine(line: string): boolean {
+  const t = line.trim();
+  if (t.startsWith("Sources:")) return true;
+  if (/^-\s*https?:\/\//i.test(t)) return true;
+  if (t === "---") return true;
+  return false;
+}
+
+function lintDraft(text: string): LintViolation[] {
+  const violations: LintViolation[] = [];
+  if (!text.trim()) return violations;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNumber = i + 1;
+    if (isLintExcludedLine(line)) continue;
+    const lower = line.toLowerCase();
+    for (const p of FORBIDDEN_LINT_PATTERNS) {
+      if (lower.includes(p)) {
+        violations.push({ type: "forbidden_phrase", snippet: p, lineNumber });
+        break;
+      }
+    }
+    const withoutUrls = line.replace(/https?:\/\/[^\s]+/g, "");
+    if (withoutUrls.includes("-")) {
+      const snippet = line.trim().slice(0, 80);
+      violations.push({ type: "hyphen", snippet, lineNumber });
+    }
+  }
+  return violations;
+}
+
+async function rewriteLintViolations(text: string, violations: LintViolation[]): Promise<string> {
+  const lineNumbers = [...new Set(violations.map((v) => v.lineNumber))].sort((a, b) => a - b);
+  const lines = text.split("\n");
+  const offendingLines = lineNumbers.map((n) => lines[n - 1] ?? "");
+  const client = claudeClient();
+  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is") and no hyphen "-" inside prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
+
+Sentences to fix (one per line, in order):
+${offendingLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4096,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const block = msg.content?.find((b) => b.type === "text");
+  const raw = block && block.type === "text" ? (block as { type: "text"; text: string }).text.trim() : "";
+  const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  const parsed = safeJsonParse<string[]>(stripped);
+  if (!parsed || !Array.isArray(parsed) || parsed.length !== lineNumbers.length) {
+    return text;
+  }
+  const result = [...lines];
+  for (let i = 0; i < lineNumbers.length; i++) {
+    const idx = lineNumbers[i] - 1;
+    if (idx >= 0 && idx < result.length) result[idx] = parsed[i] ?? result[idx];
+  }
+  return result.join("\n");
+}
+
+type ThesisCandidate = {
+  id: string;
+  thesis: string;
+  scores: { distinctiveness: number; tension: number; operator_usefulness: number; mode_fit: number };
+  total: number;
+};
+type ThesisEngineResponse = { theses: ThesisCandidate[]; selected_id: string };
+
+type ThesisResult = {
+  selectedThesis: string;
+  theses: ThesisCandidate[];
+  thesisError?: boolean;
+  thesisErrorReason?: string;
+};
+
+function thesisOneSentenceHeuristic(s: string): boolean {
+  if (s.includes("\n")) return false;
+  const terminators = (s.match(/[.!?]/g) || []).length;
+  return terminators <= 1;
+}
+
+function thesisHasUrl(s: string): boolean {
+  return s.includes("http://") || s.includes("https://");
+}
+
+function thesisHasForbidden(s: string): boolean {
+  const lower = s.toLowerCase();
+  return FORBIDDEN_THESIS_PATTERNS.some((p) => lower.includes(p));
+}
+
+function computeTotal(t: ThesisCandidate): number {
+  if (typeof t.total === "number" && !Number.isNaN(t.total)) return t.total;
+  const s = t.scores;
+  if (!s || typeof s !== "object") return 0;
+  const d = typeof s.distinctiveness === "number" ? s.distinctiveness : 0;
+  const ten = typeof s.tension === "number" ? s.tension : 0;
+  const o = typeof s.operator_usefulness === "number" ? s.operator_usefulness : 0;
+  const m = typeof s.mode_fit === "number" ? s.mode_fit : 0;
+  return d + ten + o + m;
+}
+
+function computeWeightedTotal(t: ThesisCandidate, outputMode: string): number {
+  const s = t.scores;
+  if (!s || typeof s !== "object") return 0;
+  const d = typeof s.distinctiveness === "number" ? s.distinctiveness : 0;
+  const ten = typeof s.tension === "number" ? s.tension : 0;
+  const o = typeof s.operator_usefulness === "number" ? s.operator_usefulness : 0;
+  const m = typeof s.mode_fit === "number" ? s.mode_fit : 0;
+  if (outputMode === "full_issue") {
+    return o * 2 + m * 1.5 + ten + d;
+  }
+  if (outputMode === "insider_access") {
+    return ten * 2 + o + d + m;
+  }
+  return d + ten + o + m;
+}
+
+async function runThesisEngine(leadsBlock: string, outputMode: string): Promise<ThesisResult> {
+  const systemThesis = `You are the Identity Jedi editorial strategy desk. Output strict JSON only. No markdown. No commentary.`;
+
+  const userThesis = `Generate three distinct one sentence editorial theses based on the approved leads.
+
+Constraints:
+- Each thesis must be exactly one sentence.
+- Each thesis must take a strong position someone could disagree with.
+- Do not summarize the leads or list events.
+- Do not include URLs.
+- Avoid generic phrases: "this week", "signals", "the industry", "in todays world", "the real issue is", "the real risk is", "the real problem is".
+- No dashes inside sentences.
+
+Scoring rubric:
+- distinctiveness: 1 to 5
+- tension: 1 to 5
+- operator_usefulness: 1 to 5
+- mode_fit: 1 to 5, mode is "${outputMode}"
+
+Return strict JSON in this shape:
+{
+  "theses": [
+    { "id": "t1", "thesis": "...", "scores": { "distinctiveness": 1, "tension": 1, "operator_usefulness": 1, "mode_fit": 1 }, "total": 4 },
+    { "id": "t2", "thesis": "...", "scores": { "distinctiveness": 1, "tension": 1, "operator_usefulness": 1, "mode_fit": 1 }, "total": 4 },
+    { "id": "t3", "thesis": "...", "scores": { "distinctiveness": 1, "tension": 1, "operator_usefulness": 1, "mode_fit": 1 }, "total": 4 }
+  ],
+  "selected_id": "t2"
+}
+
+Approved leads:
+${leadsBlock}`;
+
+  try {
+    const client = claudeClient();
+    const msg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: systemThesis,
+      messages: [{ role: "user", content: userThesis }],
+    });
+    const textBlock = msg.content?.find((b) => b.type === "text");
+    const raw = (textBlock && textBlock.type === "text" ? (textBlock as { type: "text"; text: string }).text : "").trim();
+    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const parsed = safeJsonParse<ThesisEngineResponse>(stripped);
+
+    if (!parsed?.theses || !Array.isArray(parsed.theses) || parsed.theses.length !== 3) {
+      return {
+        selectedThesis: FALLBACK_THESIS,
+        theses: [],
+        thesisError: true,
+        thesisErrorReason: "Expected exactly 3 theses",
+      };
+    }
+
+    const theses = parsed.theses;
+    for (let i = 0; i < theses.length; i++) {
+      const t = theses[i];
+      const thesisText = typeof t?.thesis === "string" ? t.thesis.trim() : "";
+      if (!thesisText) {
+        return {
+          selectedThesis: FALLBACK_THESIS,
+          theses: [],
+          thesisError: true,
+          thesisErrorReason: `Thesis ${i + 1} missing or empty`,
+        };
+      }
+      if (!thesisOneSentenceHeuristic(thesisText)) {
+        return {
+          selectedThesis: FALLBACK_THESIS,
+          theses: [],
+          thesisError: true,
+          thesisErrorReason: `Thesis ${i + 1} must be exactly one sentence`,
+        };
+      }
+      if (thesisHasUrl(thesisText)) {
+        return {
+          selectedThesis: FALLBACK_THESIS,
+          theses: [],
+          thesisError: true,
+          thesisErrorReason: `Thesis ${i + 1} must not contain URLs`,
+        };
+      }
+      if (thesisHasForbidden(thesisText)) {
+        return {
+          selectedThesis: FALLBACK_THESIS,
+          theses: [],
+          thesisError: true,
+          thesisErrorReason: `Thesis ${i + 1} contains forbidden pattern`,
+        };
+      }
+    }
+
+    const withTotals = theses.map((t) => ({
+      ...t,
+      total: computeTotal(t),
+      weightedTotal: computeWeightedTotal(t, outputMode),
+    }));
+
+    let selected = withTotals.find((t) => t.id === parsed.selected_id);
+    if (!selected) selected = withTotals.reduce((a, b) => (a.weightedTotal >= b.weightedTotal ? a : b));
+    if (!selected) selected = withTotals[0];
+
+    return { selectedThesis: selected.thesis.trim(), theses: withTotals };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      selectedThesis: FALLBACK_THESIS,
+      theses: [],
+      thesisError: true,
+      thesisErrorReason: reason,
+    };
+  }
+}
+
 async function generateEditorialAngle(params: {
   client: any;
   model: string;
@@ -138,10 +386,89 @@ Notes:
 }
 
 
+const AUDIENCE_LEVELS = ["practitioner", "ciso", "board"] as const;
+const FOCUS_AREAS = ["strategic", "tactical", "architecture"] as const;
+const TONE_MODES = ["reflective", "confrontational", "analytical", "strategic"] as const;
+
+type AudienceLevel = (typeof AUDIENCE_LEVELS)[number];
+type FocusArea = (typeof FOCUS_AREAS)[number];
+type ToneMode = (typeof TONE_MODES)[number];
+
+function parseSteering(body: Record<string, unknown>) {
+  const aggressionLevel = Math.min(5, Math.max(1, Number(body.aggressionLevel) || 3));
+  const audienceLevel = AUDIENCE_LEVELS.includes(body.audienceLevel as AudienceLevel) ? (body.audienceLevel as AudienceLevel) : "practitioner";
+  const focusArea = FOCUS_AREAS.includes(body.focusArea as FocusArea) ? (body.focusArea as FocusArea) : "architecture";
+  const toneMode = TONE_MODES.includes(body.toneMode as ToneMode) ? (body.toneMode as ToneMode) : "strategic";
+  return { aggressionLevel, audienceLevel, focusArea, toneMode };
+}
+
+const OUTPUT_MODES = ["full_issue", "insider_access", "bundle"] as const;
+type OutputMode = (typeof OUTPUT_MODES)[number];
+
+function parseOutputMode(body: Record<string, unknown>): OutputMode {
+  return OUTPUT_MODES.includes(body.outputMode as OutputMode) ? (body.outputMode as OutputMode) : "full_issue";
+}
+
+async function generateInsiderDraft(
+  leadsBlock: string,
+  steering: { aggressionLevel: number; audienceLevel: string; focusArea: string; toneMode: string },
+  primaryThesis: string
+): Promise<string> {
+  const insiderUserPrompt = `You are writing an Insider Access artifact for experienced IAM practitioners. Use only the approved leads and their listed Sources URLs. Do not invent any sources or citations.
+
+Primary Thesis:
+${primaryThesis}
+
+Every section must reinforce this thesis. Avoid recap.
+
+Editorial Steering Inputs:
+- aggressionLevel: ${steering.aggressionLevel} (1-5)
+- audienceLevel: ${steering.audienceLevel}
+- focusArea: ${steering.focusArea}
+- toneMode: ${steering.toneMode}
+
+Approved leads:
+${leadsBlock}
+
+Produce ONLY the Insider Access artifact as plain text with these sections in order. Use clear section labels.
+
+1) Title (max 8 words, no punctuation)
+2) What Most Teams Miss (2-4 paragraphs)
+3) What I Would Actually Change (2-4 paragraphs)
+4) Vendor Reality Check (direct, opinionated, no brand bashing)
+5) Tactical Architecture Shift (3-5 bullets)
+
+Rules:
+- No hook. No invitation lines. No promo. No recap tone.
+- Assume audience is experienced IAM practitioner. Go deeper than public editorial.
+- Reference at most 2 signals by name. Use only URLs from the Sources lists above; do not invent sources.
+- No dashes inside sentences (no hyphen, em dash, or en dash).
+- Maintain Identity Jedi posture but more surgical and less rhetorical.
+- Keep paragraphs to 1-2 sentences.
+
+Output only the artifact text. No meta commentary.`;
+
+  const insiderSystemPrompt = `You write in Identity Jedi voice: surgical, direct, no fluff. Insider Access is for experienced IAM practitioners. Do not invent sources; cite only URLs provided for each lead. No dashes inside sentences.`;
+
+  const client = claudeClient();
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: MAX_TOKENS,
+    system: insiderSystemPrompt,
+    messages: [{ role: "user", content: insiderUserPrompt }],
+  });
+  const textBlock = msg.content?.find((b) => b.type === "text");
+  return textBlock && textBlock.type === "text"
+    ? (textBlock as { type: "text"; text: string }).text.trim()
+    : "";
+}
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const brandProfileId = body.brandProfileId as string | undefined;
   const leadLimit = typeof body.leadLimit === "number" ? body.leadLimit : 6;
+  const steering = parseSteering(body);
+  const outputMode = parseOutputMode(body);
 
   if (!brandProfileId) {
     return NextResponse.json({ error: "brandProfileId required" }, { status: 400 });
@@ -183,6 +510,99 @@ export async function POST(req: Request) {
     };
   });
 
+  const leadsBlock = leadsWithSources
+    .map(
+      (l, i) =>
+        `[Lead ${i + 1}]
+Angle: ${l.angle}
+Why now: ${l.why_now}
+Who it impacts: ${l.who_it_impacts}
+Take: ${l.contrarian_take}
+Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"}`
+    )
+    .join("\n\n");
+
+  let thesisResult: ThesisResult;
+  let thesisResultFull: ThesisResult | undefined;
+  let thesisResultInsider: ThesisResult | undefined;
+  let selectedThesis: string;
+  let selectedThesisForFull: string;
+  let selectedThesisInsider: string | undefined;
+  let thesesList: ThesisCandidate[];
+  let thesisError: boolean | undefined;
+  let thesisErrorReason: string | undefined;
+
+  if (outputMode === "bundle") {
+    thesisResultFull = await runThesisEngine(leadsBlock, "full_issue");
+    thesisResultInsider = await runThesisEngine(leadsBlock, "insider_access");
+    selectedThesisForFull = thesisResultFull.selectedThesis;
+    selectedThesisInsider = thesisResultInsider.selectedThesis;
+    selectedThesis = selectedThesisForFull;
+    thesesList = thesisResultFull.theses;
+    thesisError = thesisResultFull.thesisError;
+    thesisErrorReason = thesisResultFull.thesisErrorReason;
+  } else {
+    thesisResult = await runThesisEngine(leadsBlock, outputMode);
+    selectedThesis = thesisResult.selectedThesis;
+    selectedThesisForFull = thesisResult.selectedThesis;
+    thesesList = thesisResult.theses;
+    thesisError = thesisResult.thesisError;
+    thesisErrorReason = thesisResult.thesisErrorReason;
+  }
+
+  const thesisPayload = (overrides?: Record<string, unknown>) => ({
+    selectedThesis,
+    theses: thesesList,
+    ...(thesisError && { thesisError: true, thesisErrorReason: thesisErrorReason ?? "Fallback used" }),
+    ...overrides,
+  });
+
+  const bundleThesisPayload = () =>
+    thesisResultFull && thesisResultInsider
+      ? {
+          selectedThesisFull: thesisResultFull.selectedThesis,
+          selectedThesisInsider: thesisResultInsider.selectedThesis,
+          thesesFull: thesisResultFull.theses,
+          thesesInsider: thesisResultInsider.theses,
+          ...(thesisResultFull.thesisError && {
+            thesisErrorFull: true,
+            thesisErrorReasonFull: thesisResultFull.thesisErrorReason ?? "Fallback used",
+          }),
+          ...(thesisResultInsider.thesisError && {
+            thesisErrorInsider: true,
+            thesisErrorReasonInsider: thesisResultInsider.thesisErrorReason ?? "Fallback used",
+          }),
+        }
+      : {};
+
+  if (outputMode === "insider_access") {
+    try {
+      let insiderText = await generateInsiderDraft(leadsBlock, steering, selectedThesis);
+      let lintFixed = false;
+      const lintViolations: LintViolation[] = [];
+      const violations = lintDraft(insiderText);
+      if (violations.length > 0) {
+        try {
+          insiderText = await rewriteLintViolations(insiderText, violations);
+          lintFixed = true;
+        } catch {
+          // keep original on rewrite failure
+        }
+        lintViolations.push(...violations);
+      }
+      return NextResponse.json({
+        ok: true,
+        draft: insiderText || "(No content generated)",
+        lintFixed,
+        lintViolations,
+        ...thesisPayload(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    }
+  }
+
   let promoText = "";
   try {
     let origin = "";
@@ -205,18 +625,6 @@ export async function POST(req: Request) {
   }
   if (!promoText.trim()) promoText = "Subscribe.";
 
-  const leadsBlock = leadsWithSources
-    .map(
-      (l, i) =>
-        `[Lead ${i + 1}]
-Angle: ${l.angle}
-Why now: ${l.why_now}
-Who it impacts: ${l.who_it_impacts}
-Take: ${l.contrarian_take}
-Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"}`
-    )
-    .join("\n\n");
-
     const client = claudeClient();
 
     const angle = await generateEditorialAngle({
@@ -231,7 +639,16 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     const userPrompt = `You are assembling a single newsletter issue draft in Identity Jedi (IDJ) voice.
     Use only the approved leads and their listed Sources URLs. Do not invent any sources or citations.
 
-   
+Primary Thesis:
+${selectedThesisForFull}
+
+Every section must reinforce this thesis. Avoid recap.
+
+Editorial Steering Inputs (adjust Opening Hook, Deep Dive, and From the Dojo to match these):
+- aggressionLevel: ${steering.aggressionLevel} (1-5)
+- audienceLevel: ${steering.audienceLevel}
+- focusArea: ${steering.focusArea}
+- toneMode: ${steering.toneMode}
 
     EDITORIAL ANGLE (must drive the Deep Dive):
     Title: ${angle.title}
@@ -341,6 +758,13 @@ Tone rules:
     Output only the draft text. No meta commentary.`;
 
     const systemPrompt = `You write in Identity Jedi (IDJ) voice.
+
+Editorial Steering (behavior mapping). Change posture based on the steering values provided in the user message:
+- aggressionLevel: 1-2 = measured, careful; 3 = confident, direct; 4-5 = sharp, provocative. Influences Opening Hook and Deep Dive tone.
+- audienceLevel: practitioner = hands-on, tool-aware; ciso = risk and board language, strategic impact; board = business outcomes, minimal jargon. Influences Opening Hook and Deep Dive framing.
+- focusArea: strategic = why and so-what, big picture; tactical = what to do Monday, concrete steps; architecture = systems, design, integration. Influences Deep Dive structure and From the Dojo specificity.
+- toneMode: reflective = consider, weigh; confrontational = challenge, call out; analytical = break down, classify; strategic = position, recommend. Influences Opening Hook posture and Deep Dive argument style.
+
   Opening Hook must:
 - Feel like a moment.
 - Build tension or escalation.
@@ -418,9 +842,53 @@ Avoid explanatory tone in the first section.
     // table may not exist; skip persistence
   }
 
+  let lintFixed = false;
+  const lintViolations: LintViolation[] = [];
+  const draftViolations = lintDraft(draftText);
+  if (draftViolations.length > 0) {
+    try {
+      draftText = await rewriteLintViolations(draftText, draftViolations);
+      lintFixed = true;
+    } catch {
+      // keep original draft on rewrite failure
+    }
+    lintViolations.push(...draftViolations);
+  }
+
+  if (outputMode === "bundle") {
+    try {
+      let insiderDraft = await generateInsiderDraft(leadsBlock, steering, selectedThesisInsider!);
+      const insiderViolations = lintDraft(insiderDraft);
+      if (insiderViolations.length > 0) {
+        try {
+          insiderDraft = await rewriteLintViolations(insiderDraft, insiderViolations);
+          lintFixed = true;
+        } catch {
+          // keep original insider draft on rewrite failure
+        }
+        lintViolations.push(...insiderViolations);
+      }
+      return NextResponse.json({
+        ok: true,
+        draft: draftText,
+        insiderDraft: insiderDraft || "(No content generated)",
+        stored,
+        lintFixed,
+        lintViolations,
+        ...bundleThesisPayload(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     draft: draftText,
     stored,
+    lintFixed,
+    lintViolations,
+    ...thesisPayload(),
   });
 }
