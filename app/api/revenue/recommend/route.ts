@@ -43,6 +43,16 @@ export async function POST(req: Request) {
     : [];
   const forbiddenList = forbidden.length ? `Do not use these phrases or patterns: ${forbidden.join(", ")}.` : "";
 
+  const truthfulnessRule =
+    "Truthfulness: do not claim proprietary incident details, specific company tiers, or exact rules, playbooks, or configurations. Describe benefits in general terms only.";
+  const practitionerBans =
+    "Do not use: exclusive, free newsletter, readers miss, analysis, insights, complex, today.";
+  const voiceForbidden =
+    "Practitioner recommendation mode: recommend in plain language to practitioners. Never use the pattern 'This isn't X' or 'This is not X' or 'It's not X, it's Y'. Do not use these buzzwords or phrases: " +
+    (forbidden.length ? forbidden.join(", ") : "synergy, drive value, empower, Here's the thing, The truth is, Now more than ever, At the end of the day.") +
+    " " +
+    practitionerBans;
+
   const emojiRules =
     brandProfile.emoji_policy_json && typeof brandProfile.emoji_policy_json === "object"
       ? `Emoji policy: ${JSON.stringify(brandProfile.emoji_policy_json)}.`
@@ -58,22 +68,26 @@ export async function POST(req: Request) {
       ? `CTA rules (use for the final line): ${JSON.stringify(brandProfile.cta_rules_json)}.`
       : "Include one clear CTA line at the end.";
 
-  const userPrompt = `Write a short promo block for this product. Output only the promo text, nothing else. No JSON, no labels, no explanation.
+  const userPrompt = `Write a short promo block for this product in practitioner recommendation mode. Output only the promo text, nothing else. No JSON, no labels, no explanation.
 
 Product: ${item.title}
 Type: ${item.type}
 
 Requirements:
-- Length: 3 to 6 lines total.
-- Include exactly one CTA line (call to action) at the end.
+- Exactly 3 to 5 lines total. One sentence per line.
+- First line: state one concrete outcome in plain language (what the practitioner gets or can do).
+- Last line: must be exactly "Subscribe." Nothing else on that line.
 - Do not use dashes within sentences (no em dashes or hyphens mid sentence).
+- Truthfulness: do not claim proprietary incident details, specific company tiers, or exact rules, playbooks, or configurations; describe benefits in general terms only.
 ${forbiddenList ? `- ${forbiddenList}` : ""}
 ${emojiRules ? `- ${emojiRules}` : ""}
 ${formattingRules ? `- ${formattingRules}` : ""}
 - ${ctaRules}`;
 
-  const systemPrompt =
-    "You respond with only the requested promo copy. Plain text only. No code blocks, no quotes, no preamble.";
+  const systemPrompt = `You respond with only the requested promo copy. Practitioner recommendation mode: plain language for practitioners. Plain text only. No code blocks, no quotes, no preamble.
+${truthfulnessRule}
+Strict voice rules: ${voiceForbidden}
+Output format: exactly 3 to 5 lines, one sentence per line. Line 1 = one concrete outcome in plain language. Final line = exactly "Subscribe."`;
 
   try {
     const client = claudeClient();

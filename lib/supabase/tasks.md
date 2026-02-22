@@ -228,3 +228,101 @@ Requirements:
 Constraints:
 - Do not change schema
 - Do not invent new DB fields
+#################
+
+## Task 8 — Revenue Slot Suggestion V0 (Brand tuned)
+Create:
+- app/api/revenue/seed/route.ts
+- app/api/revenue/list/route.ts
+- app/api/revenue/recommend/route.ts
+
+Update:
+- app/leads/page.tsx (optional: show recommended promo block)
+
+Requirements:
+- revenue/seed:
+  - if no revenue_items exist for workspace, insert 2 default items:
+    1) "Identity Jedi Newsletter Premium" (type: subscription)
+    2) "Workshop-in-a-Box" (type: digital_product)
+  - mark them active
+- revenue/list:
+  - list active revenue_items for workspace ordered by created_at asc
+- revenue/recommend:
+  - input JSON: { brandProfileId: string }
+  - deterministic selection: choose 1 active revenue_item (first by priority if exists, else newest)
+  - generate a short promo block (3-6 lines) using Claude, tuned by brand profile JSON
+  - must include a single CTA line
+  - must avoid forbidden patterns and avoid dashes in sentences
+  - return { ok, item, promoText }
+Constraints:
+- Do not change schema
+- Do not invent new columns
+
+## Patch — Revenue recommend voice tightening
+Update:
+- app/api/revenue/recommend/route.ts
+
+Requirements:
+- Enforce promoText format: 3-5 lines, 1 sentence per line
+- Explicitly prohibit "This isn't" and "This is not" phrasing
+- Prohibit buzzwords: actionable, industry insiders, stay ahead, evolving faster
+- Keep brand-profile-driven tuning intact
+- Return plain text only
+Constraints:
+- Do not change schema
+
+## Task 9 — Issue Draft Assembler V0 (IDJ format)
+Create:
+- app/api/issues/generate/route.ts
+- app/api/issues/latest/route.ts
+- app/issues/page.tsx
+
+Requirements:
+- issues/generate input JSON:
+  { brandProfileId: string, cadence?: 'daily'|'weekly', leadLimit?: number }
+- Fetch:
+  - brand profile by id + workspace_id
+  - approved leads (status='approved') newest first, limit leadLimit (default 6)
+  - promo slot from /api/revenue/recommend using same brandProfileId (internal call or shared function)
+- Use Claude to assemble a single newsletter draft in IDJ format.
+- Output must be plain text (no markdown headings required, but can be used).
+- Must include these sections, in this order:
+  1) Title (one line)
+  2) Opening Hook (2-3 short paragraphs)
+  3) Fresh Signals (3-6 items, each item: title + 2-3 sentence take + Sources list)
+  4) Deep Dive (600-900 words, editorial, in IDJ voice)
+  5) From the Dojo (practical checklist: 5 bullets)
+  6) Promo Slot (use promoText verbatim)
+  7) Close (short sign-off + CTA: Subscribe)
+- Each Fresh Signals item must include citations using URLs from the lead Sources blocks.
+- Store generated draft in table issue_drafts if it exists; if it does not exist, return draft only and do not fail.
+- issues/latest returns last generated draft (if stored) else error message.
+- issues page:
+  - dropdown brand profile
+  - button Generate Issue Draft
+  - output preview with copy button
+Constraints:
+- Do not change schema
+- Do not invent new tables
+- If issue_drafts table does not exist, gracefully skip persistence.
+
+
+## Patch — Issue draft voice tightening
+Update:
+- app/api/issues/generate/route.ts
+
+Requirements:
+- Strengthen Claude instructions:
+  - No dashes inside sentences (no '-', '—', '–')
+  - Avoid phrases: "This isn't", "isn't just", "The real problem isn't"
+  - Vary sentence starters, avoid repeated "The problem is" patterns
+  - Keep paragraphs to 1-2 sentences
+- Fresh Signals format:
+  - Sources must be formatted as:
+    Sources:
+    - url
+    - url
+- Do not invent sources
+- Keep promoText verbatim
+Constraints:
+- Do not change schema
