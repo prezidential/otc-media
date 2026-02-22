@@ -21,6 +21,8 @@ export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promo, setPromo] = useState<{ item: { title: string; type: string }; promoText: string } | null>(null);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -70,6 +72,23 @@ export default function LeadsPage() {
       }
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function fetchPromo() {
+    if (!selectedBrandProfileId) return;
+    setPromoLoading(true);
+    setPromo(null);
+    try {
+      const res = await fetch("/api/revenue/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandProfileId: selectedBrandProfileId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok && data.item && data.promoText) setPromo({ item: data.item, promoText: data.promoText });
+    } finally {
+      setPromoLoading(false);
     }
   }
 
@@ -134,6 +153,42 @@ export default function LeadsPage() {
           {generating ? "Generating…" : "Generate Leads"}
         </button>
         {message && <span style={{ marginLeft: 12 }}>{message}</span>}
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <button
+          type="button"
+          onClick={fetchPromo}
+          disabled={promoLoading || !selectedBrandProfileId}
+          style={{
+            padding: "8px 14px",
+            cursor: promoLoading || !selectedBrandProfileId ? "not-allowed" : "pointer",
+            background: theme.bg,
+            color: theme.fg,
+            border: theme.border,
+            borderRadius: 4,
+          }}
+        >
+          {promoLoading ? "Loading…" : "Get recommended promo"}
+        </button>
+        {promo && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 16,
+              border: theme.border,
+              borderRadius: 8,
+              background: theme.bg,
+              whiteSpace: "pre-wrap",
+              fontSize: 14,
+            }}
+          >
+            <div style={{ marginBottom: 8, opacity: 0.85 }}>
+              {promo.item.title} ({promo.item.type})
+            </div>
+            {promo.promoText}
+          </div>
+        )}
       </div>
 
       <h2 style={{ marginTop: 32 }}>Pending review</h2>
