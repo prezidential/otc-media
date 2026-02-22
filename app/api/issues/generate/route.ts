@@ -48,7 +48,27 @@ const FORBIDDEN_LINT_PATTERNS = [
   "the real problem is",
 ];
 
+const DASH_REPLACE_MAP: [string, string][] = [
+  ["nation-state", "nation state"],
+  ["machine-speed", "machine speed"],
+  ["real-time", "real time"],
+  ["proof-of-concept", "proof of concept"],
+  ["pre-authorized", "pre authorized"],
+];
+
+function applyDashReplaceMap(text: string): string {
+  let out = text;
+  for (const [from, to] of DASH_REPLACE_MAP) {
+    out = out.split(from).join(to);
+  }
+  return out;
+}
+
 type LintViolation = { type: string; snippet: string; lineNumber: number };
+
+const EM_DASH = "\u2014";
+const EN_DASH = "\u2013";
+const SPACE_DASH_SPACE = /\s-\s/;
 
 function isLintExcludedLine(line: string): boolean {
   const t = line.trim();
@@ -73,10 +93,14 @@ function lintDraft(text: string): LintViolation[] {
         break;
       }
     }
-    const withoutUrls = line.replace(/https?:\/\/[^\s]+/g, "");
-    if (withoutUrls.includes("-")) {
-      const snippet = line.trim().slice(0, 80);
-      violations.push({ type: "hyphen", snippet, lineNumber });
+    if (line.includes(EM_DASH)) {
+      violations.push({ type: "em_dash", snippet: line.trim().slice(0, 80), lineNumber });
+    }
+    if (line.includes(EN_DASH)) {
+      violations.push({ type: "en_dash", snippet: line.trim().slice(0, 80), lineNumber });
+    }
+    if (SPACE_DASH_SPACE.test(line)) {
+      violations.push({ type: "space_dash_space", snippet: line.trim().slice(0, 80), lineNumber });
     }
   }
   return violations;
@@ -87,7 +111,7 @@ async function rewriteLintViolations(text: string, violations: LintViolation[]):
   const lines = text.split("\n");
   const offendingLines = lineNumbers.map((n) => lines[n - 1] ?? "");
   const client = claudeClient();
-  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is") and no hyphen "-" inside prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
+  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is"); no em dash (—) or en dash (–); no space-dash-space in prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
 
 Sentences to fix (one per line, in order):
 ${offendingLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
@@ -122,6 +146,7 @@ type ThesisEngineResponse = { theses: ThesisCandidate[]; selected_id: string };
 type ThesisResult = {
   selectedThesis: string;
   theses: ThesisCandidate[];
+  selectedBy?: "editor" | "model";
   thesisError?: boolean;
   thesisErrorReason?: string;
 };
@@ -217,6 +242,7 @@ ${leadsBlock}`;
       return {
         selectedThesis: FALLBACK_THESIS,
         theses: [],
+        selectedBy: "editor",
         thesisError: true,
         thesisErrorReason: "Expected exactly 3 theses",
       };
@@ -230,6 +256,7 @@ ${leadsBlock}`;
         return {
           selectedThesis: FALLBACK_THESIS,
           theses: [],
+          selectedBy: "editor",
           thesisError: true,
           thesisErrorReason: `Thesis ${i + 1} missing or empty`,
         };
@@ -238,6 +265,7 @@ ${leadsBlock}`;
         return {
           selectedThesis: FALLBACK_THESIS,
           theses: [],
+          selectedBy: "editor",
           thesisError: true,
           thesisErrorReason: `Thesis ${i + 1} must be exactly one sentence`,
         };
@@ -246,6 +274,7 @@ ${leadsBlock}`;
         return {
           selectedThesis: FALLBACK_THESIS,
           theses: [],
+          selectedBy: "editor",
           thesisError: true,
           thesisErrorReason: `Thesis ${i + 1} must not contain URLs`,
         };
@@ -254,6 +283,7 @@ ${leadsBlock}`;
         return {
           selectedThesis: FALLBACK_THESIS,
           theses: [],
+          selectedBy: "editor",
           thesisError: true,
           thesisErrorReason: `Thesis ${i + 1} contains forbidden pattern`,
         };
@@ -266,16 +296,41 @@ ${leadsBlock}`;
       weightedTotal: computeWeightedTotal(t, outputMode),
     }));
 
-    let selected = withTotals.find((t) => t.id === parsed.selected_id);
-    if (!selected) selected = withTotals.reduce((a, b) => (a.weightedTotal >= b.weightedTotal ? a : b));
-    if (!selected) selected = withTotals[0];
+    function cmpEditor(a: (typeof withTotals)[0], b: (typeof withTotals)[0]): number {
+      const diff = b.weightedTotal - a.weightedTotal;
+      if (diff > 0.5) return 1;
+      if (diff < -0.5) return -1;
+      const o = (b.scores?.operator_usefulness ?? 0) - (a.scores?.operator_usefulness ?? 0);
+      if (o !== 0) return o;
+      const m = (b.scores?.mode_fit ?? 0) - (a.scores?.mode_fit ?? 0);
+      if (m !== 0) return m;
+      return (b.scores?.distinctiveness ?? 0) - (a.scores?.distinctiveness ?? 0);
+    }
 
-    return { selectedThesis: selected.thesis.trim(), theses: withTotals };
+    let selected: (typeof withTotals)[0];
+    let selectedBy: "editor" | "model";
+
+    if (outputMode === "full_issue") {
+      selected = [...withTotals].sort(cmpEditor)[0] ?? withTotals[0];
+      selectedBy = "editor";
+    } else {
+      const byId = withTotals.find((t) => t.id === parsed.selected_id);
+      if (byId) {
+        selected = byId;
+        selectedBy = "model";
+      } else {
+        selected = [...withTotals].sort(cmpEditor)[0] ?? withTotals[0];
+        selectedBy = "editor";
+      }
+    }
+
+    return { selectedThesis: selected.thesis.trim(), theses: withTotals, selectedBy };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return {
       selectedThesis: FALLBACK_THESIS,
       theses: [],
+      selectedBy: "editor",
       thesisError: true,
       thesisErrorReason: reason,
     };
@@ -553,6 +608,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
   const thesisPayload = (overrides?: Record<string, unknown>) => ({
     selectedThesis,
     theses: thesesList,
+    ...(outputMode !== "bundle" && thesisResult && { selectedThesisSelectedBy: thesisResult.selectedBy ?? "editor" }),
     ...(thesisError && { thesisError: true, thesisErrorReason: thesisErrorReason ?? "Fallback used" }),
     ...overrides,
   });
@@ -562,6 +618,8 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
       ? {
           selectedThesisFull: thesisResultFull.selectedThesis,
           selectedThesisInsider: thesisResultInsider.selectedThesis,
+          selectedThesisFullSelectedBy: thesisResultFull.selectedBy ?? "editor",
+          selectedThesisInsiderSelectedBy: thesisResultInsider.selectedBy ?? "editor",
           thesesFull: thesisResultFull.theses,
           thesesInsider: thesisResultInsider.theses,
           ...(thesisResultFull.thesisError && {
@@ -578,6 +636,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
   if (outputMode === "insider_access") {
     try {
       let insiderText = await generateInsiderDraft(leadsBlock, steering, selectedThesis);
+      insiderText = applyDashReplaceMap(insiderText);
       let lintFixed = false;
       const lintViolations: LintViolation[] = [];
       const violations = lintDraft(insiderText);
@@ -842,6 +901,7 @@ Avoid explanatory tone in the first section.
     // table may not exist; skip persistence
   }
 
+  draftText = applyDashReplaceMap(draftText);
   let lintFixed = false;
   const lintViolations: LintViolation[] = [];
   const draftViolations = lintDraft(draftText);
@@ -858,6 +918,7 @@ Avoid explanatory tone in the first section.
   if (outputMode === "bundle") {
     try {
       let insiderDraft = await generateInsiderDraft(leadsBlock, steering, selectedThesisInsider!);
+      insiderDraft = applyDashReplaceMap(insiderDraft);
       const insiderViolations = lintDraft(insiderDraft);
       if (insiderViolations.length > 0) {
         try {

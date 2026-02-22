@@ -763,3 +763,44 @@ Additionally:
 
 Return:
 - lintViolations as structured items: [{ type, snippet, lineNumber }]
+
+
+## Task 16.6 — Editor Controlled Thesis Selection (full_issue)
+Goal: Make thesis selection deterministic and aligned with scoring.
+
+Update:
+- app/api/issues/generate/route.ts
+
+Behavior:
+- For outputMode "full_issue":
+  - Ignore Claude selected_id.
+  - Choose thesis with highest weightedTotal.
+  - Tie-breaker if weightedTotal within 0.5:
+    1) higher operator_usefulness
+    2) higher mode_fit
+    3) higher distinctiveness
+- For outputMode "insider_access":
+  - Keep honoring selected_id (Claude can pick here).
+Return:
+- selectedThesisFullSelectedBy: "editor"
+- selectedThesisInsiderSelectedBy: "model" (or "editor" if fallback)
+
+## Task 16.7 — Lint Rule Update for Dashes
+Goal: Stop wasting tokens rewriting normal hyphenated English while enforcing the style intent.
+
+Update:
+- app/api/issues/generate/route.ts
+
+Behavior:
+- Remove lint rule that flags '-' hyphens globally.
+- Instead:
+  - Flag em dash '—' and en dash '–' anywhere in prose.
+  - Flag "space-dash-space" patterns: / \-\s|\s-\s / (exclude URL lines)
+Optional (if desired):
+- Add deterministic replace map for common compounds:
+  - "nation-state" -> "nation state"
+  - "machine-speed" -> "machine speed"
+  - "real-time" -> "real time"
+  - "proof-of-concept" -> "proof of concept"
+  - "pre-authorized" -> "pre authorized"
+No Claude call required for replacements.
