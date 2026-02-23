@@ -34,6 +34,101 @@ function safeJsonParse<T>(text: string): T | null {
   }
 }
 
+type EditorPackClaudeResponse = {
+  angleSummary: { full_issue: string; insider_access: string };
+  titleOptions: string[];
+  hookOptions: string[];
+  redlines: string[];
+};
+
+async function runEditorPack(params: {
+  selectedThesisFull: string;
+  selectedThesisInsider: string;
+  draftText: string;
+  insiderDraftText: string;
+}): Promise<EditorPackClaudeResponse | null> {
+  const { selectedThesisFull, selectedThesisInsider, draftText, insiderDraftText } = params;
+  const systemEditorPack = `You are the Identity Jedi editor. Output strict JSON only. No markdown. No commentary.`;
+
+  const userEditorPack = `Create an editor review pack for the drafts below.
+
+Constraints:
+- angleSummary: max 3 sentences each, must reflect the selected thesis for that draft.
+- titleOptions: exactly 3 title options for the full issue. Return exactly 3 strings. Each title must follow a distinct format:
+
+Title 1: Declarative thesis, 3–7 words.
+Title 2: Tension/contrast, 6–12 words. Must include one of: "while", "as", "when" (no "versus").
+Title 3: Operator framing, 6–12 words. Implies action or consequence. Must not start with "How to".
+
+Title global constraints:
+- No "the real (issue|risk|problem|battlefield|gap|exposure)" phrasing.
+- No em dash or en dash characters.
+- Do not repeat the same key noun phrase across titles (e.g., "machine speed" cannot appear in more than one title).
+- Do not start two titles with the same first word.
+
+- hookOptions: exactly 3 hook options for the full issue. Return exactly 3 strings. Each hook must be materially different in structure and framing, not just vocabulary swaps.
+
+Hook rules:
+- Each hook must use a different structure.
+- Hook 1: blunt thesis. Exactly 2 lines.
+- Hook 2: statistic or punch framing. 2 to 3 lines.
+- Hook 3: contrast or tension framing. 3 to 4 lines.
+- Do not reuse the same opening phrase across hooks.
+- Do not repeat sentence structure.
+- No 'the real (issue|risk|problem|battlefield|gap|exposure)' phrasing.
+- No em dashes or en dashes.
+
+- redlines: max 7 bullets. Each must be specific and actionable. Call out weak takes, repeated phrasing, missing angle, unclear claims, and where to tighten.
+
+Hard rules:
+- Do not add new facts.
+- Do not invent sources.
+- Do not use em dashes or en dashes.
+- Avoid phrases: "the real issue is", "the real risk is", "the real problem is".
+
+Return strict JSON in this shape:
+{
+  "angleSummary": {
+    "full_issue": "...",
+    "insider_access": "..."
+  },
+  "titleOptions": ["...", "...", "..."],
+  "hookOptions": ["line1\\nline2", "line1\\nline2\\nline3", "line1\\nline2\\nline3\\nline4"],
+  "redlines": ["...", "..."]
+}
+
+Selected theses:
+Full issue: ${selectedThesisFull}
+Insider: ${selectedThesisInsider}
+
+Full issue draft:
+${draftText}
+
+Insider draft:
+${insiderDraftText}`;
+
+  try {
+    const client = claudeClient();
+    const msg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: systemEditorPack,
+      messages: [{ role: "user", content: userEditorPack }],
+    });
+    const block = msg.content?.find((b) => b.type === "text");
+    const raw = block && block.type === "text" ? (block as { type: "text"; text: string }).text.trim() : "";
+    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const parsed = safeJsonParse<EditorPackClaudeResponse>(stripped);
+    if (!parsed?.angleSummary || !parsed.titleOptions || !parsed.hookOptions || !parsed.redlines) return null;
+    if (!Array.isArray(parsed.titleOptions) || parsed.titleOptions.length !== 3) return null;
+    if (!Array.isArray(parsed.hookOptions) || parsed.hookOptions.length !== 3) return null;
+    if (parsed.redlines.length > 7) parsed.redlines = parsed.redlines.slice(0, 7);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 const FALLBACK_THESIS = "Identity programs are misclassified, not underfunded.";
 
 const FORBIDDEN_THESIS_PATTERNS = [
@@ -48,27 +143,71 @@ const FORBIDDEN_LINT_PATTERNS = [
   "the real problem is",
 ];
 
-const DASH_REPLACE_MAP: [string, string][] = [
-  ["nation-state", "nation state"],
-  ["machine-speed", "machine speed"],
-  ["real-time", "real time"],
-  ["proof-of-concept", "proof of concept"],
-  ["pre-authorized", "pre authorized"],
-];
-
-function applyDashReplaceMap(text: string): string {
-  let out = text;
-  for (const [from, to] of DASH_REPLACE_MAP) {
-    out = out.split(from).join(to);
-  }
-  return out;
+/** Replaces only em dash (U+2014) and en dash (U+2013) with a space. Hyphenated words are allowed. */
+function normalizeLongDashes(text: string): string {
+  return text.replace(/\u2014/g, " ").replace(/\u2013/g, " ");
 }
 
 type LintViolation = { type: string; snippet: string; lineNumber: number };
 
+export type StyleLintViolation = {
+  type: string;
+  pattern: string;
+  snippet: string;
+  lineNumber: number;
+};
+
+const STYLE_FORBIDDEN_PHRASE = /\bthe real (issue|risk|problem|battlefield|gap|exposure)\b/gi;
+const STYLE_EM_EN_DASH = /[\u2014\u2013]/g; // em dash, en dash
+const SNIPPET_RADIUS = 30;
+
+function lineNumberForIndex(text: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < text.length; i++) {
+    if (text[i] === "\n") line++;
+  }
+  return line;
+}
+
+function snippetAround(text: string, matchStart: number, matchEnd: number): string {
+  const start = Math.max(0, matchStart - SNIPPET_RADIUS);
+  const end = Math.min(text.length, matchEnd + SNIPPET_RADIUS);
+  return text.slice(start, end).replace(/\n/g, " ");
+}
+
+function styleLint(text: string): StyleLintViolation[] {
+  const violations: StyleLintViolation[] = [];
+
+  let m: RegExpExecArray | null;
+  const forbiddenRe = new RegExp(STYLE_FORBIDDEN_PHRASE.source, "gi");
+  while ((m = forbiddenRe.exec(text)) !== null) {
+    const lineNumber = lineNumberForIndex(text, m.index);
+    const snippet = snippetAround(text, m.index, m.index + m[0].length);
+    violations.push({
+      type: "forbidden_phrase",
+      pattern: m[0],
+      snippet,
+      lineNumber,
+    });
+  }
+
+  const dashRe = new RegExp(STYLE_EM_EN_DASH.source, "g");
+  while ((m = dashRe.exec(text)) !== null) {
+    const lineNumber = lineNumberForIndex(text, m.index);
+    const snippet = snippetAround(text, m.index, m.index + m[0].length);
+    violations.push({
+      type: "dash",
+      pattern: m[0],
+      snippet,
+      lineNumber,
+    });
+  }
+
+  return violations;
+}
+
 const EM_DASH = "\u2014";
 const EN_DASH = "\u2013";
-const SPACE_DASH_SPACE = /\s-\s/;
 
 function isLintExcludedLine(line: string): boolean {
   const t = line.trim();
@@ -99,9 +238,6 @@ function lintDraft(text: string): LintViolation[] {
     if (line.includes(EN_DASH)) {
       violations.push({ type: "en_dash", snippet: line.trim().slice(0, 80), lineNumber });
     }
-    if (SPACE_DASH_SPACE.test(line)) {
-      violations.push({ type: "space_dash_space", snippet: line.trim().slice(0, 80), lineNumber });
-    }
   }
   return violations;
 }
@@ -111,7 +247,7 @@ async function rewriteLintViolations(text: string, violations: LintViolation[]):
   const lines = text.split("\n");
   const offendingLines = lineNumbers.map((n) => lines[n - 1] ?? "");
   const client = claudeClient();
-  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is"); no em dash (—) or en dash (–); no space-dash-space in prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
+  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is", or "the real battlefield/gap/exposure"); no em dash (—) or en dash (–) characters. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
 
 Sentences to fix (one per line, in order):
 ${offendingLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
@@ -204,7 +340,7 @@ Constraints:
 - Do not summarize the leads or list events.
 - Do not include URLs.
 - Avoid generic phrases: "this week", "signals", "the industry", "in todays world", "the real issue is", "the real risk is", "the real problem is".
-- No dashes inside sentences.
+- No em dash (—) or en dash (–) characters in sentences.
 
 Scoring rubric:
 - distinctiveness: 1 to 5
@@ -362,7 +498,7 @@ Rules:
 - Title max 7 words. No colon. No hype.
 - hook_line max 12 words.
 - Use short sentences.
-- No dashes in sentences (no '-', '—', '–').
+- No em dash (—) or en dash (–) characters in sentences.
 - Avoid "This isn't", "isn't just", "The real problem isn't".
 `;
 
@@ -497,13 +633,13 @@ Rules:
 - No hook. No invitation lines. No promo. No recap tone.
 - Assume audience is experienced IAM practitioner. Go deeper than public editorial.
 - Reference at most 2 signals by name. Use only URLs from the Sources lists above; do not invent sources.
-- No dashes inside sentences (no hyphen, em dash, or en dash).
+- No em dash (—) or en dash (–) characters in sentences.
 - Maintain Identity Jedi posture but more surgical and less rhetorical.
 - Keep paragraphs to 1-2 sentences.
 
 Output only the artifact text. No meta commentary.`;
 
-  const insiderSystemPrompt = `You write in Identity Jedi voice: surgical, direct, no fluff. Insider Access is for experienced IAM practitioners. Do not invent sources; cite only URLs provided for each lead. No dashes inside sentences.`;
+  const insiderSystemPrompt = `You write in Identity Jedi voice: surgical, direct, no fluff. Insider Access is for experienced IAM practitioners. Do not invent sources; cite only URLs provided for each lead. No em dash (—) or en dash (–) characters in sentences.`;
 
   const client = claudeClient();
   const msg = await client.messages.create({
@@ -524,6 +660,8 @@ export async function POST(req: Request) {
   const leadLimit = typeof body.leadLimit === "number" ? body.leadLimit : 6;
   const steering = parseSteering(body);
   const outputMode = parseOutputMode(body);
+  const includeEditorPack = Boolean((body as any).includeEditorPack);
+  const effectiveOutputMode: OutputMode = includeEditorPack ? "bundle" : outputMode;
 
   if (!brandProfileId) {
     return NextResponse.json({ error: "brandProfileId required" }, { status: 400 });
@@ -577,7 +715,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     )
     .join("\n\n");
 
-  let thesisResult: ThesisResult;
+  let thesisResult: ThesisResult | undefined;
   let thesisResultFull: ThesisResult | undefined;
   let thesisResultInsider: ThesisResult | undefined;
   let selectedThesis: string;
@@ -587,7 +725,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
   let thesisError: boolean | undefined;
   let thesisErrorReason: string | undefined;
 
-  if (outputMode === "bundle") {
+  if (effectiveOutputMode === "bundle") {
     thesisResultFull = await runThesisEngine(leadsBlock, "full_issue");
     thesisResultInsider = await runThesisEngine(leadsBlock, "insider_access");
     selectedThesisForFull = thesisResultFull.selectedThesis;
@@ -597,7 +735,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     thesisError = thesisResultFull.thesisError;
     thesisErrorReason = thesisResultFull.thesisErrorReason;
   } else {
-    thesisResult = await runThesisEngine(leadsBlock, outputMode);
+    thesisResult = await runThesisEngine(leadsBlock, effectiveOutputMode);
     selectedThesis = thesisResult.selectedThesis;
     selectedThesisForFull = thesisResult.selectedThesis;
     thesesList = thesisResult.theses;
@@ -608,7 +746,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
   const thesisPayload = (overrides?: Record<string, unknown>) => ({
     selectedThesis,
     theses: thesesList,
-    ...(outputMode !== "bundle" && thesisResult && { selectedThesisSelectedBy: thesisResult.selectedBy ?? "editor" }),
+    ...(effectiveOutputMode !== "bundle" && thesisResult && { selectedThesisSelectedBy: thesisResult.selectedBy ?? "editor" }),
     ...(thesisError && { thesisError: true, thesisErrorReason: thesisErrorReason ?? "Fallback used" }),
     ...overrides,
   });
@@ -633,10 +771,10 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
         }
       : {};
 
-  if (outputMode === "insider_access") {
+  if (effectiveOutputMode === "insider_access") {
     try {
       let insiderText = await generateInsiderDraft(leadsBlock, steering, selectedThesis);
-      insiderText = applyDashReplaceMap(insiderText);
+      insiderText = normalizeLongDashes(insiderText);
       let lintFixed = false;
       const lintViolations: LintViolation[] = [];
       const violations = lintDraft(insiderText);
@@ -649,11 +787,14 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
         }
         lintViolations.push(...violations);
       }
+      const styleViolations = styleLint(insiderText);
       return NextResponse.json({
         ok: true,
         draft: insiderText || "(No content generated)",
         lintFixed,
         lintViolations,
+        styleLintFixed: false,
+        styleLintViolations: styleViolations,
         ...thesisPayload(),
       });
     } catch (err) {
@@ -765,7 +906,7 @@ Rules:
 - Each line is one sentence.
 - Do not summarize the news.
 - Do not mention specific vendors or articles.
-- No dashes inside sentences.
+- No em dash (—) or en dash (–) characters in sentences.
 - Avoid "This isn't", "isn't just", "The real problem isn't".
     
     Produce a complete issue draft as plain text with these sections in order. Use clear section labels.
@@ -812,7 +953,7 @@ Tone rules:
     6) Promo Slot (the promo text above, verbatim, no changes)
     7) Close (short sign-off + CTA: Subscribe)
     
-    Voice: No dashes inside sentences (no hyphen, em dash, or en dash). Avoid "This isn't", "isn't just", "The real problem isn't". Vary sentence starters. Keep paragraphs to 1-2 sentences.
+    Voice: No em dash (—) or en dash (–) characters in sentences. Avoid "This isn't", "isn't just", "The real problem isn't". Vary sentence starters. Keep paragraphs to 1-2 sentences.
     
     Output only the draft text. No meta commentary.`;
 
@@ -858,7 +999,7 @@ Avoid explanatory tone in the first section.
     }, null, 2)}
     
     Rules:
-    - No dashes inside sentences (no '-', '—', '–').
+    - No em dash (—) or en dash (–) characters in sentences.
     - Avoid "This isn't", "isn't just", "The real problem isn't".
     - Vary sentence starters.
     - Keep paragraphs 1-2 sentences.
@@ -901,7 +1042,7 @@ Avoid explanatory tone in the first section.
     // table may not exist; skip persistence
   }
 
-  draftText = applyDashReplaceMap(draftText);
+  draftText = normalizeLongDashes(draftText);
   let lintFixed = false;
   const lintViolations: LintViolation[] = [];
   const draftViolations = lintDraft(draftText);
@@ -915,10 +1056,12 @@ Avoid explanatory tone in the first section.
     lintViolations.push(...draftViolations);
   }
 
-  if (outputMode === "bundle") {
+  const styleLintViolationsDraft = styleLint(draftText);
+
+  if (effectiveOutputMode === "bundle") {
     try {
       let insiderDraft = await generateInsiderDraft(leadsBlock, steering, selectedThesisInsider!);
-      insiderDraft = applyDashReplaceMap(insiderDraft);
+      insiderDraft = normalizeLongDashes(insiderDraft);
       const insiderViolations = lintDraft(insiderDraft);
       if (insiderViolations.length > 0) {
         try {
@@ -929,13 +1072,72 @@ Avoid explanatory tone in the first section.
         }
         lintViolations.push(...insiderViolations);
       }
+      const insiderDraftText = insiderDraft || "(No content generated)";
+      const styleLintViolationsInsider = styleLint(insiderDraftText);
+      const styleLintViolations = [...styleLintViolationsDraft, ...styleLintViolationsInsider];
+
+      let editorPackError = false;
+      let editorPackErrorReason: string | undefined;
+      const editorPackTheses = {
+        full_issue: {
+          selected: thesisResultFull!.selectedThesis,
+          selectedBy: (thesisResultFull!.thesisError ? "fallback" : thesisResultFull!.selectedBy) ?? "editor",
+        },
+        insider_access: {
+          selected: thesisResultInsider!.selectedThesis,
+          selectedBy: (thesisResultInsider!.thesisError ? "fallback" : thesisResultInsider!.selectedBy) ?? "editor",
+        },
+      };
+      const editorPackDrafts = { full_issue: draftText, insider_access: insiderDraftText };
+
+      const packResponse = await runEditorPack({
+        selectedThesisFull: thesisResultFull!.selectedThesis,
+        selectedThesisInsider: thesisResultInsider!.selectedThesis,
+        draftText,
+        insiderDraftText,
+      });
+
+      let editorPack: {
+        theses: typeof editorPackTheses;
+        angleSummary: { full_issue: string; insider_access: string };
+        titleOptions: string[];
+        hookOptions: string[];
+        redlines: string[];
+        drafts: typeof editorPackDrafts;
+      };
+      if (packResponse) {
+        editorPack = {
+          theses: editorPackTheses,
+          angleSummary: packResponse.angleSummary,
+          titleOptions: packResponse.titleOptions,
+          hookOptions: packResponse.hookOptions,
+          redlines: packResponse.redlines,
+          drafts: editorPackDrafts,
+        };
+      } else {
+        editorPackError = true;
+        editorPackErrorReason = "Editor pack Claude call failed or returned invalid JSON";
+        editorPack = {
+          theses: editorPackTheses,
+          angleSummary: { full_issue: "", insider_access: "" },
+          titleOptions: [],
+          hookOptions: [],
+          redlines: [],
+          drafts: editorPackDrafts,
+        };
+      }
+
       return NextResponse.json({
         ok: true,
         draft: draftText,
-        insiderDraft: insiderDraft || "(No content generated)",
+        insiderDraft: insiderDraftText,
         stored,
         lintFixed,
         lintViolations,
+        styleLintFixed: false,
+        styleLintViolations,
+        editorPack,
+        ...(editorPackError && { editorPackError: true, editorPackErrorReason }),
         ...bundleThesisPayload(),
       });
     } catch (err) {
@@ -950,6 +1152,25 @@ Avoid explanatory tone in the first section.
     stored,
     lintFixed,
     lintViolations,
+    styleLintFixed: false,
+    styleLintViolations: styleLintViolationsDraft,
+    ...(includeEditorPack
+      ? {
+          editorPack: {
+            theses: {
+              full_issue: {
+                selected: selectedThesisForFull,
+                selectedBy: thesisResult?.selectedBy ?? "editor",
+              },
+            },
+            angleSummary: { full_issue: "", insider_access: "" },
+            titleOptions: [],
+            hookOptions: [],
+            redlines: [],
+            drafts: { full_issue: draftText },
+          },
+        }
+      : {}),
     ...thesisPayload(),
   });
 }

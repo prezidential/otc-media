@@ -765,42 +765,318 @@ Return:
 - lintViolations as structured items: [{ type, snippet, lineNumber }]
 
 
-## Task 16.6 — Editor Controlled Thesis Selection (full_issue)
-Goal: Make thesis selection deterministic and aligned with scoring.
+## Task 17 — Editor Review Pack (single response, multi-artifact)
+Goal: Produce an "Editor Pack" response that helps David review and direct the newsroom quickly without re-reading raw drafts first.
 
 Update:
 - app/api/issues/generate/route.ts
 
-Behavior:
-- For outputMode "full_issue":
-  - Ignore Claude selected_id.
-  - Choose thesis with highest weightedTotal.
-  - Tie-breaker if weightedTotal within 0.5:
-    1) higher operator_usefulness
-    2) higher mode_fit
-    3) higher distinctiveness
-- For outputMode "insider_access":
-  - Keep honoring selected_id (Claude can pick here).
-Return:
-- selectedThesisFullSelectedBy: "editor"
-- selectedThesisInsiderSelectedBy: "model" (or "editor" if fallback)
+When:
+- Applies to outputMode "bundle" only (for now).
+- Should work even if insiderDraft is empty or generation fails (graceful fallback).
 
-## Task 16.7 — Lint Rule Update for Dashes
-Goal: Stop wasting tokens rewriting normal hyphenated English while enforcing the style intent.
+Output:
+Return JSON with these top-level keys:
+{
+  ok: true,
+  editorPack: {
+    theses: {
+      full_issue: { selected: string, selectedBy: "editor"|"model"|"fallback" },
+      insider_access: { selected: string, selectedBy: "editor"|"model"|"fallback" }
+    },
+    angleSummary: {
+      full_issue: string,          // 1 short paragraph max 3 sentences
+      insider_access: string        // 1 short paragraph max 3 sentences
+    },
+    titleOptions: string[],         // exactly 3, based on thesisFull
+    hookOptions: string[],          // exactly 3, based on thesisFull, 2-4 short lines each
+    redlines: string[],             // max 7 bullets, specific, actionable, no fluff
+    drafts: {
+      full_issue: string,
+      insider_access: string
+    }
+  },
+  lintFixed: boolean,
+  lintViolations: any,
+  selectedThesisFull: string,
+  selectedThesisInsider: string
+}
 
-Update:
-- app/api/issues/generate/route.ts
+Rules:
+- No meta commentary in the strings.
+- No dashes inside prose sentences (en dash/em dash). Avoid "The real issue is" / "The real risk is" / "The real problem is".
+- Do not invent sources. Do not change the Sources blocks in drafts.
+- Promo Slot must remain verbatim in full_issue draft.
 
-Behavior:
-- Remove lint rule that flags '-' hyphens globally.
-- Instead:
-  - Flag em dash '—' and en dash '–' anywhere in prose.
-  - Flag "space-dash-space" patterns: / \-\s|\s-\s / (exclude URL lines)
-Optional (if desired):
-- Add deterministic replace map for common compounds:
-  - "nation-state" -> "nation state"
-  - "machine-speed" -> "machine speed"
-  - "real-time" -> "real time"
-  - "proof-of-concept" -> "proof of concept"
-  - "pre-authorized" -> "pre authorized"
-No Claude call required for replacements.
+How:
+1) Generate drafts as currently (full_issue + insider_access) using existing logic.
+2) After drafts are generated and linted, call Claude one more time to produce the Editor Pack fields:
+   - angleSummary.full_issue
+   - angleSummary.insider_access
+   - titleOptions (3)
+   - hookOptions (3)
+   - redlines (<=7)
+3) Claude must return STRICT JSON only (no markdown).
+
+Editor Pack prompt (use verbatim):
+
+SYSTEM (editor_pack):
+You are the Identity Jedi editor. Output strict JSON only. No markdown. No commentary.
+
+USER (editor_pack):
+Create an editor review pack for the drafts below.
+
+Constraints:
+- angleSummary: max 3 sentences each, must reflect the selected thesis for that draft.
+- titleOptions: exactly 3 title options for the full issue, sharp and specific.
+- hookOptions: exactly 3 hook options for the full issue, each 2 to 4 short lines, no fluff.
+- redlines: max 7 bullets. Each must be specific and actionable. Call out weak takes, repeated phrasing, missing angle, unclear claims, and where to tighten.
+
+Hard rules:
+- Do not add new facts.
+- Do not invent sources.
+- Do not use em dashes or en dashes.
+- Avoid phrases: "the real issue is", "the real risk is", "the real problem is".
+
+Return strict JSON in this shape:
+{
+  "angleSummary": {
+    "full_issue": "...",
+    "insider_access": "..."
+  },
+  "titleOptions": ["...", "...", "..."],
+  "hookOptions": ["line1\nline2", "line1\nline2\nline3", "line1\nline2\nline3\nline4"],
+  "redlines": ["...", "..."]
+}
+
+Selected theses:
+Full issue: ${selectedThesisFull}
+Insider: ${selectedThesisInsider}
+
+Full issue draft:
+${draftText}
+
+Insider draft:
+${insiderDraftText}
+
+Failure handling:
+- If Claude editor_pack call fails, still return drafts as before.
+- Add editorPackError boolean and editorPackErrorReason string when fallback occurs.
+
+## Task 17.1: Enforce Style Lint (No "the real..." + No Hyphens) Across Drafts
+
+### Objective
+Add a deterministic styleLint() layer to the issue generation route so we reliably catch:
+1) "the real (issue|risk|problem|battlefield|gap|exposure)"
+2) Em dash or en dash characters
+3) word-hyphen-word constructs
+While allowing hyphens inside URLs.
+
+### Why
+Current redlines detect violations conceptually, but lintViolations is not catching them in output.
+We need deterministic enforcement so the system does not drift stylistically.
+
+### Rules To Enforce
+
+1) Forbidden phrase (case-insensitive):
+   \bthe real (issue|risk|problem|battlefield|gap|exposure)\b
+
+2) Any em dash or en dash:
+   — or –
+
+3) Any word-hyphen-word:
+   \b\w+-\w+\b
+   BUT ignore matches inside URLs.
+
+### URL Handling
+Treat anything matching:
+   https?:\/\/\S+
+as a protected region where hyphen checks are skipped.
+
+### Required Output
+The API response must include:
+
+{
+  lintFixed: false,
+  lintViolations: [
+    {
+      type: "forbidden_phrase" | "hyphen" | "dash",
+      pattern: string,
+      snippet: string,
+      lineNumber: number
+    }
+  ]
+}
+
+### Acceptance Criteria
+- "the real issue" is flagged.
+- "machine-speed" is flagged.
+- "state-backed" is flagged.
+- URLs with hyphens are NOT flagged.
+- Em dashes are flagged.
+- Violations include accurate line numbers.
+
+## Task 17.2: Enforce Structural Novelty in EditorPack Hooks
+
+### Objective
+Prevent cadence remix loops by forcing hookOptions to follow three distinct structural templates.
+
+### Hook Structure Rules
+
+Hook 1:
+- Blunt thesis
+- Exactly 2 lines
+
+Hook 2:
+- Statistic or punch framing
+- 2 to 3 lines
+
+Hook 3:
+- Contrast or tension framing
+- 3 to 4 lines
+
+Additional Constraints:
+- Hooks must not reuse the same opening phrase.
+- Hooks must not share the same sentence structure.
+- No "the real..." phrasing.
+- No em dash or en dash.
+- Avoid word-hyphen-word phrasing.
+
+### Acceptance Criteria
+- Hooks clearly feel structurally different.
+- Not minor rewrites of each other.
+- Respect global IDJ style rules.
+
+## Task 17.3: Enforce Title Novelty (No Repeats, 3 Distinct Title Formats)
+
+### Objective
+Make titleOptions reliably produce 3 distinct title styles so we stop getting slight remixes of the same title every run.
+
+### Why
+Right now titles often feel like rephrases.
+We want the system to feel like a newsroom desk with intentional variety.
+
+### Title Output Rules
+Return exactly 3 titles.
+
+Each title must follow a different format:
+
+Title 1: Declarative Thesis (3 to 7 words)
+- Direct statement
+- No punctuation required
+Examples: "Identity at Machine Speed", "AI Breaks Identity Governance"
+
+Title 2: Tension / Contrast (6 to 12 words)
+- Must include a contrast cue: "while", "as", "when"
+- Must NOT use "versus"
+Examples: "AI Ships Faster While Governance Crawls", "Agents Scale When Controls Stay Human"
+
+Title 3: Operator Framing (6 to 12 words)
+- Must imply action or consequence
+- Must NOT start with "How to"
+Examples: "What to Fix Before Agents Own Your Control Plane"
+
+### Global Title Constraints
+- No "the real..." phrasing.
+- No em dash or en dash.
+- Avoid word-hyphen-word phrasing.
+- Must not repeat the same key noun phrase across titles (e.g., don’t use "machine speed" in more than one title).
+- Must not start with the same first word across titles.
+
+### Acceptance Criteria
+- 3 titles feel meaningfully different.
+- Titles comply with constraints.
+- Titles do not look like synonyms of each other.
+
+ ## Task 17.4 — Relax dash rule: ban only em/en dashes, allow hyphenated words
+
+### Goal
+We overindexed on “no dashes” and accidentally banned all hyphenated words. The actual writing rule is:
+- No em dash (—) or en dash (–)
+- Hyphenated words are OK
+
+Update the generate route, linting, prompts, and smoke test to match that rule.
+
+### Requirements
+1) Stop flagging hyphenated words as violations anywhere.
+2) Keep banning em dash and en dash everywhere.
+3) Keep banning the phrase pattern:
+   - `\bthe real (issue|risk|problem|battlefield|gap|exposure)\b` (case-insensitive)
+4) Remove all hyphen rewriting and replacements intended to “de-hyphenate” normal prose.
+5) Smoke test should only fail for:
+   - em/en dashes
+   - forbidden “the real …” phrasing
+   Not for hyphenated words.
+
+### Files to change
+- `app/api/issues/generate/route.ts`
+- `scripts/smoke-editor-pack-17.ts`
+
+### Implementation steps
+
+#### 17.4.1 — Editor pack prompt: allow hyphenated words
+In `app/api/issues/generate/route.ts`, inside `runEditorPack()` prompt:
+- Remove any instruction that discourages hyphenated words, specifically:
+  - Remove `Avoid word-hyphen-word phrasing.` from title constraints
+  - Remove `Avoid word-hyphen-word phrasing.` from hook constraints
+- Keep:
+  - No em dash or en dash characters
+  - No forbidden “the real (issue|risk|problem|battlefield|gap|exposure)” phrasing
+
+#### 17.4.2 — Remove hyphen replacement map and replace with em/en dash normalization only
+In `app/api/issues/generate/route.ts`:
+- Delete `DASH_REPLACE_MAP` and `applyDashReplaceMap()`
+- Add a new helper:
+  - `normalizeLongDashes(text)` that replaces only `—` and `–` with a single space
+
+Update all call sites:
+- Replace every `applyDashReplaceMap(...)` call with `normalizeLongDashes(...)`
+
+#### 17.4.3 — Simplify style lint to only enforce forbidden phrase + em/en dashes
+In `app/api/issues/generate/route.ts`:
+- In `styleLint()` remove:
+  - URL span logic
+  - `STYLE_WORD_HYPHEN_WORD`
+  - Any `word_hyphen_word` violations
+- Keep checks for:
+  - `STYLE_FORBIDDEN_PHRASE` = `\bthe real (issue|risk|problem|battlefield|gap|exposure)\b`
+  - `STYLE_EM_EN_DASH` = `[\u2014\u2013]`
+
+#### 17.4.4 — Simplify draft lint to only enforce forbidden phrases + em/en dashes
+In `app/api/issues/generate/route.ts`:
+- In `lintDraft()` remove checks for:
+  - space-dash-space
+  - word-hyphen-word
+  - URL stripping logic used only for hyphen detection
+- Keep:
+  - forbidden phrase checks using existing `FORBIDDEN_LINT_PATTERNS`
+  - em/en dash detection
+- Update `rewriteLintViolations()` prompt so it only instructs Claude to fix:
+  - forbidden phrases: “the real issue is”, “the real risk is”, “the real problem is”
+  - em dash / en dash characters
+  Remove any instruction about hyphens.
+
+#### 17.4.5 — Update generation prompts: ban only em/en dashes
+In `app/api/issues/generate/route.ts`, update all prompt rules that currently say “no dashes” or “no hyphens”:
+- Replace with: “No em dash (—) or en dash (–) characters in sentences.”
+Apply to:
+- `generateEditorialAngle` system rules
+- `generateInsiderDraft` user rules and system prompt
+- full issue `userPrompt` rules
+- full issue `systemPrompt` rules
+
+#### 17.4.6 — Update smoke test: remove hyphen failure, keep em/en + forbidden phrase
+In `scripts/smoke-editor-pack-17.ts`:
+- Remove any check that fails on hyphenated words (including `\w-\w`).
+- Keep or add checks that fail if:
+  - draft contains `—` or `–`
+  - draft contains forbidden “the real (issue|risk|problem|battlefield|gap|exposure)” phrasing (case-insensitive)
+- Run these checks against:
+  - `draft`
+  - `insiderDraft` (when bundle mode returns it)
+
+### Acceptance criteria
+- Running `pnpm smoke:17` passes when drafts contain normal hyphenated words like “nation-state” or “AI-powered”.
+- Smoke test fails if drafts contain `—` or `–`.
+- Smoke test fails if drafts contain “the real risk” / “the real problem” / “the real gap” etc.
+- API response still includes `editorPack` in bundle mode.
