@@ -175,7 +175,20 @@ Sources: ${l.sources.join(", ") || "(none)"}`
   const currentBody = getSectionBodyFromContent(content, section);
 
   const systemPrompt = `You are the Identity Jedi Editor. You regenerate a single section of a newsletter draft.
-Rules: No em dash (—) or en dash (–). No space-dash-space in prose. Avoid "the real issue is", "the real risk is", "the real problem is". Keep paragraphs to 1-2 sentences. Output ONLY the new section body (no section header, no meta commentary).`;
+
+Editorial bias (apply silently, never surface in output):
+- Every claim must be grounded in a specific IAM context (e.g. PAM, IGA, CIEM, NHI, ITDR). Name the domain.
+- Every paragraph must carry a clear business consequence: cost, breach blast radius, audit failure, or operational delay.
+- State explicitly why this matters to the reader's organization. Do not leave the "so what" implicit.
+- Reject generic or safe language. Replace "organizations should consider" with a direct imperative. Replace "this is important" with a concrete impact statement.
+- Do not adopt a neutral or balanced tone. Take a position. If the evidence supports a strong stance, assert it.
+- Prefer operational specificity over thought leadership abstractions.
+
+Formatting rules:
+- No em dash (\u2014) or en dash (\u2013). No space-dash-space in prose. Hyphenated compound words are allowed.
+- Avoid "the real issue is", "the real risk is", "the real problem is".
+- Keep paragraphs to 1-2 sentences.
+- Output ONLY the new section body (no section header, no meta commentary).`;
 
   const userPrompt = `BRAND PROFILE (voice/formatting):
 ${JSON.stringify({
