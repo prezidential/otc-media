@@ -5,8 +5,9 @@ import {
   applyDashReplaceMap,
   lintDraft,
   rewriteLintViolations,
+  type LintViolation,
 } from "@/lib/draft/lint";
-import { createDraftContent, type DraftContentJson } from "@/lib/draft/content";
+import { createDraftContent, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   getSectionBlocks,
   parseDraftToStructured,
@@ -239,9 +240,15 @@ Return ONLY the new section body. Do not include the section number or title (e.
   }
 
   newBody = applyDashReplaceMap(newBody);
+  let lintPassed = false;
+  let lastViolations: LintViolation[] = [];
   for (let attempt = 0; attempt <= LINT_RETRIES; attempt++) {
     const violations = lintDraft(newBody);
-    if (violations.length === 0) break;
+    if (violations.length === 0) {
+      lintPassed = true;
+      break;
+    }
+    lastViolations = violations;
     if (attempt < LINT_RETRIES) {
       try {
         newBody = await rewriteLintViolations(newBody, violations);
@@ -251,13 +258,23 @@ Return ONLY the new section body. Do not include the section number or title (e.
     }
   }
 
-  const updatedJson: DraftContentJson = {
-    ...contentJson,
-    ...buildSectionOutput(section, newBody, contentJson),
-  };
+  if (!lintPassed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Section "${section}" still has lint violations after ${LINT_RETRIES} retries`,
+        violations: lastViolations,
+      },
+      { status: 422 }
+    );
+  }
 
-  const draftContent = createDraftContent(updatedJson);
-  const updatedContent = draftContent.toFullText();
+  const sectionPatch = buildSectionOutput(section, newBody, contentJson);
+  const updatedJson: DraftContentJson = { ...contentJson, ...sectionPatch };
+
+  validateDraftObject(updatedJson);
+
+  const updatedContent = renderDraftMarkdown(updatedJson);
 
   const { error: updateError } = await supabase
     .from("issue_drafts")
