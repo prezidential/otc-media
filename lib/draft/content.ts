@@ -15,6 +15,81 @@ export type DraftContentJson = {
   metadata: { thesis?: string; model?: string };
 };
 
+export type DraftObject = {
+  title: string;
+  hook_paragraphs: string[];
+  fresh_signals: string;
+  deep_dive: string;
+  dojo_checklist: string[];
+  promo_slot: string;
+  close: string;
+  sources: string[];
+  metadata: { model: string; thesis: string };
+};
+
+const DRAFT_STRING_KEYS = [
+  "title",
+  "fresh_signals",
+  "deep_dive",
+  "promo_slot",
+  "close",
+] as const;
+
+const DRAFT_ARRAY_KEYS = [
+  "hook_paragraphs",
+  "dojo_checklist",
+  "sources",
+] as const;
+
+export function validateDraftObject(obj: unknown): DraftObject {
+  if (!obj || typeof obj !== "object") {
+    throw new Error("DraftObject validation failed: expected an object");
+  }
+  const o = obj as Record<string, unknown>;
+
+  for (const key of DRAFT_STRING_KEYS) {
+    if (typeof o[key] !== "string") {
+      throw new Error(
+        `DraftObject validation failed: "${key}" must be a string`
+      );
+    }
+  }
+
+  for (const key of DRAFT_ARRAY_KEYS) {
+    if (!Array.isArray(o[key])) {
+      throw new Error(
+        `DraftObject validation failed: "${key}" must be an array`
+      );
+    }
+    for (const item of o[key] as unknown[]) {
+      if (typeof item !== "string") {
+        throw new Error(
+          `DraftObject validation failed: "${key}" must contain only strings`
+        );
+      }
+    }
+  }
+
+  if (!o.metadata || typeof o.metadata !== "object") {
+    throw new Error(
+      'DraftObject validation failed: "metadata" must be an object'
+    );
+  }
+  const meta = o.metadata as Record<string, unknown>;
+  if (typeof meta.model !== "string" || !meta.model) {
+    throw new Error(
+      "DraftObject validation failed: metadata.model is required"
+    );
+  }
+  if (typeof meta.thesis !== "string" || !meta.thesis) {
+    throw new Error(
+      "DraftObject validation failed: metadata.thesis is required"
+    );
+  }
+
+  return obj as DraftObject;
+}
+
 export type DraftContent = {
   getTitle(): string;
   getHook(): string[];
