@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { claudeClient } from "@/lib/llm/claude";
-import { createDraftContent, DEFAULT_CLOSE, type DraftContentJson } from "@/lib/draft/content";
+import { createDraftContent, DEFAULT_CLOSE, renderDraftMarkdown, type DraftContentJson } from "@/lib/draft/content";
 import {
   applyDashReplaceMap,
   lintDraft,
@@ -883,8 +883,7 @@ Avoid explanatory tone in the first section.
   contentJson.fresh_signals = await lintAndFixSection(contentJson.fresh_signals);
   contentJson.dojo_checklist = contentJson.dojo_checklist.map((b) => applyDashReplaceMap(b));
 
-  const draftContent = createDraftContent(contentJson);
-  const draftText = draftContent.toFullText();
+  const draftText = renderDraftMarkdown(contentJson);
 
   let stored = false;
   let storeError: string | undefined;
