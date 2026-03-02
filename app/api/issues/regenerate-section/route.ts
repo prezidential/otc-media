@@ -7,7 +7,7 @@ import {
   rewriteLintViolations,
   type LintViolation,
 } from "@/lib/draft/lint";
-import { createDraftContent, type DraftContentJson } from "@/lib/draft/content";
+import { createDraftContent, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   getSectionBlocks,
   parseDraftToStructured,
@@ -259,8 +259,9 @@ Return ONLY the new section body. Do not include the section number or title (e.
   const sectionPatch = buildSectionOutput(section, newBody, contentJson);
   const updatedJson: DraftContentJson = { ...contentJson, ...sectionPatch };
 
-  const draftContent = createDraftContent(updatedJson);
-  const updatedContent = draftContent.toFullText();
+  validateDraftObject(updatedJson);
+
+  const updatedContent = renderDraftMarkdown(updatedJson);
 
   const { error: updateError } = await supabase
     .from("issue_drafts")

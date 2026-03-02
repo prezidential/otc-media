@@ -15,6 +15,81 @@ export type DraftContentJson = {
   metadata: { thesis?: string; model?: string };
 };
 
+export type DraftObject = {
+  title: string;
+  hook_paragraphs: string[];
+  fresh_signals: string;
+  deep_dive: string;
+  dojo_checklist: string[];
+  promo_slot: string;
+  close: string;
+  sources: string[];
+  metadata: { model: string; thesis: string };
+};
+
+const DRAFT_STRING_KEYS = [
+  "title",
+  "fresh_signals",
+  "deep_dive",
+  "promo_slot",
+  "close",
+] as const;
+
+const DRAFT_ARRAY_KEYS = [
+  "hook_paragraphs",
+  "dojo_checklist",
+  "sources",
+] as const;
+
+export function validateDraftObject(obj: unknown): DraftObject {
+  if (!obj || typeof obj !== "object") {
+    throw new Error("DraftObject validation failed: expected an object");
+  }
+  const o = obj as Record<string, unknown>;
+
+  for (const key of DRAFT_STRING_KEYS) {
+    if (typeof o[key] !== "string") {
+      throw new Error(
+        `DraftObject validation failed: "${key}" must be a string`
+      );
+    }
+  }
+
+  for (const key of DRAFT_ARRAY_KEYS) {
+    if (!Array.isArray(o[key])) {
+      throw new Error(
+        `DraftObject validation failed: "${key}" must be an array`
+      );
+    }
+    for (const item of o[key] as unknown[]) {
+      if (typeof item !== "string") {
+        throw new Error(
+          `DraftObject validation failed: "${key}" must contain only strings`
+        );
+      }
+    }
+  }
+
+  if (!o.metadata || typeof o.metadata !== "object") {
+    throw new Error(
+      'DraftObject validation failed: "metadata" must be an object'
+    );
+  }
+  const meta = o.metadata as Record<string, unknown>;
+  if (typeof meta.model !== "string" || !meta.model) {
+    throw new Error(
+      "DraftObject validation failed: metadata.model is required"
+    );
+  }
+  if (typeof meta.thesis !== "string" || !meta.thesis) {
+    throw new Error(
+      "DraftObject validation failed: metadata.thesis is required"
+    );
+  }
+
+  return obj as DraftObject;
+}
+
 export type DraftContent = {
   getTitle(): string;
   getHook(): string[];
@@ -67,17 +142,17 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
     getSources: () => [...sources],
     getMetadata: () => ({ ...metadata }),
     toFullText(): string {
-      const parts: string[] = [];
-      if (title) parts.push(`**${title}**`);
-      if (hook_paragraphs.length) parts.push(hook_paragraphs.join("\n\n"));
-      if (fresh_signals) parts.push(fresh_signals);
-      if (deep_dive) parts.push("**Deep Dive**\n\n" + deep_dive);
-      if (dojo_checklist.length) {
-        parts.push("**From the Dojo**\n\n" + dojo_checklist.map((b) => "• " + b).join("\n"));
-      }
-      if (promo_slot) parts.push("**Promo Slot**\n\n" + promo_slot);
-      if (close) parts.push("**Close**\n\n" + close);
-      return parts.join("\n\n");
+      return renderDraftMarkdown({
+        title,
+        hook_paragraphs,
+        fresh_signals,
+        deep_dive,
+        dojo_checklist,
+        promo_slot,
+        close,
+        sources,
+        metadata,
+      });
     },
     toJSON(): DraftContentJson {
       return {
@@ -93,6 +168,29 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
       };
     },
   };
+}
+
+/**
+ * Render a DraftContentJson into deterministic markdown with a fixed section order:
+ * Title > Hook > Fresh Signals > Deep Dive > From the Dojo > Promo Slot > Close
+ */
+export function renderDraftMarkdown(draft: DraftContentJson): string {
+  const parts: string[] = [];
+
+  if (draft.title) parts.push(`**${draft.title}**`);
+  if (draft.hook_paragraphs.length) parts.push(draft.hook_paragraphs.join("\n\n"));
+  if (draft.fresh_signals) parts.push(draft.fresh_signals);
+  if (draft.deep_dive) parts.push("**Deep Dive**\n\n" + draft.deep_dive);
+  if (draft.dojo_checklist.length) {
+    parts.push(
+      "**From the Dojo**\n\n" +
+        draft.dojo_checklist.map((b) => "• " + b).join("\n")
+    );
+  }
+  if (draft.promo_slot) parts.push("**Promo Slot**\n\n" + draft.promo_slot);
+  if (draft.close) parts.push("**Close**\n\n" + draft.close);
+
+  return parts.join("\n\n");
 }
 
 /** Default close line if none stored */
