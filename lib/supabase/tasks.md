@@ -804,3 +804,16 @@ Optional (if desired):
   - "proof-of-concept" -> "proof of concept"
   - "pre-authorized" -> "pre authorized"
 No Claude call required for replacements.
+
+## Task 17 — MVP B: Structured draft JSON + section regeneration
+
+Schema (run in Supabase if migrations are not present):
+```sql
+ALTER TABLE issue_drafts ADD COLUMN IF NOT EXISTS content_json jsonb;
+```
+
+Requirements:
+- issue_drafts keeps existing `content` (text). Add `content_json` (jsonb) for structured draft.
+- generate route: build structured draft object from full-issue text (title, hook_paragraphs, deep_dive, dojo_checklist, sources, metadata) and save to content_json when storing.
+- New endpoint POST /api/issues/regenerate-section: { draftId, section, instruction }; regenerate only that section; re-run lint; update content_json and content.
+- issues/latest: return both content and content_json when present.

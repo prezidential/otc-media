@@ -81,7 +81,13 @@ export default function IssuesPage() {
       if (data.ok && data.draft) {
         setDraft(data.draft);
         if (data.insiderDraft != null) setInsiderDraft(data.insiderDraft);
-        setMessage(data.stored ? "Draft generated and saved." : "Draft generated (not saved: table may be missing).");
+        setMessage(
+          data.stored
+            ? "Draft generated and saved."
+            : data.storeError
+              ? `Draft generated (not saved): ${data.storeError}`
+              : "Draft generated (not saved: table may be missing)."
+        );
       } else {
         setMessage(data.error ?? `Error: ${res.status}`);
       }

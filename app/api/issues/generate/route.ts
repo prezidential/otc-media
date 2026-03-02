@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { claudeClient } from "@/lib/llm/claude";
+import { createDraftContent, DEFAULT_CLOSE, type DraftContentJson } from "@/lib/draft/content";
+import {
+  applyDashReplaceMap,
+  lintDraft,
+  rewriteLintViolations,
+  type LintViolation,
+} from "@/lib/draft/lint";
 
 const MODEL = "claude-sonnet-4-20250514";
 const MAX_TOKENS = 8192;
@@ -41,99 +48,6 @@ const FORBIDDEN_THESIS_PATTERNS = [
   "the real risk is",
   "the real problem is",
 ];
-
-const FORBIDDEN_LINT_PATTERNS = [
-  "the real issue is",
-  "the real risk is",
-  "the real problem is",
-];
-
-const DASH_REPLACE_MAP: [string, string][] = [
-  ["nation-state", "nation state"],
-  ["machine-speed", "machine speed"],
-  ["real-time", "real time"],
-  ["proof-of-concept", "proof of concept"],
-  ["pre-authorized", "pre authorized"],
-];
-
-function applyDashReplaceMap(text: string): string {
-  let out = text;
-  for (const [from, to] of DASH_REPLACE_MAP) {
-    out = out.split(from).join(to);
-  }
-  return out;
-}
-
-type LintViolation = { type: string; snippet: string; lineNumber: number };
-
-const EM_DASH = "\u2014";
-const EN_DASH = "\u2013";
-const SPACE_DASH_SPACE = /\s-\s/;
-
-function isLintExcludedLine(line: string): boolean {
-  const t = line.trim();
-  if (t.startsWith("Sources:")) return true;
-  if (/^-\s*https?:\/\//i.test(t)) return true;
-  if (t === "---") return true;
-  return false;
-}
-
-function lintDraft(text: string): LintViolation[] {
-  const violations: LintViolation[] = [];
-  if (!text.trim()) return violations;
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lineNumber = i + 1;
-    if (isLintExcludedLine(line)) continue;
-    const lower = line.toLowerCase();
-    for (const p of FORBIDDEN_LINT_PATTERNS) {
-      if (lower.includes(p)) {
-        violations.push({ type: "forbidden_phrase", snippet: p, lineNumber });
-        break;
-      }
-    }
-    if (line.includes(EM_DASH)) {
-      violations.push({ type: "em_dash", snippet: line.trim().slice(0, 80), lineNumber });
-    }
-    if (line.includes(EN_DASH)) {
-      violations.push({ type: "en_dash", snippet: line.trim().slice(0, 80), lineNumber });
-    }
-    if (SPACE_DASH_SPACE.test(line)) {
-      violations.push({ type: "space_dash_space", snippet: line.trim().slice(0, 80), lineNumber });
-    }
-  }
-  return violations;
-}
-
-async function rewriteLintViolations(text: string, violations: LintViolation[]): Promise<string> {
-  const lineNumbers = [...new Set(violations.map((v) => v.lineNumber))].sort((a, b) => a - b);
-  const lines = text.split("\n");
-  const offendingLines = lineNumbers.map((n) => lines[n - 1] ?? "");
-  const client = claudeClient();
-  const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is"); no em dash (—) or en dash (–); no space-dash-space in prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
-
-Sentences to fix (one per line, in order):
-${offendingLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
-  const msg = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
-  const block = msg.content?.find((b) => b.type === "text");
-  const raw = block && block.type === "text" ? (block as { type: "text"; text: string }).text.trim() : "";
-  const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-  const parsed = safeJsonParse<string[]>(stripped);
-  if (!parsed || !Array.isArray(parsed) || parsed.length !== lineNumbers.length) {
-    return text;
-  }
-  const result = [...lines];
-  for (let i = 0; i < lineNumbers.length; i++) {
-    const idx = lineNumbers[i] - 1;
-    if (idx >= 0 && idx < result.length) result[idx] = parsed[i] ?? result[idx];
-  }
-  return result.join("\n");
-}
 
 type ThesisCandidate = {
   id: string;
@@ -813,8 +727,16 @@ Tone rules:
     7) Close (short sign-off + CTA: Subscribe)
     
     Voice: No dashes inside sentences (no hyphen, em dash, or en dash). Avoid "This isn't", "isn't just", "The real problem isn't". Vary sentence starters. Keep paragraphs to 1-2 sentences.
-    
-    Output only the draft text. No meta commentary.`;
+
+Output valid JSON only. No markdown code fence. No commentary. Use this exact shape (all strings; hook_paragraphs and dojo_checklist are arrays of strings):
+{
+  "title": "Max 6 words, no punctuation, reflects thesis",
+  "hook_paragraphs": ["First short paragraph.", "Second paragraph.", "Optional third."],
+  "fresh_signals": "**Fresh Signals**\\n\\n**Item 1 Title**\\n\\nTake text...\\n\\nSources:\\n- https://...\\n- https://...\\n\\n**Item 2 Title**\\n\\n...",
+  "deep_dive": "Full Deep Dive prose (600-900 words). Use **bold** for 3 declarative statements.",
+  "dojo_checklist": ["First bullet.", "Second.", "Third.", "Fourth.", "Fifth."]
+}
+Do not include promo_slot or close (they are added separately). Use only URLs from the leads for Sources.`;
 
     const systemPrompt = `You write in Identity Jedi (IDJ) voice.
 
@@ -867,10 +789,17 @@ Avoid explanatory tone in the first section.
     - url
     - url
     Do not invent sources.
-    Promo Slot must be inserted verbatim.`;
+    Output strict JSON only. No code fences.`;
 
+  type ClaudeSections = {
+    title?: string;
+    hook_paragraphs?: string[];
+    fresh_signals?: string;
+    deep_dive?: string;
+    dojo_checklist?: string[];
+  };
 
-  let draftText = "";
+  let contentJson: DraftContentJson;
   try {
     const client = claudeClient();
     const msg = await client.messages.create({
@@ -880,39 +809,105 @@ Avoid explanatory tone in the first section.
       messages: [{ role: "user", content: userPrompt }],
     });
     const textBlock = msg.content?.find((b) => b.type === "text");
-    draftText =
+    const raw =
       textBlock && textBlock.type === "text"
         ? (textBlock as { type: "text"; text: string }).text.trim()
         : "";
+    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const parsed = JSON.parse(stripped) as ClaudeSections;
+
+    const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+    const hook_paragraphs = Array.isArray(parsed.hook_paragraphs)
+      ? parsed.hook_paragraphs.filter((x): x is string => typeof x === "string").map((s) => s.trim())
+      : [];
+    const fresh_signals = typeof parsed.fresh_signals === "string" ? parsed.fresh_signals.trim() : "";
+    const deep_dive = typeof parsed.deep_dive === "string" ? parsed.deep_dive.trim() : "";
+    const dojo_checklist = Array.isArray(parsed.dojo_checklist)
+      ? parsed.dojo_checklist.filter((x): x is string => typeof x === "string").map((s) => s.trim())
+      : [];
+
+    const sources = (fresh_signals.match(/https?:\/\/[^\s)\]]+/g) ?? []);
+    const uniqueSources = [...new Set(sources)];
+
+    contentJson = {
+      title,
+      hook_paragraphs,
+      fresh_signals,
+      deep_dive,
+      dojo_checklist,
+      promo_slot: promoText,
+      close: DEFAULT_CLOSE,
+      sources: uniqueSources,
+      metadata: { thesis: selectedThesisForFull, model: MODEL },
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 
+  let lintFixed = false;
+  const lintViolations: LintViolation[] = [];
+
+  async function lintAndFixSection(text: string): Promise<string> {
+    let out = applyDashReplaceMap(text);
+    const violations = lintDraft(out);
+    if (violations.length > 0) {
+      lintViolations.push(...violations);
+      try {
+        out = await rewriteLintViolations(out, violations);
+        lintFixed = true;
+      } catch {
+        // keep original
+      }
+    }
+    return out;
+  }
+
+  contentJson.hook_paragraphs = contentJson.hook_paragraphs.map((p) =>
+    applyDashReplaceMap(p)
+  );
+  const hookCombined = contentJson.hook_paragraphs.join("\n\n");
+  const hookViolations = lintDraft(hookCombined);
+  if (hookViolations.length > 0) {
+    lintViolations.push(...hookViolations);
+    try {
+      const fixed = await rewriteLintViolations(hookCombined, hookViolations);
+      contentJson.hook_paragraphs = fixed.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+      lintFixed = true;
+    } catch {
+      // keep original
+    }
+  }
+
+  contentJson.deep_dive = await lintAndFixSection(contentJson.deep_dive);
+  contentJson.fresh_signals = await lintAndFixSection(contentJson.fresh_signals);
+  contentJson.dojo_checklist = contentJson.dojo_checklist.map((b) => applyDashReplaceMap(b));
+
+  const draftContent = createDraftContent(contentJson);
+  const draftText = draftContent.toFullText();
+
   let stored = false;
+  let storeError: string | undefined;
   try {
-    const { error: insertError } = await supabase.from("issue_drafts").insert({
+    const insertPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
       brand_profile_id: brandProfileId,
       content: draftText,
-    });
+      content_json: contentJson,
+    };
+    const { error: insertError } = await supabase.from("issue_drafts").insert(insertPayload);
     if (!insertError) stored = true;
-  } catch {
-    // table may not exist; skip persistence
-  }
-
-  draftText = applyDashReplaceMap(draftText);
-  let lintFixed = false;
-  const lintViolations: LintViolation[] = [];
-  const draftViolations = lintDraft(draftText);
-  if (draftViolations.length > 0) {
-    try {
-      draftText = await rewriteLintViolations(draftText, draftViolations);
-      lintFixed = true;
-    } catch {
-      // keep original draft on rewrite failure
+    else {
+      storeError = insertError.message;
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[issue_drafts] insert failed:", insertError.message);
+      }
     }
-    lintViolations.push(...draftViolations);
+  } catch (e) {
+    storeError = e instanceof Error ? e.message : String(e);
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[issue_drafts] insert threw:", e);
+    }
   }
 
   if (outputMode === "bundle") {
@@ -934,6 +929,7 @@ Avoid explanatory tone in the first section.
         draft: draftText,
         insiderDraft: insiderDraft || "(No content generated)",
         stored,
+        ...(storeError && { storeError }),
         lintFixed,
         lintViolations,
         ...bundleThesisPayload(),
@@ -948,6 +944,7 @@ Avoid explanatory tone in the first section.
     ok: true,
     draft: draftText,
     stored,
+    ...(storeError && { storeError }),
     lintFixed,
     lintViolations,
     ...thesisPayload(),
