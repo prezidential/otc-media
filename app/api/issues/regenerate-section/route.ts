@@ -6,7 +6,7 @@ import {
   lintDraft,
   rewriteLintViolations,
 } from "@/lib/draft/lint";
-import { createDraftContent, type DraftContentJson } from "@/lib/draft/content";
+import { createDraftContent, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   getSectionBlocks,
   parseDraftToStructured,
@@ -242,6 +242,8 @@ Return ONLY the new section body. Do not include the section number or title (e.
     ...contentJson,
     ...buildSectionOutput(section, newBody, contentJson),
   };
+
+  validateDraftObject(updatedJson);
 
   const draftContent = createDraftContent(updatedJson);
   const updatedContent = draftContent.toFullText();
