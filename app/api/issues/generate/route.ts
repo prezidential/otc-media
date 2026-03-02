@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { claudeClient } from "@/lib/llm/claude";
-import { createDraftContent, DEFAULT_CLOSE, renderDraftMarkdown, type DraftContentJson } from "@/lib/draft/content";
+import { createDraftContent, DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   applyDashReplaceMap,
   lintDraft,
@@ -799,7 +799,7 @@ Avoid explanatory tone in the first section.
     dojo_checklist?: string[];
   };
 
-  let contentJson: DraftContentJson;
+  let contentJson: DraftObject;
   try {
     const client = claudeClient();
     const msg = await client.messages.create({
@@ -888,6 +888,7 @@ Avoid explanatory tone in the first section.
   let stored = false;
   let storeError: string | undefined;
   try {
+    validateDraftObject(contentJson);
     const insertPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
       brand_profile_id: brandProfileId,
