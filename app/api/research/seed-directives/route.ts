@@ -9,6 +9,7 @@ const DEFAULT_DIRECTIVES = [
   { name: "Regulatory and Standards", cadence: "weekly", description: "Identity-related regulations, standards, and compliance updates." },
   { name: "IGA Modernization and Migration", cadence: "weekly", description: "Identity governance and administration modernization, migrations, and best practices." },
   { name: "CIEM and Cloud Identity", cadence: "weekly", description: "Cloud infrastructure entitlement management, cloud IAM, and multi-cloud identity posture." },
+  { name: "Agentic AI Security", cadence: "daily", description: "AI agent security risks, prompt injection, tool-use exploits, LLM guardrails, and autonomous system governance." },
 ];
 
 export async function POST() {

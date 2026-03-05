@@ -42,4 +42,14 @@ export const RSS_FEED_MAP: Record<string, string[]> = {
     "https://thehackernews.com/feeds/posts/default",
     "https://grahamcluley.com/feed/",
   ],
+  "Agentic AI Security": [
+    "https://embracethered.com/blog/index.xml",
+    "https://blog.trailofbits.com/feed/",
+    "https://simonwillison.net/atom/everything/",
+    "https://openai.com/blog/rss.xml",
+    "https://deepmind.google/blog/rss.xml",
+    "https://venturebeat.com/category/ai/feed/",
+    "https://www.technologyreview.com/feed/",
+    "https://owasp.org/feed.xml",
+  ],
 };

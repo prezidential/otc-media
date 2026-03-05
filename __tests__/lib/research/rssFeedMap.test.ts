@@ -11,10 +11,11 @@ describe("RSS_FEED_MAP", () => {
     expect(keys).toContain("IGA Modernization and Migration");
     expect(keys).toContain("CIEM and Cloud Identity");
     expect(keys).toContain("Identity Threat Detection");
+    expect(keys).toContain("Agentic AI Security");
   });
 
-  it("has at least 7 directives", () => {
-    expect(Object.keys(RSS_FEED_MAP).length).toBeGreaterThanOrEqual(7);
+  it("has at least 8 directives", () => {
+    expect(Object.keys(RSS_FEED_MAP).length).toBeGreaterThanOrEqual(8);
   });
 
   it("every directive maps to a non-empty array of URLs", () => {
@@ -51,6 +52,14 @@ describe("RSS_FEED_MAP", () => {
     const hasSchneier = feeds.some((u) => u.includes("schneier"));
     expect(hasKrebs).toBe(true);
     expect(hasSchneier).toBe(true);
+  });
+
+  it("Agentic AI Security includes AI safety and red-team sources", () => {
+    const feeds = RSS_FEED_MAP["Agentic AI Security"];
+    const hasEmbraceTheRed = feeds.some((u) => u.includes("embracethered"));
+    const hasTrailOfBits = feeds.some((u) => u.includes("trailofbits"));
+    expect(hasEmbraceTheRed).toBe(true);
+    expect(hasTrailOfBits).toBe(true);
   });
 
   it("no duplicate URLs within a single directive", () => {
