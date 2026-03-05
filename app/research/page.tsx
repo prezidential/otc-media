@@ -29,11 +29,7 @@ export default function ResearchPage() {
     const res = await fetch("/api/research/list-directives");
     const text = await res.text();
     let data: { directives?: Directive[] } = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = {};
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
     setDirectives(data.directives ?? []);
   }
 
@@ -41,11 +37,7 @@ export default function ResearchPage() {
     const res = await fetch("/api/runs/list?limit=25");
     const text = await res.text();
     let data: { runs?: Run[] } = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = {};
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
     setRuns(data.runs ?? []);
   }
 
@@ -54,9 +46,7 @@ export default function ResearchPage() {
     setMessage(null);
     try {
       const endpoint = mode === "all" ? "/api/research/run-all" : "/api/research/run-directives";
-      const body = mode === "all"
-        ? { limitPerFeed: 10 }
-        : { cadence: mode, limitPerFeed: 10 };
+      const body = mode === "all" ? { limitPerFeed: 10 } : { cadence: mode, limitPerFeed: 10 };
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -74,104 +64,123 @@ export default function ResearchPage() {
     }
   }
 
-  useEffect(() => {
-    loadDirectives();
-    loadRuns();
-  }, []);
+  useEffect(() => { loadDirectives(); loadRuns(); }, []);
+
+  const cadenceBadge = (cadence: string) => ({
+    padding: "2px 8px",
+    borderRadius: 20,
+    fontSize: 11,
+    fontWeight: 600 as const,
+    background: cadence === "daily" ? "var(--accent-light)" : "var(--warning-light)",
+    color: cadence === "daily" ? "var(--accent)" : "var(--warning)",
+  });
+
+  const statusColor = (status: string) =>
+    status === "completed" ? "var(--success)" : status === "failed" ? "var(--danger)" : "var(--muted)";
 
   return (
-    <main style={{ padding: 24, maxWidth: 900 }}>
-      <h1>Research Console</h1>
-
-      <div style={{ marginTop: 24, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={() => runDirectives("all")}
-          disabled={!!running}
-          style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer", fontWeight: 600 }}
-        >
-          {running === "all" ? "Running All…" : "Run All Directives"}
-        </button>
-        <button
-          type="button"
-          onClick={() => runDirectives("daily")}
-          disabled={!!running}
-          style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer" }}
-        >
-          {running === "daily" ? "Running…" : "Run Daily"}
-        </button>
-        <button
-          type="button"
-          onClick={() => runDirectives("weekly")}
-          disabled={!!running}
-          style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer" }}
-        >
-          {running === "weekly" ? "Running…" : "Run Weekly"}
-        </button>
-        {message && <span style={{ marginLeft: 4 }}>{message}</span>}
+    <div style={{ padding: "32px 40px", maxWidth: 1100 }}>
+      <div style={{ marginBottom: 32 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Research Console</h1>
+        <p style={{ color: "var(--muted)", fontSize: 14 }}>Manage directives and ingest signals from RSS feeds</p>
       </div>
 
-      <h2 style={{ marginTop: 32 }}>Directives</h2>
-      <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
-        {directives.map((d) => (
-          <li
-            key={d.id}
-            style={{
-              padding: 12,
-              marginBottom: 8,
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              backgroundColor: d.active === false ? "#f5f5f5" : undefined,
-            }}
-          >
-            <strong>{d.name}</strong>
-            <span style={{ marginLeft: 8, color: "#666" }}>({d.cadence})</span>
-            {d.description && (
-              <div style={{ marginTop: 6, fontSize: 14, color: "#444" }}>{d.description}</div>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      <h2 style={{ marginTop: 32 }}>Recent Runs</h2>
-      <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
-        {runs.map((r, i) => (
-          <li
-            key={i}
-            style={{
-              padding: 12,
-              marginBottom: 8,
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              fontSize: 14,
-            }}
-          >
-            <span style={{ fontWeight: 600 }}>{r.run_type}</span>
-            <span style={{ marginLeft: 8, color: r.status === "completed" ? "green" : r.status === "failed" ? "red" : "#666" }}>
-              {r.status}
+      <div
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          padding: 20,
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>
+          INGEST CONTROLS
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => runDirectives("all")} disabled={!!running}
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: 14, cursor: running ? "not-allowed" : "pointer", opacity: running ? 0.7 : 1 }}>
+            {running === "all" ? "Running All..." : "Run All Directives"}
+          </button>
+          <button onClick={() => runDirectives("daily")} disabled={!!running}
+            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 14, cursor: running ? "not-allowed" : "pointer" }}>
+            {running === "daily" ? "Running..." : "Run Daily"}
+          </button>
+          <button onClick={() => runDirectives("weekly")} disabled={!!running}
+            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 14, cursor: running ? "not-allowed" : "pointer" }}>
+            {running === "weekly" ? "Running..." : "Run Weekly"}
+          </button>
+          {message && (
+            <span style={{ fontSize: 13, color: message.startsWith("Done") ? "var(--success)" : "var(--danger)", fontWeight: 500 }}>
+              {message}
             </span>
-            {r.started_at && (
-              <span style={{ marginLeft: 8, color: "#666" }}>
-                started {new Date(r.started_at).toLocaleString()}
-              </span>
-            )}
-            {r.finished_at && (
-              <span style={{ marginLeft: 8, color: "#666" }}>
-                finished {new Date(r.finished_at).toLocaleString()}
-              </span>
-            )}
-            {r.error_message && (
-              <div style={{ marginTop: 6, color: "red" }}>{r.error_message}</div>
-            )}
-            {r.output_refs_json && typeof r.output_refs_json === "object" && "inserted" in r.output_refs_json && (
-              <div style={{ marginTop: 6, color: "#444" }}>
-                inserted: {(r.output_refs_json as { inserted?: number }).inserted ?? 0},{" "}
-                skipped: {(r.output_refs_json as { skipped?: number }).skipped ?? 0}
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
+            DIRECTIVES ({directives.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {directives.map((d) => (
+              <div key={d.id}
+                style={{
+                  padding: "14px 16px",
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{d.name}</span>
+                  <span style={cadenceBadge(d.cadence)}>{d.cadence}</span>
+                </div>
+                {d.description && (
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>{d.description}</div>
+                )}
               </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </main>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
+            RECENT RUNS
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {runs.map((r, i) => (
+              <div key={i}
+                style={{
+                  padding: "12px 16px",
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  fontSize: 13,
+                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600, fontFamily: "var(--font-geist-mono, monospace)", fontSize: 12 }}>
+                    {r.run_type}
+                  </span>
+                  <span style={{ color: statusColor(r.status), fontWeight: 600, fontSize: 12 }}>{r.status}</span>
+                </div>
+                <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                  {r.started_at && new Date(r.started_at).toLocaleString()}
+                  {r.finished_at && ` → ${new Date(r.finished_at).toLocaleTimeString()}`}
+                </div>
+                {r.output_refs_json && typeof r.output_refs_json === "object" && "inserted" in r.output_refs_json && (
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--success)" }}>
+                    +{(r.output_refs_json as { inserted?: number }).inserted ?? 0} inserted, {(r.output_refs_json as { skipped?: number }).skipped ?? 0} skipped
+                  </div>
+                )}
+                {r.error_message && (
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--danger)" }}>{r.error_message}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
