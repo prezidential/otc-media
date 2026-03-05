@@ -50,7 +50,7 @@ Output:
 - **Sources** table for RSS feed metadata
 - **Runs** table for ingest job tracking (e.g. `run_type: "directive_ingest"`)
 
-Feed coverage spans 13+ cybersecurity and identity-focused sources across 7 research directives.
+Feed coverage spans 13+ cybersecurity and identity-focused sources across 8 research directives.
 
 Manual topic injection is not yet implemented.
 
@@ -136,14 +136,15 @@ Stretch:
 
 | Component | Status | Notes |
 |-----------|--------|--------|
-| Research Engine | Implemented | RSS ingest (single + run-directives + run-all), 13+ feeds across 7 directives |
+| Research Engine | Implemented | RSS ingest (single + run-directives + run-all), 13+ feeds across 8 directives |
 | Leads pipeline | Implemented | Generate, list, approve; citations bounded to signals |
 | Thesis + Angle + Draft | Implemented | One thesis + one angle per run; full_issue / insider_access / bundle |
 | Draft persistence | Implemented | `issue_drafts.content` (rendered markdown) + `content_json` (`DraftObject` with runtime validation) |
 | Deterministic renderer | Implemented | `renderDraftMarkdown()` enforces fixed section order |
 | Guardrails | Implemented | Lint + auto-rewrite for em/en dash, forbidden phrases; replace map for compounds; editorial bias in regen prompts |
 | Revision Engine | Implemented | Section-level regenerate API with lint retries and guardrails |
-| Test suite | Implemented | 130+ Vitest tests covering lib modules and API routes |
+| Test suite | Implemented | 136+ Vitest tests covering lib modules and API routes |
+| UI | Implemented | Modern sidebar navigation, card-based layout, all features accessible from nav (Signals, Research, Leads, Issues) |
 | Publishing (Beehiiv) | Not implemented | Phase 2 |
 
 ---
