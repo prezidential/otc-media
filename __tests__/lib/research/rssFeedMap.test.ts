@@ -9,10 +9,12 @@ describe("RSS_FEED_MAP", () => {
     expect(keys).toContain("Identity + AI");
     expect(keys).toContain("Regulatory and Standards");
     expect(keys).toContain("IGA Modernization and Migration");
+    expect(keys).toContain("CIEM and Cloud Identity");
+    expect(keys).toContain("Identity Threat Detection");
   });
 
-  it("has at least 5 directives", () => {
-    expect(Object.keys(RSS_FEED_MAP).length).toBeGreaterThanOrEqual(5);
+  it("has at least 7 directives", () => {
+    expect(Object.keys(RSS_FEED_MAP).length).toBeGreaterThanOrEqual(7);
   });
 
   it("every directive maps to a non-empty array of URLs", () => {
@@ -32,6 +34,29 @@ describe("RSS_FEED_MAP", () => {
   });
 
   it("Identity Vendor Moves has multiple feeds", () => {
-    expect(RSS_FEED_MAP["Identity Vendor Moves"].length).toBeGreaterThanOrEqual(2);
+    expect(RSS_FEED_MAP["Identity Vendor Moves"].length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("CIEM and Cloud Identity includes cloud vendor feeds", () => {
+    const feeds = RSS_FEED_MAP["CIEM and Cloud Identity"];
+    const hasAws = feeds.some((u) => u.includes("aws.amazon.com"));
+    const hasMicrosoft = feeds.some((u) => u.includes("microsoft.com"));
+    expect(hasAws).toBe(true);
+    expect(hasMicrosoft).toBe(true);
+  });
+
+  it("Identity Threat Detection includes investigative sources", () => {
+    const feeds = RSS_FEED_MAP["Identity Threat Detection"];
+    const hasKrebs = feeds.some((u) => u.includes("krebsonsecurity"));
+    const hasSchneier = feeds.some((u) => u.includes("schneier"));
+    expect(hasKrebs).toBe(true);
+    expect(hasSchneier).toBe(true);
+  });
+
+  it("no duplicate URLs within a single directive", () => {
+    for (const [name, urls] of Object.entries(RSS_FEED_MAP)) {
+      const unique = new Set(urls);
+      expect(unique.size, `${name} has duplicate URLs`).toBe(urls.length);
+    }
   });
 });

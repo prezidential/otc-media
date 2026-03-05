@@ -5,8 +5,10 @@ const DEFAULT_DIRECTIVES = [
   { name: "Identity Vendor Moves", cadence: "daily", description: "Track identity vendor product updates, M&A, and strategy changes." },
   { name: "Non-Human Identity Incidents", cadence: "daily", description: "Monitor incidents and breaches involving non-human identities (bots, APIs, service accounts)." },
   { name: "Identity + AI", cadence: "daily", description: "Cover identity management and security in the context of AI and ML." },
+  { name: "Identity Threat Detection", cadence: "daily", description: "Track identity-related attacks, credential theft, phishing campaigns, and ITDR developments." },
   { name: "Regulatory and Standards", cadence: "weekly", description: "Identity-related regulations, standards, and compliance updates." },
   { name: "IGA Modernization and Migration", cadence: "weekly", description: "Identity governance and administration modernization, migrations, and best practices." },
+  { name: "CIEM and Cloud Identity", cadence: "weekly", description: "Cloud infrastructure entitlement management, cloud IAM, and multi-cloud identity posture." },
 ];
 
 export async function POST() {
