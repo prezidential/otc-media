@@ -22,7 +22,7 @@ type Run = {
 export default function ResearchPage() {
   const [directives, setDirectives] = useState<Directive[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   async function loadDirectives() {
@@ -49,14 +49,18 @@ export default function ResearchPage() {
     setRuns(data.runs ?? []);
   }
 
-  async function runDailyDirectives() {
-    setRunning(true);
+  async function runDirectives(mode: "daily" | "weekly" | "all") {
+    setRunning(mode);
     setMessage(null);
     try {
-      const res = await fetch("/api/research/run-directives", {
+      const endpoint = mode === "all" ? "/api/research/run-all" : "/api/research/run-directives";
+      const body = mode === "all"
+        ? { limitPerFeed: 10 }
+        : { cadence: mode, limitPerFeed: 10 };
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cadence: "daily", limitPerFeed: 10 }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (data.ok) {
@@ -66,7 +70,7 @@ export default function ResearchPage() {
       }
       await loadRuns();
     } finally {
-      setRunning(false);
+      setRunning(null);
     }
   }
 
@@ -79,16 +83,32 @@ export default function ResearchPage() {
     <main style={{ padding: 24, maxWidth: 900 }}>
       <h1>Research Console</h1>
 
-      <div style={{ marginTop: 24 }}>
+      <div style={{ marginTop: 24, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <button
           type="button"
-          onClick={runDailyDirectives}
-          disabled={running}
+          onClick={() => runDirectives("all")}
+          disabled={!!running}
+          style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer", fontWeight: 600 }}
+        >
+          {running === "all" ? "Running All…" : "Run All Directives"}
+        </button>
+        <button
+          type="button"
+          onClick={() => runDirectives("daily")}
+          disabled={!!running}
           style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer" }}
         >
-          {running ? "Running…" : "Run Daily Directives"}
+          {running === "daily" ? "Running…" : "Run Daily"}
         </button>
-        {message && <span style={{ marginLeft: 12 }}>{message}</span>}
+        <button
+          type="button"
+          onClick={() => runDirectives("weekly")}
+          disabled={!!running}
+          style={{ padding: "10px 16px", cursor: running ? "not-allowed" : "pointer" }}
+        >
+          {running === "weekly" ? "Running…" : "Run Weekly"}
+        </button>
+        {message && <span style={{ marginLeft: 4 }}>{message}</span>}
       </div>
 
       <h2 style={{ marginTop: 32 }}>Directives</h2>

@@ -1,5 +1,5 @@
 # Cornerstone OS
-## System Specification v1.0
+## System Specification v1.1
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine  
@@ -43,11 +43,14 @@ It is infrastructure, not a chatbot.
 Input:
 - RSS feeds (single-feed ingest or directive-driven batch)
 - Research directives (name, cadence, mapped to feed URLs via `rssFeedMap`)
+- Run-all endpoint for automated full ingest (daily + weekly in one call)
 
 Output:
 - **Signals** stored in Supabase (url, title, publisher, raw_text, directive_id, tags_json, dedupe_hash, etc.)
 - **Sources** table for RSS feed metadata
 - **Runs** table for ingest job tracking (e.g. `run_type: "directive_ingest"`)
+
+Feed coverage spans 13+ cybersecurity and identity-focused sources across 7 research directives.
 
 Manual topic injection is not yet implemented.
 
@@ -60,7 +63,7 @@ Input:
 
 Output:
 - **Editorial leads** in `editorial_leads` (angle, why_now, who_it_impacts, contrarian_take, confidence_score, status)
-- Citations are enforced: each lead’s sources must be URLs from the selected signals; stored inline in contrarian_take as a "Sources:" block
+- Citations are enforced: each lead's sources must be URLs from the selected signals; stored inline in contrarian_take as a "Sources:" block
 - Status: `pending_review` → human approval → `approved`
 
 Leads are generated via `/api/leads/generate`; approval via `/api/leads/approve`. No drafting occurs in this step.
@@ -77,24 +80,28 @@ Input:
 Behavior:
 - **Thesis engine**: generates 3 thesis candidates; one is selected (by weighted scoring or model choice) and injected into all drafting prompts.
 - **Editorial angle**: one structured angle is generated from the approved leads (title, hook_line, hook_paragraphs, deep_dive_thesis, uncomfortable_truth, reframe, deep_dive_outline, dojo_checklist). This angle is **not** persisted as a separate entity; it is used in-memory to drive the draft.
-- **Draft**: full newsletter issue (Title, Opening Hook, Fresh Signals, Deep Dive, From the Dojo, Promo Slot, Close) and/or Insider Access artifact, as **plain text**.
+- **Draft**: full newsletter issue (Title, Opening Hook, Fresh Signals, Deep Dive, From the Dojo, Promo Slot, Close) and/or Insider Access artifact.
 
 Output:
-- **Plain-text draft(s)** (full issue and/or insider access when `bundle`).
-- Optional persistence: latest full-issue draft stored in `issue_drafts` (single `content` column). Drafts are **not** stored as structured JSON; they are monolithic text.
+- **Structured draft** persisted in `issue_drafts` with both `content` (rendered markdown) and `content_json` (structured `DraftObject`).
+- `DraftObject` is the single source of truth for draft structure, validated at runtime before every insert/update.
+- `renderDraftMarkdown()` deterministically renders `content_json` into markdown with a fixed section order.
 
 Guardrails (no em/en dash, no forbidden phrases, etc.) are applied in system code; lint violations can trigger an auto-rewrite pass.
 
 ---
 
-## 3.4 Revision Engine (Not Yet Implemented)
-Planned input:
-- draftId, section, instruction
+## 3.4 Revision Engine
+Input:
+- draftId, section (title | hook | deep_dive | dojo_checklist), instruction
 
-Planned output:
-- Regenerated section only; updated draft persisted.
+Behavior:
+- Regenerates only the targeted section; all other `content_json` keys are preserved.
+- Lint guardrails enforced: up to 2 retries if lint fails; returns clear error on exhaustion.
+- Internal editorial bias (IAM context, business consequence, explicit "so what") is injected via system prompt but never surfaced in API response.
 
-Sections are not yet individually addressable in the API or storage model.
+Output:
+- Updated `content` (re-rendered via `renderDraftMarkdown`) and `content_json` persisted to `issue_drafts`.
 
 ---
 
@@ -116,25 +123,27 @@ Cornerstone OS must:
 
 1. Pull research (RSS via directives → signals)  
 2. Produce editorial-ready inputs (leads from signals; approve flow)  
-3. Generate draft(s) from approved leads (full issue and/or Insider Access, plain text)  
-4. Allow regeneration of individual sections (Revision Engine — not yet built)  
-5. Persist drafts (latest full-issue draft in `issue_drafts` as text)  
+3. Generate draft(s) from approved leads (full issue and/or Insider Access)  
+4. Allow regeneration of individual sections (Revision Engine)  
+5. Persist structured drafts (`DraftObject` in `content_json` + rendered markdown in `content`)  
 
 Stretch:
 6. Push approved draft to Beehiiv as draft (Phase 2, not implemented)
 
 ---
 
-# 5. Implementation Status (as of spec review)
+# 5. Implementation Status
 
 | Component | Status | Notes |
 |-----------|--------|--------|
-| Research Engine | Implemented | RSS ingest (single + run-directives), signals/sources/runs in Supabase |
+| Research Engine | Implemented | RSS ingest (single + run-directives + run-all), 13+ feeds across 7 directives |
 | Leads pipeline | Implemented | Generate, list, approve; citations bounded to signals |
-| Thesis + Angle + Draft | Implemented | One thesis + one angle per run; draft is plain text; full_issue / insider_access / bundle |
-| Draft persistence | Implemented | `issue_drafts.content` (text); no structured JSON draft schema |
-| Guardrails | Implemented | Lint + auto-rewrite for em/en dash, forbidden phrases; replace map for compounds |
-| Revision Engine | Not implemented | No section-level regenerate API |
+| Thesis + Angle + Draft | Implemented | One thesis + one angle per run; full_issue / insider_access / bundle |
+| Draft persistence | Implemented | `issue_drafts.content` (rendered markdown) + `content_json` (`DraftObject` with runtime validation) |
+| Deterministic renderer | Implemented | `renderDraftMarkdown()` enforces fixed section order |
+| Guardrails | Implemented | Lint + auto-rewrite for em/en dash, forbidden phrases; replace map for compounds; editorial bias in regen prompts |
+| Revision Engine | Implemented | Section-level regenerate API with lint retries and guardrails |
+| Test suite | Implemented | 130+ Vitest tests covering lib modules and API routes |
 | Publishing (Beehiiv) | Not implemented | Phase 2 |
 
 ---
@@ -151,11 +160,14 @@ The system must enforce:
 
 Guardrails must live in system code, not prompt memory. Current implementation: lint pass detects em dash, en dash, space-dash-space, and forbidden phrases; offending sentences are rewritten via a targeted LLM call. A deterministic replace map handles common compounds (e.g. "nation-state" → "nation state", "machine-speed" → "machine speed").
 
+The regenerate endpoint additionally enforces editorial bias via internal prompt directives (IAM specificity, business consequence, explicit "so what"), which are never exposed in API responses.
+
 ---
 
 # 7. Long-Term Roadmap (Not MVP)
 
 Phase 2:
+- Beehiiv publishing integration
 - Social snippet generator
 - Podcast outline mode
 - Sponsorship alignment logic
@@ -171,4 +183,4 @@ Phase 4:
 
 ---
 
-End of Specification v1.0
+End of Specification v1.1
