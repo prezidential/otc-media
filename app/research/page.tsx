@@ -1,23 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Play, Loader2, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { PageHeader } from "../components/page-header";
 
-type Directive = {
-  id: string;
-  name: string;
-  description: string | null;
-  cadence: string;
-  active: boolean | null;
-};
-
-type Run = {
-  run_type: string;
-  status: string;
-  started_at: string | null;
-  finished_at: string | null;
-  error_message: string | null;
-  output_refs_json: Record<string, unknown> | null;
-};
+type Directive = { id: string; name: string; description: string | null; cadence: string; active: boolean | null };
+type Run = { run_type: string; status: string; started_at: string | null; finished_at: string | null; error_message: string | null; output_refs_json: Record<string, unknown> | null };
 
 export default function ResearchPage() {
   const [directives, setDirectives] = useState<Directive[]>([]);
@@ -47,97 +35,72 @@ export default function ResearchPage() {
     try {
       const endpoint = mode === "all" ? "/api/research/run-all" : "/api/research/run-directives";
       const body = mode === "all" ? { limitPerFeed: 10 } : { cadence: mode, limitPerFeed: 10 };
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
-      if (data.ok) {
-        setMessage(`Done: ${data.inserted ?? 0} inserted, ${data.skipped ?? 0} skipped.`);
-      } else {
-        setMessage(data.error ?? `Error: ${res.status}`);
-      }
+      setMessage(data.ok ? `+${data.inserted ?? 0} inserted, ${data.skipped ?? 0} skipped` : (data.error ?? `Error: ${res.status}`));
       await loadRuns();
-    } finally {
-      setRunning(null);
-    }
+    } finally { setRunning(null); }
   }
 
   useEffect(() => { loadDirectives(); loadRuns(); }, []);
 
-  const cadenceBadge = (cadence: string) => ({
-    padding: "2px 8px",
-    borderRadius: 20,
-    fontSize: 11,
-    fontWeight: 600 as const,
-    background: cadence === "daily" ? "var(--accent-light)" : "var(--warning-light)",
-    color: cadence === "daily" ? "var(--accent)" : "var(--warning)",
-  });
-
-  const statusColor = (status: string) =>
-    status === "completed" ? "var(--success)" : status === "failed" ? "var(--danger)" : "var(--muted)";
+  const statusIcon = (status: string) => {
+    if (status === "completed") return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
+    if (status === "failed") return <XCircle className="h-3.5 w-3.5 text-danger" />;
+    return <Clock className="h-3.5 w-3.5 text-warning" />;
+  };
 
   return (
-    <div style={{ padding: "32px 40px", maxWidth: 1100 }}>
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Research Console</h1>
-        <p style={{ color: "var(--muted)", fontSize: 14 }}>Manage directives and ingest signals from RSS feeds</p>
-      </div>
+    <div className="p-6 lg:p-10 max-w-[1100px]">
+      <PageHeader title="Research Console" description="Manage directives and ingest signals from RSS feeds" />
 
-      <div
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: 12,
-          padding: 20,
-          marginBottom: 24,
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>
-          INGEST CONTROLS
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+          <Play className="h-3.5 w-3.5" />
+          Ingest Controls
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="flex gap-3 items-center flex-wrap">
           <button onClick={() => runDirectives("all")} disabled={!!running}
-            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: 14, cursor: running ? "not-allowed" : "pointer", opacity: running ? 0.7 : 1 }}>
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {running === "all" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {running === "all" ? "Running All..." : "Run All Directives"}
           </button>
           <button onClick={() => runDirectives("daily")} disabled={!!running}
-            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 14, cursor: running ? "not-allowed" : "pointer" }}>
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors">
+            {running === "daily" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {running === "daily" ? "Running..." : "Run Daily"}
           </button>
           <button onClick={() => runDirectives("weekly")} disabled={!!running}
-            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 14, cursor: running ? "not-allowed" : "pointer" }}>
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors">
+            {running === "weekly" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {running === "weekly" ? "Running..." : "Run Weekly"}
           </button>
           {message && (
-            <span style={{ fontSize: 13, color: message.startsWith("Done") ? "var(--success)" : "var(--danger)", fontWeight: 500 }}>
+            <span className={`text-sm font-mono ${message.startsWith("+") ? "text-primary" : "text-danger"}`}>
               {message}
             </span>
           )}
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
-            DIRECTIVES ({directives.length})
+          <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4">
+            Directives ({directives.length})
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="space-y-2">
             {directives.map((d) => (
-              <div key={d.id}
-                style={{
-                  padding: "14px 16px",
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 10,
-                }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{d.name}</span>
-                  <span style={cadenceBadge(d.cadence)}>{d.cadence}</span>
+              <div key={d.id} className="rounded-xl border border-border bg-card px-5 py-4">
+                <div className="flex items-center gap-2.5 mb-1.5">
+                  <span className="text-sm font-semibold">{d.name}</span>
+                  <span className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                    d.cadence === "daily" ? "bg-primary/15 text-primary" : "bg-warning/15 text-warning"
+                  }`}>
+                    {d.cadence}
+                  </span>
                 </div>
                 {d.description && (
-                  <div style={{ fontSize: 13, color: "var(--muted)" }}>{d.description}</div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{d.description}</p>
                 )}
               </div>
             ))}
@@ -145,36 +108,30 @@ export default function ResearchPage() {
         </div>
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
-            RECENT RUNS
+          <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4">
+            Recent Runs
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="space-y-2">
             {runs.map((r, i) => (
-              <div key={i}
-                style={{
-                  padding: "12px 16px",
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 10,
-                  fontSize: 13,
-                }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600, fontFamily: "var(--font-geist-mono, monospace)", fontSize: 12 }}>
-                    {r.run_type}
-                  </span>
-                  <span style={{ color: statusColor(r.status), fontWeight: 600, fontSize: 12 }}>{r.status}</span>
+              <div key={i} className="rounded-xl border border-border bg-card px-5 py-4">
+                <div className="flex items-center gap-2 mb-1">
+                  {statusIcon(r.status)}
+                  <span className="font-mono text-xs font-semibold">{r.run_type}</span>
+                  <span className={`text-xs font-medium ${
+                    r.status === "completed" ? "text-success" : r.status === "failed" ? "text-danger" : "text-muted-foreground"
+                  }`}>{r.status}</span>
                 </div>
-                <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                <div className="text-xs text-muted-foreground">
                   {r.started_at && new Date(r.started_at).toLocaleString()}
                   {r.finished_at && ` → ${new Date(r.finished_at).toLocaleTimeString()}`}
                 </div>
                 {r.output_refs_json && typeof r.output_refs_json === "object" && "inserted" in r.output_refs_json && (
-                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--success)" }}>
+                  <div className="mt-1 font-mono text-xs text-primary">
                     +{(r.output_refs_json as { inserted?: number }).inserted ?? 0} inserted, {(r.output_refs_json as { skipped?: number }).skipped ?? 0} skipped
                   </div>
                 )}
                 {r.error_message && (
-                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--danger)" }}>{r.error_message}</div>
+                  <div className="mt-1 text-xs text-danger">{r.error_message}</div>
                 )}
               </div>
             ))}
