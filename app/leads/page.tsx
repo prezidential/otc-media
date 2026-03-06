@@ -1,19 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Sparkles, Megaphone, Check, Loader2, Inbox } from "lucide-react";
+import { PageHeader } from "../components/page-header";
 
 type BrandProfile = { id: string; name: string; created_at: string };
-
-type Lead = {
-  id: string;
-  angle: string;
-  why_now: string;
-  who_it_impacts: string;
-  contrarian_take: string;
-  confidence_score: number;
-  status: string;
-  created_at: string;
-};
+type Lead = { id: string; angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; confidence_score: number; status: string; created_at: string };
 
 export default function LeadsPage() {
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
@@ -44,78 +36,65 @@ export default function LeadsPage() {
 
   async function generateLeads() {
     if (!selectedBrandProfileId) { setMessage("Select a brand profile first."); return; }
-    setGenerating(true);
-    setMessage(null);
+    setGenerating(true); setMessage(null);
     try {
-      const res = await fetch("/api/leads/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandProfileId: selectedBrandProfileId }),
-      });
+      const res = await fetch("/api/leads/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandProfileId: selectedBrandProfileId }) });
       const data = await res.json().catch(() => ({}));
-      if (data.ok) {
-        setMessage(`Generated ${data.leadsInserted ?? 0} leads across ${data.directivesProcessed ?? 0} directives.`);
-        await loadLeads();
-      } else {
-        setMessage(data.error ?? `Error: ${res.status}`);
-      }
+      if (data.ok) { setMessage(`+${data.leadsInserted ?? 0} leads across ${data.directivesProcessed ?? 0} directives`); await loadLeads(); }
+      else { setMessage(data.error ?? `Error: ${res.status}`); }
     } finally { setGenerating(false); }
   }
 
   async function fetchPromo() {
     if (!selectedBrandProfileId) return;
-    setPromoLoading(true);
-    setPromo(null);
+    setPromoLoading(true); setPromo(null);
     try {
-      const res = await fetch("/api/revenue/recommend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandProfileId: selectedBrandProfileId }),
-      });
+      const res = await fetch("/api/revenue/recommend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandProfileId: selectedBrandProfileId }) });
       const data = await res.json().catch(() => ({}));
       if (data.ok && data.item && data.promoText) setPromo({ item: data.item, promoText: data.promoText });
     } finally { setPromoLoading(false); }
   }
 
   async function approve(id: string) {
-    const res = await fetch("/api/leads/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
+    const res = await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     if (res.ok) await loadLeads();
   }
 
   useEffect(() => { loadBrandProfiles(); loadLeads(); }, []);
 
-  return (
-    <div style={{ padding: "32px 40px", maxWidth: 1100 }}>
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Editorial Leads</h1>
-        <p style={{ color: "var(--muted)", fontSize: 14 }}>Generate, review, and approve editorial leads</p>
-      </div>
+  const confidenceColor = (score: number) =>
+    score >= 0.7 ? "bg-success" : score >= 0.4 ? "bg-warning" : "bg-danger";
 
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>LEAD GENERATION</div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+  return (
+    <div className="p-6 lg:p-10 max-w-[1100px]">
+      <PageHeader title="Editorial Leads" description="Generate, review, and approve editorial leads" />
+
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+          <Sparkles className="h-3.5 w-3.5" />
+          Lead Generation
+        </div>
+        <div className="flex gap-3 items-center flex-wrap">
           <select
             value={selectedBrandProfileId}
             onChange={(e) => setSelectedBrandProfileId(e.target.value)}
-            style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--background)", color: "var(--foreground)", fontSize: 14 }}
+            className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
           >
             <option value="">Select brand profile</option>
             {brandProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <button onClick={generateLeads} disabled={generating || !selectedBrandProfileId}
-            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: 14, cursor: generating || !selectedBrandProfileId ? "not-allowed" : "pointer", opacity: generating || !selectedBrandProfileId ? 0.7 : 1 }}>
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {generating ? "Generating..." : "Generate Leads"}
           </button>
           <button onClick={fetchPromo} disabled={promoLoading || !selectedBrandProfileId}
-            style={{ padding: "10px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 14, cursor: promoLoading || !selectedBrandProfileId ? "not-allowed" : "pointer" }}>
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors">
+            {promoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Megaphone className="h-4 w-4" />}
             {promoLoading ? "Loading..." : "Get Promo"}
           </button>
           {message && (
-            <span style={{ fontSize: 13, color: message.startsWith("Generated") ? "var(--success)" : "var(--danger)", fontWeight: 500 }}>
+            <span className={`text-sm font-mono ${message.startsWith("+") ? "text-primary" : "text-danger"}`}>
               {message}
             </span>
           )}
@@ -123,62 +102,59 @@ export default function LeadsPage() {
       </div>
 
       {promo && (
-        <div style={{ background: "var(--accent-light)", border: "1px solid var(--accent)", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--accent)" }}>
-            RECOMMENDED PROMO: {promo.item.title} ({promo.item.type})
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 mb-6">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-primary mb-3 flex items-center gap-2">
+            <Megaphone className="h-3.5 w-3.5" />
+            Recommended Promo: {promo.item.title} ({promo.item.type})
           </div>
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6 }}>{promo.promoText}</div>
+          <div className="whitespace-pre-wrap text-sm leading-relaxed">{promo.promoText}</div>
         </div>
       )}
 
-      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
-        PENDING REVIEW ({leads.length})
+      <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4">
+        Pending Review ({leads.length})
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className="space-y-3">
         {leads.map((lead) => (
-          <div key={lead.id}
-            style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>{lead.angle}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13, marginBottom: 12 }}>
+          <div key={lead.id} className="rounded-xl border border-border bg-card p-5">
+            <div className="text-sm font-semibold leading-snug mb-3">{lead.angle}</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs mb-3">
               <div>
-                <span style={{ fontWeight: 600, color: "var(--muted)" }}>Why now: </span>
-                <span>{lead.why_now}</span>
+                <span className="font-mono uppercase tracking-wider text-muted-foreground">Why now </span>
+                <span className="text-foreground">{lead.why_now}</span>
               </div>
               <div>
-                <span style={{ fontWeight: 600, color: "var(--muted)" }}>Impacts: </span>
-                <span>{lead.who_it_impacts}</span>
+                <span className="font-mono uppercase tracking-wider text-muted-foreground">Impacts </span>
+                <span className="text-foreground">{lead.who_it_impacts}</span>
               </div>
             </div>
-            <div style={{ fontSize: 13, whiteSpace: "pre-wrap", marginBottom: 12, lineHeight: 1.5 }}>
-              <span style={{ fontWeight: 600, color: "var(--muted)" }}>Contrarian take: </span>
+            <div className="text-xs whitespace-pre-wrap leading-relaxed text-muted-foreground mb-4">
               {lead.contrarian_take}
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{
-                  width: 60, height: 6, borderRadius: 3, background: "var(--border)",
-                  position: "relative", overflow: "hidden",
-                }}>
-                  <div style={{
-                    width: `${lead.confidence_score * 100}%`, height: "100%", borderRadius: 3,
-                    background: lead.confidence_score >= 0.7 ? "var(--success)" : lead.confidence_score >= 0.4 ? "var(--warning)" : "var(--danger)",
-                  }} />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden">
+                  <div className={`h-full rounded-full ${confidenceColor(lead.confidence_score)}`}
+                    style={{ width: `${lead.confidence_score * 100}%` }} />
                 </div>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                <span className="font-mono text-[11px] text-muted-foreground">
                   {(lead.confidence_score * 100).toFixed(0)}%
                 </span>
               </div>
               <button onClick={() => approve(lead.id)}
-                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--success)", color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
+                <Check className="h-3.5 w-3.5" />
                 Approve
               </button>
             </div>
           </div>
         ))}
         {leads.length === 0 && (
-          <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
-            No leads pending review. Generate leads to get started.
+          <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-muted-foreground">
+            <Inbox className="h-10 w-10 mb-3 opacity-40" />
+            <span className="text-sm">No leads pending review</span>
+            <span className="text-xs mt-1">Generate leads to get started</span>
           </div>
         )}
       </div>

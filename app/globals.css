@@ -1,67 +1,56 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f8f9fb;
-  --foreground: #111827;
-  --surface: #ffffff;
-  --surface-hover: #f3f4f6;
-  --border: #e5e7eb;
-  --border-strong: #d1d5db;
-  --muted: #6b7280;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-light: #eff6ff;
-  --success: #059669;
-  --success-light: #ecfdf5;
-  --danger: #dc2626;
-  --danger-light: #fef2f2;
-  --warning: #d97706;
-  --warning-light: #fffbeb;
-  --sidebar-bg: #0f172a;
-  --sidebar-fg: #94a3b8;
-  --sidebar-fg-active: #ffffff;
-  --sidebar-accent: #3b82f6;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
   --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: var(--font-jetbrains-mono, var(--font-geist-mono));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0f1117;
-    --foreground: #e5e7eb;
-    --surface: #1a1d27;
-    --surface-hover: #252833;
-    --border: #2d3141;
-    --border-strong: #3b3f52;
-    --muted: #9ca3af;
-    --accent: #3b82f6;
-    --accent-hover: #60a5fa;
-    --accent-light: #1e293b;
-    --success: #10b981;
-    --success-light: #0d2818;
-    --danger: #ef4444;
-    --danger-light: #2d1215;
-    --warning: #f59e0b;
-    --warning-light: #2d2204;
-    --sidebar-bg: #080b12;
-    --sidebar-fg: #64748b;
-    --sidebar-fg-active: #f1f5f9;
-    --sidebar-accent: #3b82f6;
-  }
+:root {
+  --background: #0b0e14;
+  --foreground: #e2e8f0;
+  --card: #111620;
+  --card-foreground: #e2e8f0;
+  --primary: oklch(0.72 0.19 155);
+  --primary-foreground: #052e16;
+  --muted: #1e2433;
+  --muted-foreground: #64748b;
+  --border: #1e293b;
+  --accent: #1a2332;
+  --accent-foreground: #e2e8f0;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --ring: oklch(0.72 0.19 155);
+  --radius: 0.625rem;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans, system-ui, -apple-system, sans-serif);
+  font-family: var(--font-geist-sans, "Inter", system-ui, -apple-system, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--border) transparent;
+}
+
+::selection {
+  background: oklch(0.72 0.19 155 / 0.3);
 }

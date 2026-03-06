@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Rss, ExternalLink, Loader2 } from "lucide-react";
+import { PageHeader } from "./components/page-header";
 
 type Signal = {
   title: string;
@@ -49,129 +51,79 @@ export default function Home() {
     const res = await fetch("/api/signals/list?limit=25");
     const text = await res.text();
     let data: { signals?: Signal[] } = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = {};
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
     setSignals(data.signals ?? []);
   }
 
-  useEffect(() => {
-    loadSignals();
-  }, []);
+  useEffect(() => { loadSignals(); }, []);
 
   return (
-    <div style={{ padding: "32px 40px", maxWidth: 1100 }}>
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Signals</h1>
-        <p style={{ color: "var(--muted)", fontSize: 14 }}>Ingest RSS feeds and browse captured signals</p>
-      </div>
+    <div className="p-6 lg:p-10 max-w-[1100px]">
+      <PageHeader title="Signals" description="Ingest RSS feeds and browse captured signals" />
 
-      <div
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: 12,
-          padding: 20,
-          marginBottom: 24,
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>
-          RSS FEED INGEST
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+          <Rss className="h-3.5 w-3.5" />
+          RSS Feed Ingest
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div className="flex gap-3">
           <input
             value={feedUrl}
             onChange={(e) => setFeedUrl(e.target.value)}
             placeholder="Enter RSS feed URL..."
-            style={{
-              flex: 1,
-              padding: "10px 14px",
-              borderRadius: 8,
-              border: "1px solid var(--border)",
-              background: "var(--background)",
-              color: "var(--foreground)",
-              fontSize: 14,
-              outline: "none",
-            }}
+            className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
           />
           <button
             onClick={ingest}
             disabled={loading}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 8,
-              border: "none",
-              background: "var(--accent)",
-              color: "#fff",
-              fontWeight: 600,
-              fontSize: 14,
-              cursor: loading ? "not-allowed" : "pointer",
-              opacity: loading ? 0.7 : 1,
-              whiteSpace: "nowrap",
-            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap"
           >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
             {loading ? "Ingesting..." : "Ingest Feed"}
           </button>
         </div>
 
         {result && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 8,
-              background: (result as Record<string, unknown>).error ? "var(--danger-light)" : "var(--success-light)",
-              color: (result as Record<string, unknown>).error ? "var(--danger)" : "var(--success)",
-              fontSize: 13,
-              fontFamily: "var(--font-geist-mono, monospace)",
-            }}
-          >
+          <div className={`mt-3 rounded-lg px-4 py-3 text-sm font-mono ${
+            (result as Record<string, unknown>).error
+              ? "bg-danger/10 text-danger"
+              : "bg-primary/10 text-primary"
+          }`}>
             {(result as Record<string, unknown>).error
               ? `Error: ${(result as Record<string, unknown>).error}`
-              : `Inserted: ${(result as Record<string, unknown>).inserted ?? 0}, Skipped: ${(result as Record<string, unknown>).skipped ?? 0}`}
+              : `+${(result as Record<string, unknown>).inserted ?? 0} inserted, ${(result as Record<string, unknown>).skipped ?? 0} skipped`}
           </div>
         )}
       </div>
 
-      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", marginBottom: 12 }}>
-        LATEST SIGNALS ({signals.length})
+      <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4">
+        Latest Signals ({signals.length})
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="space-y-2">
         {signals.map((s, idx) => (
           <a
             key={idx}
             href={s.url}
             target="_blank"
             rel="noreferrer"
-            style={{
-              display: "block",
-              padding: "14px 18px",
-              background: "var(--surface)",
-              border: "1px solid var(--border)",
-              borderRadius: 10,
-              textDecoration: "none",
-              color: "inherit",
-              transition: "border-color 0.15s, box-shadow 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = "var(--accent)";
-              e.currentTarget.style.boxShadow = "0 0 0 1px var(--accent)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = "var(--border)";
-              e.currentTarget.style.boxShadow = "none";
-            }}
+            className="group flex items-start justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 transition-colors hover:border-primary/50"
           >
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{s.title}</div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--muted)" }}>
-              <span>{s.publisher}</span>
-              {s.published_at && (
-                <span>{new Date(s.published_at).toLocaleDateString()}</span>
-              )}
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium leading-snug group-hover:text-primary transition-colors">
+                {s.title}
+              </div>
+              <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="font-mono">{s.publisher}</span>
+                {s.published_at && (
+                  <>
+                    <span className="text-border">·</span>
+                    <span>{new Date(s.published_at).toLocaleDateString()}</span>
+                  </>
+                )}
+              </div>
             </div>
+            <ExternalLink className="mt-1 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </a>
         ))}
       </div>

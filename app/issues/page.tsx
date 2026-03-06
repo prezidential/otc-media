@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2 } from "lucide-react";
+import { PageHeader } from "../components/page-header";
+import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
 
@@ -9,13 +12,7 @@ const AUDIENCE_OPTIONS = ["practitioner", "ciso", "board"] as const;
 const FOCUS_OPTIONS = ["strategic", "tactical", "architecture"] as const;
 const TONE_OPTIONS = ["reflective", "confrontational", "analytical", "strategic"] as const;
 
-type SteeringState = {
-  aggressionLevel: number;
-  audienceLevel: (typeof AUDIENCE_OPTIONS)[number];
-  focusArea: (typeof FOCUS_OPTIONS)[number];
-  toneMode: (typeof TONE_OPTIONS)[number];
-  leadLimit: number;
-};
+type SteeringState = { aggressionLevel: number; audienceLevel: (typeof AUDIENCE_OPTIONS)[number]; focusArea: (typeof FOCUS_OPTIONS)[number]; toneMode: (typeof TONE_OPTIONS)[number]; leadLimit: number };
 
 const PRESETS: { name: string; values: SteeringState }[] = [
   { name: "CISO Aggressive", values: { aggressionLevel: 5, audienceLevel: "ciso", focusArea: "strategic", toneMode: "confrontational", leadLimit: 6 } },
@@ -55,15 +52,14 @@ export default function IssuesPage() {
     setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft("");
     try {
       const res = await fetch("/api/issues/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ brandProfileId: selectedBrandProfileId, leadLimit: leadLimit >= 1 ? leadLimit : 6, aggressionLevel, audienceLevel, focusArea, toneMode, outputMode }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.ok && data.draft) {
         setDraft(data.draft);
         if (data.insiderDraft != null) setInsiderDraft(data.insiderDraft);
-        setMessage(data.stored ? "Draft generated and saved." : data.storeError ? `Draft generated (not saved): ${data.storeError}` : "Draft generated.");
+        setMessage(data.stored ? "Draft generated and saved" : data.storeError ? `Generated (not saved): ${data.storeError}` : "Draft generated");
       } else { setMessage(data.error ?? `Error: ${res.status}`); }
     } finally { setGenerating(false); }
   }
@@ -82,121 +78,122 @@ export default function IssuesPage() {
 
   const currentSteering: SteeringState = { aggressionLevel, audienceLevel, focusArea, toneMode, leadLimit };
   const activePresetIndex = PRESETS.findIndex(
-    (p) => p.values.aggressionLevel === currentSteering.aggressionLevel &&
-      p.values.audienceLevel === currentSteering.audienceLevel &&
-      p.values.focusArea === currentSteering.focusArea &&
-      p.values.toneMode === currentSteering.toneMode &&
-      p.values.leadLimit === currentSteering.leadLimit
+    (p) => p.values.aggressionLevel === currentSteering.aggressionLevel && p.values.audienceLevel === currentSteering.audienceLevel &&
+      p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
   useEffect(() => { loadBrandProfiles(); }, []);
 
-  const selectStyle = {
-    padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)",
-    background: "var(--background)", color: "var(--foreground)", fontSize: 13,
-  };
+  const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 
   return (
-    <div style={{ padding: "32px 40px", maxWidth: 1100 }}>
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Issue Draft</h1>
-        <p style={{ color: "var(--muted)", fontSize: 14 }}>Generate newsletter issue drafts from approved leads</p>
-      </div>
+    <div className="p-6 lg:p-10 max-w-[1100px]">
+      <PageHeader title="Issue Draft" description="Generate newsletter issue drafts from approved leads" />
 
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>GENERATION</div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <select value={selectedBrandProfileId} onChange={(e) => setSelectedBrandProfileId(e.target.value)} style={selectStyle}>
+      <div className="rounded-xl border border-border bg-card p-5 mb-4">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+          <FileText className="h-3.5 w-3.5" />
+          Generation
+        </div>
+        <div className="flex gap-3 items-center flex-wrap">
+          <select value={selectedBrandProfileId} onChange={(e) => setSelectedBrandProfileId(e.target.value)} className={selectClass}>
             <option value="">Select brand profile</option>
             {brandProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as (typeof OUTPUT_MODE_OPTIONS)[number])} style={selectStyle}>
+          <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as (typeof OUTPUT_MODE_OPTIONS)[number])} className={selectClass}>
             {OUTPUT_MODE_OPTIONS.map((o) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}
           </select>
           <button onClick={generateDraft} disabled={generating || !selectedBrandProfileId}
-            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: 14, cursor: generating || !selectedBrandProfileId ? "not-allowed" : "pointer", opacity: generating || !selectedBrandProfileId ? 0.7 : 1 }}>
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
             {generating ? "Generating..." : "Generate Issue Draft"}
           </button>
           {message && (
-            <span style={{ fontSize: 13, color: message.startsWith("Draft generated") ? "var(--success)" : "var(--danger)", fontWeight: 500 }}>
+            <span className={`text-sm font-mono ${message.startsWith("Draft generated") || message === "Draft generated" ? "text-primary" : "text-danger"}`}>
               {message}
             </span>
           )}
         </div>
       </div>
 
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: "var(--muted)" }}>EDITORIAL STEERING</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+          <Settings2 className="h-3.5 w-3.5" />
+          Editorial Steering
+        </div>
+        <div className="flex gap-2 flex-wrap mb-4">
           {PRESETS.map((preset, idx) => (
             <button key={preset.name} onClick={() => applyPreset(preset)}
-              style={{
-                padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                border: activePresetIndex === idx ? "1px solid var(--accent)" : "1px solid var(--border)",
-                background: activePresetIndex === idx ? "var(--accent-light)" : "var(--surface)",
-                color: activePresetIndex === idx ? "var(--accent)" : "var(--foreground)",
-              }}>
+              className={cn(
+                "rounded-full px-4 py-1.5 text-xs font-medium transition-colors",
+                activePresetIndex === idx
+                  ? "bg-primary/15 text-primary border border-primary/30"
+                  : "bg-muted/50 text-muted-foreground border border-transparent hover:bg-accent hover:text-foreground"
+              )}>
               {preset.name}
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <span style={{ color: "var(--muted)" }}>Aggression</span>
-            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))} style={{ width: 80 }} />
-            <span style={{ fontWeight: 600, minWidth: 12 }}>{aggressionLevel}</span>
+        <div className="flex flex-wrap gap-5 items-center">
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Aggression</span>
+            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))}
+              className="w-20 accent-[oklch(0.72_0.19_155)]" />
+            <span className="font-mono font-bold w-4 text-center text-primary">{aggressionLevel}</span>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-            <span style={{ color: "var(--muted)" }}>Audience</span>
-            <select value={audienceLevel} onChange={(e) => setAudienceLevel(e.target.value as (typeof AUDIENCE_OPTIONS)[number])} style={selectStyle}>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Audience</span>
+            <select value={audienceLevel} onChange={(e) => setAudienceLevel(e.target.value as (typeof AUDIENCE_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
               {AUDIENCE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-            <span style={{ color: "var(--muted)" }}>Focus</span>
-            <select value={focusArea} onChange={(e) => setFocusArea(e.target.value as (typeof FOCUS_OPTIONS)[number])} style={selectStyle}>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Focus</span>
+            <select value={focusArea} onChange={(e) => setFocusArea(e.target.value as (typeof FOCUS_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
               {FOCUS_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-            <span style={{ color: "var(--muted)" }}>Tone</span>
-            <select value={toneMode} onChange={(e) => setToneMode(e.target.value as (typeof TONE_OPTIONS)[number])} style={selectStyle}>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Tone</span>
+            <select value={toneMode} onChange={(e) => setToneMode(e.target.value as (typeof TONE_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
               {TONE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-            <span style={{ color: "var(--muted)" }}>Lead limit</span>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Leads</span>
             <input type="number" min={1} max={50} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 6)}
-              style={{ ...selectStyle, width: 56 }} />
+              className={selectClass + " py-1.5 text-xs w-14"} />
           </label>
         </div>
       </div>
 
       {draft && (
-        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>DRAFT PREVIEW</span>
+        <div className="rounded-xl border border-border bg-card p-5 mb-4">
+          <div className="flex items-center justify-between mb-4">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Draft Preview</span>
             <button onClick={() => copyText(draft, setCopied)}
-              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 12, cursor: "pointer" }}>
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+              {copied ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
-          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "var(--font-geist-sans, system-ui)", fontSize: 14, lineHeight: 1.7, maxHeight: 500, overflow: "auto", margin: 0 }}>
+          <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
             {draft}
           </pre>
         </div>
       )}
 
       {insiderDraft && (
-        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>INSIDER ACCESS</span>
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Insider Access</span>
             <button onClick={() => copyText(insiderDraft, setCopiedInsider)}
-              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--foreground)", fontSize: 12, cursor: "pointer" }}>
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+              {copiedInsider ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
               {copiedInsider ? "Copied!" : "Copy"}
             </button>
           </div>
-          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "var(--font-geist-sans, system-ui)", fontSize: 14, lineHeight: 1.7, maxHeight: 500, overflow: "auto", margin: 0 }}>
+          <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
             {insiderDraft}
           </pre>
         </div>
