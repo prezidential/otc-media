@@ -52,7 +52,7 @@ Output:
 
 Feed coverage spans 13+ cybersecurity and identity-focused sources across 8 research directives.
 
-Manual topic injection is not yet implemented.
+Manual topic injection is supported via `/api/signals/create` and the UI's "Manual Topic Injection" panel.
 
 ---
 
@@ -143,8 +143,10 @@ Stretch:
 | Deterministic renderer | Implemented | `renderDraftMarkdown()` enforces fixed section order |
 | Guardrails | Implemented | Lint + auto-rewrite for em/en dash, forbidden phrases; replace map for compounds; editorial bias in regen prompts |
 | Revision Engine | Implemented | Section-level regenerate API with lint retries and guardrails |
-| Test suite | Implemented | 136+ Vitest tests covering lib modules and API routes |
-| UI | Implemented | Modern sidebar navigation, card-based layout, all features accessible from nav (Signals, Research, Leads, Issues) |
+| Manual topic injection | Implemented | `/api/signals/create` + UI panel for adding signals without RSS |
+| Draft history | Implemented | `/api/issues/list` + UI history panel for loading previous drafts |
+| Test suite | Implemented | 143+ Vitest tests covering lib modules and API routes |
+| UI | Implemented | Dark theme, sidebar nav, section regen controls, draft history, approved leads tab, manual injection |
 | Publishing (Beehiiv) | Not implemented | Phase 2 |
 
 ---

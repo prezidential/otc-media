@@ -1,11 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2 } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
+type DraftSummary = { id: string; content: string; content_json: Record<string, unknown> | null; created_at: string };
+type RegeneratableSection = "title" | "hook" | "deep_dive" | "dojo_checklist";
+
+const SECTION_LABELS: Record<RegeneratableSection, string> = {
+  title: "Title",
+  hook: "Opening Hook",
+  deep_dive: "Deep Dive",
+  dojo_checklist: "From the Dojo",
+};
 
 const OUTPUT_MODE_OPTIONS = ["full_issue", "insider_access", "bundle"] as const;
 const AUDIENCE_OPTIONS = ["practitioner", "ciso", "board"] as const;
@@ -31,11 +40,20 @@ export default function IssuesPage() {
   const [leadLimit, setLeadLimit] = useState(6);
   const [outputMode, setOutputMode] = useState<(typeof OUTPUT_MODE_OPTIONS)[number]>("full_issue");
   const [draft, setDraft] = useState<string>("");
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [contentJson, setContentJson] = useState<Record<string, unknown> | null>(null);
   const [insiderDraft, setInsiderDraft] = useState<string>("");
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedInsider, setCopiedInsider] = useState(false);
+
+  const [draftHistory, setDraftHistory] = useState<DraftSummary[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const [regenSection, setRegenSection] = useState<RegeneratableSection | null>(null);
+  const [regenInstruction, setRegenInstruction] = useState("");
+  const [regenerating, setRegenerating] = useState(false);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -47,9 +65,37 @@ export default function IssuesPage() {
     if (list.length > 0 && !selectedBrandProfileId) setSelectedBrandProfileId(list[0].id);
   }
 
+  async function loadDraftHistory() {
+    const res = await fetch("/api/issues/list?limit=10");
+    const text = await res.text();
+    let data: { drafts?: DraftSummary[] } = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    setDraftHistory(data.drafts ?? []);
+  }
+
+  async function loadLatestDraft() {
+    const res = await fetch("/api/issues/latest");
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    if (data.id && data.draft) {
+      setDraftId(data.id);
+      setDraft(data.draft);
+      setContentJson(data.content_json ?? null);
+    }
+  }
+
+  function loadDraftFromHistory(d: DraftSummary) {
+    setDraftId(d.id);
+    setDraft(d.content);
+    setContentJson(d.content_json ?? null);
+    setInsiderDraft("");
+    setShowHistory(false);
+    setMessage(null);
+  }
+
   async function generateDraft() {
     if (!selectedBrandProfileId) { setMessage("Select a brand profile first."); return; }
-    setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft("");
+    setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft(""); setDraftId(null); setContentJson(null);
     try {
       const res = await fetch("/api/issues/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -60,8 +106,31 @@ export default function IssuesPage() {
         setDraft(data.draft);
         if (data.insiderDraft != null) setInsiderDraft(data.insiderDraft);
         setMessage(data.stored ? "Draft generated and saved" : data.storeError ? `Generated (not saved): ${data.storeError}` : "Draft generated");
+        await loadLatestDraft();
+        await loadDraftHistory();
       } else { setMessage(data.error ?? `Error: ${res.status}`); }
     } finally { setGenerating(false); }
+  }
+
+  async function regenerateSection() {
+    if (!draftId || !regenSection) return;
+    setRegenerating(true); setMessage(null);
+    try {
+      const res = await fetch("/api/issues/regenerate-section", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId, section: regenSection, instruction: regenInstruction }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok && data.draft) {
+        setDraft(data.draft);
+        setContentJson(data.content_json ?? null);
+        setMessage(`"${SECTION_LABELS[regenSection]}" regenerated`);
+        setRegenSection(null);
+        setRegenInstruction("");
+      } else {
+        setMessage(data.error ?? `Regen failed: ${res.status}`);
+      }
+    } finally { setRegenerating(false); }
   }
 
   function copyText(text: string, setter: (v: boolean) => void) {
@@ -82,7 +151,7 @@ export default function IssuesPage() {
       p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
-  useEffect(() => { loadBrandProfiles(); }, []);
+  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); }, []);
 
   const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 
@@ -108,13 +177,50 @@ export default function IssuesPage() {
             {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
             {generating ? "Generating..." : "Generate Issue Draft"}
           </button>
+          <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) loadDraftHistory(); }}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors">
+            <History className="h-4 w-4" />
+            History
+            {showHistory ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
           {message && (
-            <span className={`text-sm font-mono ${message.startsWith("Draft generated") || message === "Draft generated" ? "text-primary" : "text-danger"}`}>
+            <span className={`text-sm font-mono ${message.includes("generated") || message.includes("regenerated") ? "text-primary" : "text-danger"}`}>
               {message}
             </span>
           )}
         </div>
       </div>
+
+      {showHistory && (
+        <div className="rounded-xl border border-border bg-card p-5 mb-4">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+            <History className="h-3.5 w-3.5" />
+            Draft History
+          </div>
+          {draftHistory.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">No drafts yet</div>
+          ) : (
+            <div className="space-y-2">
+              {draftHistory.map((d) => (
+                <button key={d.id} onClick={() => loadDraftFromHistory(d)}
+                  className={cn(
+                    "w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors",
+                    d.id === draftId ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent"
+                  )}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium truncate mr-4">
+                      {(d.content_json as Record<string, unknown>)?.title as string || d.content?.slice(0, 60) || "Untitled draft"}
+                    </span>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {new Date(d.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card p-5 mb-6">
         <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
@@ -137,8 +243,7 @@ export default function IssuesPage() {
         <div className="flex flex-wrap gap-5 items-center">
           <label className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground font-mono uppercase tracking-wider">Aggression</span>
-            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))}
-              className="w-20 accent-[oklch(0.72_0.19_155)]" />
+            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))} className="w-20 accent-[oklch(0.72_0.19_155)]" />
             <span className="font-mono font-bold w-4 text-center text-primary">{aggressionLevel}</span>
           </label>
           <label className="flex items-center gap-2 text-xs">
@@ -161,8 +266,7 @@ export default function IssuesPage() {
           </label>
           <label className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground font-mono uppercase tracking-wider">Leads</span>
-            <input type="number" min={1} max={50} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 6)}
-              className={selectClass + " py-1.5 text-xs w-14"} />
+            <input type="number" min={1} max={50} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 6)} className={selectClass + " py-1.5 text-xs w-14"} />
           </label>
         </div>
       </div>
@@ -171,12 +275,55 @@ export default function IssuesPage() {
         <div className="rounded-xl border border-border bg-card p-5 mb-4">
           <div className="flex items-center justify-between mb-4">
             <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Draft Preview</span>
-            <button onClick={() => copyText(draft, setCopied)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
-              {copied ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? "Copied!" : "Copy"}
-            </button>
+            <div className="flex items-center gap-2">
+              {draftId && (
+                <div className="relative">
+                  <button
+                    onClick={() => setRegenSection(regenSection ? null : "title")}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Regenerate Section
+                  </button>
+                </div>
+              )}
+              <button onClick={() => copyText(draft, setCopied)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                {copied ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
           </div>
+
+          {regenSection && draftId && (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
+              <div className="flex items-center gap-3 mb-3 flex-wrap">
+                <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground">Section:</span>
+                {(Object.keys(SECTION_LABELS) as RegeneratableSection[]).map((s) => (
+                  <button key={s} onClick={() => setRegenSection(s)}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                      regenSection === s ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground hover:bg-accent"
+                    )}>
+                    {SECTION_LABELS[s]}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <input
+                  value={regenInstruction}
+                  onChange={(e) => setRegenInstruction(e.target.value)}
+                  placeholder="Optional instruction (e.g. 'Make it more aggressive')"
+                  className="flex-1 rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+                />
+                <button onClick={regenerateSection} disabled={regenerating}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
+                  {regenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {regenerating ? "Regenerating..." : `Regenerate ${SECTION_LABELS[regenSection]}`}
+                </button>
+              </div>
+            </div>
+          )}
+
           <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
             {draft}
           </pre>
