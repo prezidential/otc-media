@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +54,7 @@ export default function IssuesPage() {
   const [regenSection, setRegenSection] = useState<RegeneratableSection | null>(null);
   const [regenInstruction, setRegenInstruction] = useState("");
   const [regenerating, setRegenerating] = useState(false);
+  const [curationInfo, setCurationInfo] = useState<{ leadsUsed: number; leadsAvailable: number; rationale: string } | null>(null);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -84,6 +85,17 @@ export default function IssuesPage() {
     }
   }
 
+  async function deleteDraft(id: string) {
+    const res = await fetch("/api/issues/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (res.ok) {
+      if (draftId === id) { setDraftId(null); setDraft(""); setContentJson(null); setCurationInfo(null); }
+      await loadDraftHistory();
+    }
+  }
+
   function loadDraftFromHistory(d: DraftSummary) {
     setDraftId(d.id);
     setDraft(d.content);
@@ -95,7 +107,7 @@ export default function IssuesPage() {
 
   async function generateDraft() {
     if (!selectedBrandProfileId) { setMessage("Select a brand profile first."); return; }
-    setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft(""); setDraftId(null); setContentJson(null);
+    setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft(""); setDraftId(null); setContentJson(null); setCurationInfo(null);
     try {
       const res = await fetch("/api/issues/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -105,6 +117,7 @@ export default function IssuesPage() {
       if (data.ok && data.draft) {
         setDraft(data.draft);
         if (data.insiderDraft != null) setInsiderDraft(data.insiderDraft);
+        if (data.curation) setCurationInfo(data.curation);
         setMessage(data.stored ? "Draft generated and saved" : data.storeError ? `Generated (not saved): ${data.storeError}` : "Draft generated");
         await loadLatestDraft();
         await loadDraftHistory();
@@ -202,20 +215,27 @@ export default function IssuesPage() {
           ) : (
             <div className="space-y-2">
               {draftHistory.map((d) => (
-                <button key={d.id} onClick={() => loadDraftFromHistory(d)}
+                <div key={d.id}
                   className={cn(
-                    "w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors",
+                    "flex items-center rounded-lg border px-4 py-3 text-sm transition-colors",
                     d.id === draftId ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent"
                   )}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium truncate mr-4">
-                      {(d.content_json as Record<string, unknown>)?.title as string || d.content?.slice(0, 60) || "Untitled draft"}
-                    </span>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap">
-                      {new Date(d.created_at).toLocaleString()}
-                    </span>
-                  </div>
-                </button>
+                  <button onClick={() => loadDraftFromHistory(d)} className="flex-1 text-left min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium truncate mr-4">
+                        {(d.content_json as Record<string, unknown>)?.title as string || d.content?.slice(0, 60) || "Untitled draft"}
+                      </span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(d.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                  </button>
+                  <button onClick={() => deleteDraft(d.id)}
+                    className="ml-3 p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors flex-shrink-0"
+                    title="Delete draft">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -265,11 +285,24 @@ export default function IssuesPage() {
             </select>
           </label>
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Leads</span>
-            <input type="number" min={1} max={50} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 6)} className={selectClass + " py-1.5 text-xs w-14"} />
+            <span className="text-muted-foreground font-mono uppercase tracking-wider">Max Leads</span>
+            <input type="number" min={3} max={20} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 8)} className={selectClass + " py-1.5 text-xs w-14"} />
           </label>
         </div>
       </div>
+
+      {curationInfo && (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 mb-4">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2 flex items-center gap-2">
+            <Brain className="h-3.5 w-3.5" />
+            Editor Agent Curation
+          </div>
+          <div className="text-sm text-foreground/80">{curationInfo.rationale}</div>
+          <div className="mt-2 font-mono text-xs text-muted-foreground">
+            Selected {curationInfo.leadsUsed} of {curationInfo.leadsAvailable} approved leads
+          </div>
+        </div>
+      )}
 
       {draft && (
         <div className="rounded-xl border border-border bg-card p-5 mb-4">
