@@ -41,6 +41,79 @@ function safeJsonParse<T>(text: string): T | null {
   }
 }
 
+type CurationResult = {
+  selectedIndices: number[];
+  rationale: string;
+};
+
+async function curateLeads(
+  allLeads: Array<{ index: number; angle: string; why_now: string; who_it_impacts: string; contrarian_take: string }>,
+  steering: { aggressionLevel: number; audienceLevel: string; focusArea: string; toneMode: string },
+  maxLeads: number
+): Promise<CurationResult> {
+  const client = claudeClient();
+
+  const leadsText = allLeads
+    .map(
+      (l) => `[Lead ${l.index + 1}]
+Angle: ${l.angle}
+Why now: ${l.why_now}
+Who it impacts: ${l.who_it_impacts}
+Take: ${l.contrarian_take}`
+    )
+    .join("\n\n");
+
+  const prompt = `You are the Identity Jedi editorial desk editor. You have ${allLeads.length} approved leads below. Your job is to select the ${Math.min(maxLeads, allLeads.length)} best leads that together form a cohesive, compelling newsletter issue.
+
+Selection criteria:
+- Angle diversity: avoid leads that cover the same story from the same angle
+- Narrative tension: pick leads that build toward a shared thesis
+- Timeliness: prefer leads with stronger "why now" urgency
+- Audience fit: audience is "${steering.audienceLevel}", focus is "${steering.focusArea}", tone is "${steering.toneMode}", aggression ${steering.aggressionLevel}/5
+- Coverage breadth: balance vendor, threat, governance, and architecture angles when available
+
+Approved leads:
+${leadsText}
+
+Return strict JSON only. No markdown. No commentary.
+{
+  "selected": [1, 3, 5],
+  "rationale": "One sentence explaining the editorial thread connecting these leads."
+}
+
+"selected" must be an array of lead numbers (1-indexed) from the list above. Select between 3 and ${maxLeads} leads.`;
+
+  try {
+    const msg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 512,
+      system: "You are a senior editorial desk editor. Output strict JSON only.",
+      messages: [{ role: "user", content: prompt }],
+    });
+    const textBlock = msg.content?.find((b) => b.type === "text");
+    const raw = (textBlock && textBlock.type === "text" ? (textBlock as { type: "text"; text: string }).text : "").trim();
+    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const parsed = safeJsonParse<{ selected: number[]; rationale: string }>(stripped);
+
+    if (parsed?.selected && Array.isArray(parsed.selected) && parsed.selected.length > 0) {
+      const validIndices = parsed.selected
+        .filter((n) => typeof n === "number" && n >= 1 && n <= allLeads.length)
+        .map((n) => n - 1);
+      if (validIndices.length > 0) {
+        return {
+          selectedIndices: validIndices,
+          rationale: typeof parsed.rationale === "string" ? parsed.rationale : "Editor-curated selection.",
+        };
+      }
+    }
+  } catch {
+    // fall through to default
+  }
+
+  const fallbackIndices = allLeads.slice(0, maxLeads).map((l) => l.index);
+  return { selectedIndices: fallbackIndices, rationale: "Default selection (most recent leads)." };
+}
+
 const FALLBACK_THESIS = "Identity programs are misclassified, not underfunded.";
 
 const FORBIDDEN_THESIS_PATTERNS = [
@@ -435,7 +508,6 @@ Output only the artifact text. No meta commentary.`;
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const brandProfileId = body.brandProfileId as string | undefined;
-  const leadLimit = typeof body.leadLimit === "number" ? body.leadLimit : 6;
   const steering = parseSteering(body);
   const outputMode = parseOutputMode(body);
 
@@ -456,28 +528,31 @@ export async function POST(req: Request) {
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
   if (!brandProfile) return NextResponse.json({ error: "Brand profile not found" }, { status: 404 });
 
-  const { data: leads, error: leadsError } = await supabase
+  const maxLeads = typeof body.leadLimit === "number" && body.leadLimit >= 1 ? body.leadLimit : 8;
+
+  const { data: allApproved, error: leadsError } = await supabase
     .from("editorial_leads")
     .select("id,angle,why_now,who_it_impacts,contrarian_take,created_at")
     .eq("workspace_id", workspaceId)
     .eq("status", "approved")
     .order("created_at", { ascending: false })
-    .limit(leadLimit);
+    .limit(20);
 
   if (leadsError) return NextResponse.json({ error: leadsError.message }, { status: 500 });
-  const approvedLeads = leads ?? [];
 
-  if (approvedLeads.length === 0) {
+  if (!allApproved || allApproved.length === 0) {
     return NextResponse.json(
       { ok: false, error: "No approved leads available. Approve some leads first." },
       { status: 400 }
     );
   }
 
-  const leadsWithSources = approvedLeads.map((lead) => {
+  const allLeadsWithSources = allApproved.map((lead, idx) => {
     const sources = extractSourcesFromContrarianTake(lead.contrarian_take ?? "");
     const takeWithoutSources = (lead.contrarian_take ?? "").replace(/\n\nSources:\s*\n[\s\S]*/i, "").trim();
     return {
+      index: idx,
+      id: lead.id,
       angle: lead.angle,
       why_now: lead.why_now,
       who_it_impacts: lead.who_it_impacts,
@@ -485,6 +560,18 @@ export async function POST(req: Request) {
       sources,
     };
   });
+
+  const curation = await curateLeads(allLeadsWithSources, steering, maxLeads);
+  const curatedLeads = curation.selectedIndices.map((i) => allLeadsWithSources[i]).filter(Boolean);
+  const approvedLeads = curatedLeads.map((l) => ({ id: l.id, angle: l.angle, why_now: l.why_now, who_it_impacts: l.who_it_impacts, contrarian_take: l.contrarian_take, sources: l.sources }));
+
+  const leadsWithSources = curatedLeads.map((l) => ({
+    angle: l.angle,
+    why_now: l.why_now,
+    who_it_impacts: l.who_it_impacts,
+    contrarian_take: l.contrarian_take,
+    sources: l.sources,
+  }));
 
   const leadsBlock = leadsWithSources
     .map(
@@ -892,7 +979,7 @@ Avoid explanatory tone in the first section.
 
   const draftText = renderDraftMarkdown(contentJson);
 
-  const usedLeadIds = approvedLeads.map((l) => l.id);
+  const usedLeadIds = curatedLeads.map((l) => l.id);
 
   let stored = false;
   let storeError: string | undefined;
@@ -948,6 +1035,7 @@ Avoid explanatory tone in the first section.
         ...(storeError && { storeError }),
         lintFixed,
         lintViolations,
+        curation: { leadsUsed: curatedLeads.length, leadsAvailable: allApproved.length, rationale: curation.rationale },
         ...bundleThesisPayload(),
       });
     } catch (err) {
@@ -963,6 +1051,7 @@ Avoid explanatory tone in the first section.
     ...(storeError && { storeError }),
     lintFixed,
     lintViolations,
+    curation: { leadsUsed: curatedLeads.length, leadsAvailable: allApproved.length, rationale: curation.rationale },
     ...thesisPayload(),
   });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText } from "lucide-react";
+import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +66,11 @@ export default function LeadsPage() {
 
   async function approve(id: string) {
     const res = await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    if (res.ok) await loadLeads();
+  }
+
+  async function dismiss(id: string) {
+    const res = await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     if (res.ok) await loadLeads();
   }
 
@@ -179,11 +184,18 @@ export default function LeadsPage() {
                 </span>
               </div>
               {activeTab === "pending_review" ? (
-                <button onClick={() => approve(lead.id)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
-                  <Check className="h-3.5 w-3.5" />
-                  Approve
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => dismiss(lead.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-danger/10 px-3 py-2 text-xs font-medium text-danger hover:bg-danger/20 transition-colors">
+                    <X className="h-3.5 w-3.5" />
+                    Dismiss
+                  </button>
+                  <button onClick={() => approve(lead.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
+                    <Check className="h-3.5 w-3.5" />
+                    Approve
+                  </button>
+                </div>
               ) : activeTab === "approved" ? (
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
