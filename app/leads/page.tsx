@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Megaphone, Check, Loader2, Inbox } from "lucide-react";
+import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2 } from "lucide-react";
 import { PageHeader } from "../components/page-header";
+import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
 type Lead = { id: string; angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; confidence_score: number; status: string; created_at: string };
+type LeadTab = "pending_review" | "approved";
 
 export default function LeadsPage() {
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
   const [selectedBrandProfileId, setSelectedBrandProfileId] = useState<string>("");
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [activeTab, setActiveTab] = useState<LeadTab>("pending_review");
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [promoLoading, setPromoLoading] = useState(false);
@@ -26,12 +29,18 @@ export default function LeadsPage() {
     if (list.length > 0 && !selectedBrandProfileId) setSelectedBrandProfileId(list[0].id);
   }
 
-  async function loadLeads() {
-    const res = await fetch("/api/leads/list?status=pending_review");
+  async function loadLeads(tab?: LeadTab) {
+    const status = tab ?? activeTab;
+    const res = await fetch(`/api/leads/list?status=${status}`);
     const text = await res.text();
     let data: { leads?: Lead[] } = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
     setLeads(data.leads ?? []);
+  }
+
+  function switchTab(tab: LeadTab) {
+    setActiveTab(tab);
+    loadLeads(tab);
   }
 
   async function generateLeads() {
@@ -111,13 +120,32 @@ export default function LeadsPage() {
         </div>
       )}
 
-      <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4">
-        Pending Review ({leads.length})
+      <div className="flex items-center gap-1 mb-4">
+        <button onClick={() => switchTab("pending_review")}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+            activeTab === "pending_review" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+          )}>
+          <Inbox className="h-4 w-4" />
+          Pending Review
+        </button>
+        <button onClick={() => switchTab("approved")}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+            activeTab === "approved" ? "bg-success/15 text-success" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+          )}>
+          <CheckCircle2 className="h-4 w-4" />
+          Approved
+        </button>
+        <span className="ml-2 font-mono text-[11px] text-muted-foreground">({leads.length})</span>
       </div>
 
       <div className="space-y-3">
         {leads.map((lead) => (
-          <div key={lead.id} className="rounded-xl border border-border bg-card p-5">
+          <div key={lead.id} className={cn(
+            "rounded-xl border bg-card p-5",
+            activeTab === "approved" ? "border-success/20" : "border-border"
+          )}>
             <div className="text-sm font-semibold leading-snug mb-3">{lead.angle}</div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs mb-3">
               <div>
@@ -142,19 +170,30 @@ export default function LeadsPage() {
                   {(lead.confidence_score * 100).toFixed(0)}%
                 </span>
               </div>
-              <button onClick={() => approve(lead.id)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
-                <Check className="h-3.5 w-3.5" />
-                Approve
-              </button>
+              {activeTab === "pending_review" ? (
+                <button onClick={() => approve(lead.id)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
+                  <Check className="h-3.5 w-3.5" />
+                  Approve
+                </button>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Approved
+                </span>
+              )}
             </div>
           </div>
         ))}
         {leads.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-muted-foreground">
             <Inbox className="h-10 w-10 mb-3 opacity-40" />
-            <span className="text-sm">No leads pending review</span>
-            <span className="text-xs mt-1">Generate leads to get started</span>
+            <span className="text-sm">
+              {activeTab === "pending_review" ? "No leads pending review" : "No approved leads yet"}
+            </span>
+            <span className="text-xs mt-1">
+              {activeTab === "pending_review" ? "Generate leads to get started" : "Approve pending leads to see them here"}
+            </span>
           </div>
         )}
       </div>

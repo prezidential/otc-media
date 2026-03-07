@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Rss, ExternalLink, Loader2 } from "lucide-react";
+import { Rss, ExternalLink, Loader2, Plus, PenLine } from "lucide-react";
 import { PageHeader } from "./components/page-header";
+import { cn } from "@/lib/utils";
 
 type Signal = {
   title: string;
@@ -17,6 +18,14 @@ export default function Home() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const [showManual, setShowManual] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [manualPublisher, setManualPublisher] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [manualMessage, setManualMessage] = useState<string | null>(null);
 
   async function ingest() {
     setResult(null);
@@ -47,6 +56,31 @@ export default function Home() {
     }
   }
 
+  async function submitManualSignal() {
+    if (!manualTitle.trim()) { setManualMessage("Title is required"); return; }
+    setManualSubmitting(true); setManualMessage(null);
+    try {
+      const res = await fetch("/api/signals/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manualTitle,
+          url: manualUrl || undefined,
+          publisher: manualPublisher || undefined,
+          notes: manualNotes || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        setManualMessage("Signal added");
+        setManualTitle(""); setManualUrl(""); setManualPublisher(""); setManualNotes("");
+        await loadSignals();
+      } else {
+        setManualMessage(data.error ?? `Error: ${res.status}`);
+      }
+    } finally { setManualSubmitting(false); }
+  }
+
   async function loadSignals() {
     const res = await fetch("/api/signals/list?limit=25");
     const text = await res.text();
@@ -61,7 +95,7 @@ export default function Home() {
     <div className="p-6 lg:p-10 max-w-[1100px]">
       <PageHeader title="Signals" description="Ingest RSS feeds and browse captured signals" />
 
-      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+      <div className="rounded-xl border border-border bg-card p-5 mb-4">
         <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
           <Rss className="h-3.5 w-3.5" />
           RSS Feed Ingest
@@ -73,25 +107,57 @@ export default function Home() {
             placeholder="Enter RSS feed URL..."
             className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
           />
-          <button
-            onClick={ingest}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap"
-          >
+          <button onClick={ingest} disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}
             {loading ? "Ingesting..." : "Ingest Feed"}
           </button>
         </div>
-
         {result && (
           <div className={`mt-3 rounded-lg px-4 py-3 text-sm font-mono ${
-            (result as Record<string, unknown>).error
-              ? "bg-danger/10 text-danger"
-              : "bg-primary/10 text-primary"
+            (result as Record<string, unknown>).error ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary"
           }`}>
             {(result as Record<string, unknown>).error
               ? `Error: ${(result as Record<string, unknown>).error}`
               : `+${(result as Record<string, unknown>).inserted ?? 0} inserted, ${(result as Record<string, unknown>).skipped ?? 0} skipped`}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <button onClick={() => setShowManual(!showManual)}
+          className="w-full flex items-center justify-between">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+            <PenLine className="h-3.5 w-3.5" />
+            Manual Topic Injection
+          </div>
+          <Plus className={cn("h-4 w-4 text-muted-foreground transition-transform", showManual && "rotate-45")} />
+        </button>
+
+        {showManual && (
+          <div className="mt-4 space-y-3">
+            <input value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Title (required)"
+              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary" />
+            <div className="grid grid-cols-2 gap-3">
+              <input value={manualUrl} onChange={(e) => setManualUrl(e.target.value)} placeholder="URL (optional)"
+                className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary" />
+              <input value={manualPublisher} onChange={(e) => setManualPublisher(e.target.value)} placeholder="Publisher (optional)"
+                className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary" />
+            </div>
+            <textarea value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} placeholder="Notes / summary (optional)" rows={3}
+              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary resize-none" />
+            <div className="flex items-center gap-3">
+              <button onClick={submitManualSignal} disabled={manualSubmitting}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+                {manualSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {manualSubmitting ? "Adding..." : "Add Signal"}
+              </button>
+              {manualMessage && (
+                <span className={`text-sm font-mono ${manualMessage === "Signal added" ? "text-primary" : "text-danger"}`}>
+                  {manualMessage}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -102,17 +168,10 @@ export default function Home() {
 
       <div className="space-y-2">
         {signals.map((s, idx) => (
-          <a
-            key={idx}
-            href={s.url}
-            target="_blank"
-            rel="noreferrer"
-            className="group flex items-start justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 transition-colors hover:border-primary/50"
-          >
+          <a key={idx} href={s.url} target="_blank" rel="noreferrer"
+            className="group flex items-start justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 transition-colors hover:border-primary/50">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium leading-snug group-hover:text-primary transition-colors">
-                {s.title}
-              </div>
+              <div className="text-sm font-medium leading-snug group-hover:text-primary transition-colors">{s.title}</div>
               <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="font-mono">{s.publisher}</span>
                 {s.published_at && (
