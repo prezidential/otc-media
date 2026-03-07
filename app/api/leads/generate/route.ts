@@ -36,7 +36,7 @@ function buildBrandSystemPrompt(name: string, jsonFields: Record<string, unknown
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const brandProfileId = body.brandProfileId as string | undefined;
-  const days = typeof body.days === "number" ? body.days : 7;
+  const days = typeof body.days === "number" ? body.days : 14;
 
   if (!brandProfileId) {
     return NextResponse.json({ error: "brandProfileId required" }, { status: 400 });
@@ -137,6 +137,29 @@ export async function POST(req: Request) {
 
     const directiveNames = new Map((directives ?? []).map((d) => [d.id, d.name]));
 
+    const { data: existingLeads } = await supabase
+      .from("editorial_leads")
+      .select("angle")
+      .eq("workspace_id", workspaceId)
+      .in("status", ["pending_review", "approved"])
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    const existingAngles = new Set(
+      (existingLeads ?? []).map((l) => (l.angle ?? "").toLowerCase().trim())
+    );
+
+    function isAngleDuplicate(newAngle: string): boolean {
+      const normalized = newAngle.toLowerCase().trim();
+      if (existingAngles.has(normalized)) return true;
+      for (const existing of existingAngles) {
+        const shorter = normalized.length < existing.length ? normalized : existing;
+        const longer = normalized.length < existing.length ? existing : normalized;
+        if (longer.includes(shorter) && shorter.length > 20) return true;
+      }
+      return false;
+    }
+
     const client = claudeClient();
 
     for (const dirId of directiveIds) {
@@ -221,7 +244,13 @@ Produce exactly 2-4 leads. Every "sources" array must contain only URLs from the
       }
 
       let insertedForDirective = 0;
+      let deduped = 0;
       for (const lead of validLeads) {
+        if (isAngleDuplicate(lead.angle)) {
+          deduped++;
+          continue;
+        }
+
         const sourcesBlock = "\n\nSources:\n" + lead.sources.join("\n");
         const contrarianWithSources = lead.contrarian_take + sourcesBlock;
 
@@ -239,16 +268,20 @@ Produce exactly 2-4 leads. Every "sources" array must contain only URLs from the
         if (!insertErr) {
           insertedForDirective++;
           totalLeadsInserted++;
+          existingAngles.add(lead.angle.toLowerCase().trim());
         }
       }
 
       const detail: (typeof directiveCounts)[number] = {
         directive: directiveName,
         inserted: insertedForDirective,
-        discarded,
+        discarded: discarded + deduped,
       };
-      if (discarded > 0) {
-        detail.discardedNote = `${discarded} lead(s) discarded: invalid or missing sources`;
+      if (discarded > 0 || deduped > 0) {
+        const notes: string[] = [];
+        if (discarded > 0) notes.push(`${discarded} invalid sources`);
+        if (deduped > 0) notes.push(`${deduped} duplicate angles`);
+        detail.discardedNote = `${discarded + deduped} lead(s) discarded: ${notes.join(", ")}`;
       }
       directiveCounts.push(detail);
     }

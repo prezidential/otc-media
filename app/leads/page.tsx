@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2 } from "lucide-react";
+import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
 type Lead = { id: string; angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; confidence_score: number; status: string; created_at: string };
-type LeadTab = "pending_review" | "approved";
+type LeadTab = "pending_review" | "approved" | "drafted";
 
 export default function LeadsPage() {
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
@@ -137,6 +137,14 @@ export default function LeadsPage() {
           <CheckCircle2 className="h-4 w-4" />
           Approved
         </button>
+        <button onClick={() => switchTab("drafted")}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+            activeTab === "drafted" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+          )}>
+          <FileText className="h-4 w-4" />
+          Drafted
+        </button>
         <span className="ml-2 font-mono text-[11px] text-muted-foreground">({leads.length})</span>
       </div>
 
@@ -176,10 +184,15 @@ export default function LeadsPage() {
                   <Check className="h-3.5 w-3.5" />
                   Approve
                 </button>
-              ) : (
+              ) : activeTab === "approved" ? (
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" />
                   Approved
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
+                  <FileText className="h-3.5 w-3.5" />
+                  Used in draft
                 </span>
               )}
             </div>
@@ -189,10 +202,10 @@ export default function LeadsPage() {
           <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-muted-foreground">
             <Inbox className="h-10 w-10 mb-3 opacity-40" />
             <span className="text-sm">
-              {activeTab === "pending_review" ? "No leads pending review" : "No approved leads yet"}
+              {activeTab === "pending_review" ? "No leads pending review" : activeTab === "approved" ? "No approved leads" : "No drafted leads yet"}
             </span>
             <span className="text-xs mt-1">
-              {activeTab === "pending_review" ? "Generate leads to get started" : "Approve pending leads to see them here"}
+              {activeTab === "pending_review" ? "Generate leads to get started" : activeTab === "approved" ? "Approve pending leads to see them here" : "Leads move here after being used in a draft"}
             </span>
           </div>
         )}
