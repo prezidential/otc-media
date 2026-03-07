@@ -10,16 +10,13 @@ export async function POST(req: Request) {
   const workspaceId = process.env.WORKSPACE_ID!;
   const supabase = supabaseAdmin();
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("editorial_leads")
     .update({ status: "dismissed" })
     .eq("id", id)
-    .eq("workspace_id", workspaceId)
-    .select("id, status")
-    .single();
+    .eq("workspace_id", workspaceId);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!data) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  return NextResponse.json({ ok: true, lead: data });
+  return NextResponse.json({ ok: true });
 }
