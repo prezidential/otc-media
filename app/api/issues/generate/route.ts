@@ -330,8 +330,9 @@ async function generateEditorialAngle(params: {
   max_tokens: number;
   brandProfile: any;
   leadsWithSources: Array<{ angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; sources: string[] }>;
+  previousTitles?: string[];
 }): Promise<EditorialAngle> {
-  const { client, model, max_tokens, brandProfile, leadsWithSources } = params;
+  const { client, model, max_tokens, brandProfile, leadsWithSources, previousTitles } = params;
 
   const leadsMini = leadsWithSources.map((l) => ({
     angle: l.angle,
@@ -381,47 +382,27 @@ Return JSON with this exact shape:
 Notes:
 - dojo_checklist must be exactly 5 items.
 - deep_dive_outline should be 5-7 bullets.
+- The title MUST be unique and specific to these leads. Do not use generic titles.${previousTitles && previousTitles.length > 0 ? `\n- Do NOT reuse any of these previous titles: ${previousTitles.map((t) => `"${t}"`).join(", ")}` : ""}
 `;
 
   const msg = await client.messages.create({
     model,
-    max_tokens: Math.min(1200, max_tokens),
-    temperature: 0.4,
+    max_tokens: 2048,
+    temperature: 0.6,
     system,
     messages: [{ role: "user", content: user }],
   });
 
   const textBlock = msg.content?.find((b: any) => b.type === "text");
   const raw = textBlock?.text?.trim() ?? "";
-  const parsed = safeJsonParse<EditorialAngle>(raw);
+  const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  const parsed = safeJsonParse<EditorialAngle>(stripped);
 
   if (!parsed?.title || !parsed?.deep_dive_thesis) {
-    // Fail safe: provide minimal default angle if JSON parse fails
-    return {
-      title: "Identity at Machine Speed",
-      hook_line: "AI is moving faster than identity can govern.",
-      hook_paragraphs: [
-        "We built identity for humans. The environment is no longer human.",
-        "The gap is not tools. The gap is the model."
-      ],
-      deep_dive_thesis: "AI forces identity governance to evolve from human workflows to machine-speed control.",
-      uncomfortable_truth: "Most identity programs are misclassified, not underfunded.",
-      reframe: "This is a classification failure before it is a speed problem.",
-      deep_dive_outline: [
-        "Name the pattern across the signals",
-        "Explain why human-centric identity breaks under autonomous behavior",
-        "Define AI agents as a distinct identity class",
-        "Show how attackers exploit the gap",
-        "What to change first in architecture and operating model"
-      ],
-      dojo_checklist: [
-        "Create an AI agent identity class and governance rules",
-        "Instrument behavior, not just authentication events",
-        "Treat config management as identity infrastructure",
-        "Build machine-speed authorization paths with guardrails",
-        "Add audit trails for autonomous decisions"
-      ],
-    };
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[editorial-angle] JSON parse failed. Raw length:", raw.length, "First 300 chars:", raw.slice(0, 300));
+    }
+    throw new Error("Editorial angle generation failed to produce valid JSON");
   }
 
   return parsed;
@@ -694,12 +675,23 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
 
     const client = claudeClient();
 
+    const { data: recentDrafts } = await supabase
+      .from("issue_drafts")
+      .select("content_json")
+      .eq("workspace_id", workspaceId)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    const previousTitles = (recentDrafts ?? [])
+      .map((d) => (d.content_json as Record<string, unknown>)?.title)
+      .filter((t): t is string => typeof t === "string" && t.length > 0);
+
     const angle = await generateEditorialAngle({
       client,
       model: MODEL,
       max_tokens: MAX_TOKENS,
       brandProfile,
       leadsWithSources,
+      previousTitles,
     });
 
 
