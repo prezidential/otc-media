@@ -467,6 +467,13 @@ export async function POST(req: Request) {
   if (leadsError) return NextResponse.json({ error: leadsError.message }, { status: 500 });
   const approvedLeads = leads ?? [];
 
+  if (approvedLeads.length === 0) {
+    return NextResponse.json(
+      { ok: false, error: "No approved leads available. Approve some leads first." },
+      { status: 400 }
+    );
+  }
+
   const leadsWithSources = approvedLeads.map((lead) => {
     const sources = extractSourcesFromContrarianTake(lead.contrarian_take ?? "");
     const takeWithoutSources = (lead.contrarian_take ?? "").replace(/\n\nSources:\s*\n[\s\S]*/i, "").trim();
@@ -885,6 +892,8 @@ Avoid explanatory tone in the first section.
 
   const draftText = renderDraftMarkdown(contentJson);
 
+  const usedLeadIds = approvedLeads.map((l) => l.id);
+
   let stored = false;
   let storeError: string | undefined;
   try {
@@ -894,10 +903,17 @@ Avoid explanatory tone in the first section.
       brand_profile_id: brandProfileId,
       content: draftText,
       content_json: contentJson,
+      lead_ids_json: usedLeadIds,
     };
     const { error: insertError } = await supabase.from("issue_drafts").insert(insertPayload);
-    if (!insertError) stored = true;
-    else {
+    if (!insertError) {
+      stored = true;
+      await supabase
+        .from("editorial_leads")
+        .update({ status: "drafted" })
+        .eq("workspace_id", workspaceId)
+        .in("id", usedLeadIds);
+    } else {
       storeError = insertError.message;
       if (process.env.NODE_ENV !== "production") {
         console.warn("[issue_drafts] insert failed:", insertError.message);

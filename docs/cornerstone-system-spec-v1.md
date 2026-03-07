@@ -64,9 +64,10 @@ Input:
 Output:
 - **Editorial leads** in `editorial_leads` (angle, why_now, who_it_impacts, contrarian_take, confidence_score, status)
 - Citations are enforced: each lead's sources must be URLs from the selected signals; stored inline in contrarian_take as a "Sources:" block
-- Status: `pending_review` → human approval → `approved`
+- Status lifecycle: `pending_review` → human approval → `approved` → used in draft → `drafted`
+- Deduplication: new leads are checked against existing pending/approved leads by angle similarity to prevent duplicate editorial angles
 
-Leads are generated via `/api/leads/generate`; approval via `/api/leads/approve`. No drafting occurs in this step.
+Leads are generated via `/api/leads/generate`; approval via `/api/leads/approve`. Leads used in a draft are automatically moved to `drafted` status with provenance tracked via `lead_ids_json` on the draft. The default signals window is 14 days (biweekly newsletter cadence).
 
 ---
 
@@ -137,7 +138,7 @@ Stretch:
 | Component | Status | Notes |
 |-----------|--------|--------|
 | Research Engine | Implemented | RSS ingest (single + run-directives + run-all), 13+ feeds across 8 directives |
-| Leads pipeline | Implemented | Generate, list, approve; citations bounded to signals |
+| Leads pipeline | Implemented | Generate, list, approve, draft lifecycle; deduplication; 14-day signal window |
 | Thesis + Angle + Draft | Implemented | One thesis + one angle per run; full_issue / insider_access / bundle |
 | Draft persistence | Implemented | `issue_drafts.content` (rendered markdown) + `content_json` (`DraftObject` with runtime validation) |
 | Deterministic renderer | Implemented | `renderDraftMarkdown()` enforces fixed section order |
