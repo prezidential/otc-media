@@ -55,6 +55,7 @@ export default function IssuesPage() {
   const [regenInstruction, setRegenInstruction] = useState("");
   const [regenerating, setRegenerating] = useState(false);
   const [curationInfo, setCurationInfo] = useState<{ leadsUsed: number; leadsAvailable: number; rationale: string } | null>(null);
+  const [approvedCount, setApprovedCount] = useState<number | null>(null);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -64,6 +65,14 @@ export default function IssuesPage() {
     const list = data.brandProfiles ?? [];
     setBrandProfiles(list);
     if (list.length > 0 && !selectedBrandProfileId) setSelectedBrandProfileId(list[0].id);
+  }
+
+  async function loadApprovedCount() {
+    const res = await fetch("/api/leads/list?status=approved&limit=1");
+    const text = await res.text();
+    let data: { leads?: unknown[] } = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    setApprovedCount(data.leads?.length ?? 0);
   }
 
   async function loadDraftHistory() {
@@ -121,6 +130,7 @@ export default function IssuesPage() {
         setMessage(data.stored ? "Draft generated and saved" : data.storeError ? `Generated (not saved): ${data.storeError}` : "Draft generated");
         await loadLatestDraft();
         await loadDraftHistory();
+        await loadApprovedCount();
       } else { setMessage(data.error ?? `Error: ${res.status}`); }
     } finally { setGenerating(false); }
   }
@@ -164,13 +174,26 @@ export default function IssuesPage() {
       p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
-  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); }, []);
+  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); loadApprovedCount(); }, []);
 
   const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 
   return (
     <div className="p-6 lg:p-10 max-w-[1100px]">
       <PageHeader title="Issue Draft" description="Generate newsletter issue drafts from approved leads" />
+
+      {approvedCount !== null && approvedCount < 3 && (
+        <div className="rounded-xl border border-warning/30 bg-warning/5 p-4 mb-4">
+          <div className="text-sm font-medium text-warning">
+            {approvedCount === 0
+              ? "No approved leads available. Go to Leads → generate and approve leads before creating a draft."
+              : `Only ${approvedCount} approved lead${approvedCount === 1 ? "" : "s"} available. For a strong newsletter, approve at least 4-6 leads.`}
+          </div>
+          <div className="text-xs text-muted-foreground mt-1">
+            Pipeline: Research → Leads → Approve → then generate a draft here
+          </div>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card p-5 mb-4">
         <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
