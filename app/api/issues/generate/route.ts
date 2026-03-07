@@ -984,13 +984,14 @@ Avoid explanatory tone in the first section.
   let stored = false;
   let storeError: string | undefined;
   try {
+    (contentJson as Record<string, unknown>).lead_ids = usedLeadIds;
+    (contentJson as Record<string, unknown>).curation_rationale = curation.rationale;
     validateDraftObject(contentJson);
     const insertPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
       brand_profile_id: brandProfileId,
       content: draftText,
       content_json: contentJson,
-      lead_ids_json: usedLeadIds,
     };
     const { error: insertError } = await supabase.from("issue_drafts").insert(insertPayload);
     if (!insertError) {

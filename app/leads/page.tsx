@@ -70,8 +70,9 @@ export default function LeadsPage() {
   }
 
   async function dismiss(id: string) {
+    setLeads((prev) => prev.filter((l) => l.id !== id));
     const res = await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    if (res.ok) await loadLeads();
+    if (!res.ok) await loadLeads();
   }
 
   useEffect(() => { loadBrandProfiles(); loadLeads(); }, []);
