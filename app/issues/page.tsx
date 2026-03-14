@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2 } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +56,48 @@ export default function IssuesPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [curationInfo, setCurationInfo] = useState<{ leadsUsed: number; leadsAvailable: number; rationale: string } | null>(null);
   const [compareDraft, setCompareDraft] = useState<DraftSummary | null>(null);
+  const [beehiivEnabled, setBeehiivEnabled] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<{ ok: boolean; message: string; url?: string } | null>(null);
+  const [showHtmlExport, setShowHtmlExport] = useState(false);
+  const [exportedHtml, setExportedHtml] = useState<string>("");
+  const [copiedHtml, setCopiedHtml] = useState(false);
+
+  async function loadPublishStatus() {
+    const res = await fetch("/api/publish/status");
+    const data = await res.json().catch(() => ({}));
+    setBeehiivEnabled(data.beehiiv === true);
+  }
+
+  async function exportHtml() {
+    if (!draftId) return;
+    const res = await fetch("/api/publish/export-html", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draftId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.ok && data.html) {
+      setExportedHtml(data.html);
+      setShowHtmlExport(true);
+    }
+  }
+
+  async function publishToBeehiiv() {
+    if (!draftId) return;
+    setPublishing(true); setPublishResult(null);
+    try {
+      const res = await fetch("/api/publish/beehiiv", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        setPublishResult({ ok: true, message: "Draft pushed to Beehiiv", url: data.beehiiv?.web_url });
+      } else {
+        setPublishResult({ ok: false, message: data.error ?? "Publish failed" });
+      }
+    } finally { setPublishing(false); }
+  }
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -165,7 +207,7 @@ export default function IssuesPage() {
       p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
-  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); }, []);
+  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); loadPublishStatus(); }, []);
 
   const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 
@@ -334,6 +376,20 @@ export default function IssuesPage() {
                 {copied ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? "Copied!" : "Copy"}
               </button>
+              {draftId && (
+                <button onClick={exportHtml}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                  <Code2 className="h-3.5 w-3.5" />
+                  Export HTML
+                </button>
+              )}
+              {draftId && beehiivEnabled && (
+                <button onClick={publishToBeehiiv} disabled={publishing}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {publishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                  {publishing ? "Pushing..." : "Push to Beehiiv"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -364,6 +420,42 @@ export default function IssuesPage() {
                   {regenerating ? "Regenerating..." : `Regenerate ${SECTION_LABELS[regenSection]}`}
                 </button>
               </div>
+            </div>
+          )}
+
+          {publishResult && (
+            <div className={`mb-4 rounded-lg px-4 py-3 text-sm ${publishResult.ok ? "bg-primary/10 text-primary" : "bg-danger/10 text-danger"}`}>
+              <div className="flex items-center gap-2">
+                <span>{publishResult.message}</span>
+                {publishResult.url && (
+                  <a href={publishResult.url} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 underline">
+                    Open in Beehiiv <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showHtmlExport && exportedHtml && (
+            <div className="mb-4 rounded-lg border border-border bg-background p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Newsletter HTML</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => copyText(exportedHtml, setCopiedHtml)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    {copiedHtml ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedHtml ? "Copied!" : "Copy HTML"}
+                  </button>
+                  <button onClick={() => setShowHtmlExport(false)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    Close
+                  </button>
+                </div>
+              </div>
+              <pre className="whitespace-pre-wrap font-mono text-xs leading-5 max-h-[300px] overflow-auto text-muted-foreground">
+                {exportedHtml}
+              </pre>
             </div>
           )}
 
