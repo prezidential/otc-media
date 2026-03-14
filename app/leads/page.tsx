@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X } from "lucide-react";
+import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X, CheckCheck, XCircle } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +73,24 @@ export default function LeadsPage() {
     setLeads((prev) => prev.filter((l) => l.id !== id));
     const res = await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     if (!res.ok) await loadLeads();
+  }
+
+  async function bulkApprove() {
+    const ids = leads.map((l) => l.id);
+    setLeads([]);
+    for (const id of ids) {
+      await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    }
+    await loadLeads();
+  }
+
+  async function bulkDismiss() {
+    const ids = leads.map((l) => l.id);
+    setLeads([]);
+    for (const id of ids) {
+      await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    }
+    await loadLeads();
   }
 
   useEffect(() => { loadBrandProfiles(); loadLeads(); }, []);
@@ -152,6 +170,20 @@ export default function LeadsPage() {
           Drafted
         </button>
         <span className="ml-2 font-mono text-[11px] text-muted-foreground">({leads.length})</span>
+        {activeTab === "pending_review" && leads.length > 1 && (
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={bulkDismiss}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-danger/10 px-3 py-1.5 text-[11px] font-medium text-danger hover:bg-danger/20 transition-colors">
+              <XCircle className="h-3 w-3" />
+              Dismiss All
+            </button>
+            <button onClick={bulkApprove}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-3 py-1.5 text-[11px] font-semibold text-success hover:bg-success/25 transition-colors">
+              <CheckCheck className="h-3 w-3" />
+              Approve All
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="space-y-3">

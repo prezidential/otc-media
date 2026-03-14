@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2 } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +55,7 @@ export default function IssuesPage() {
   const [regenInstruction, setRegenInstruction] = useState("");
   const [regenerating, setRegenerating] = useState(false);
   const [curationInfo, setCurationInfo] = useState<{ leadsUsed: number; leadsAvailable: number; rationale: string } | null>(null);
+  const [compareDraft, setCompareDraft] = useState<DraftSummary | null>(null);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -230,8 +231,17 @@ export default function IssuesPage() {
                       </span>
                     </div>
                   </button>
+                  {draft && d.id !== draftId && (
+                    <button onClick={() => setCompareDraft(compareDraft?.id === d.id ? null : d)}
+                      className={cn("ml-2 p-1.5 rounded-md transition-colors flex-shrink-0",
+                        compareDraft?.id === d.id ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      )}
+                      title="Compare with current draft">
+                      <Columns2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button onClick={() => deleteDraft(d.id)}
-                    className="ml-3 p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors flex-shrink-0"
+                    className="ml-1 p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors flex-shrink-0"
                     title="Delete draft">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -360,6 +370,39 @@ export default function IssuesPage() {
           <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
             {draft}
           </pre>
+        </div>
+      )}
+
+      {compareDraft && draft && (
+        <div className="rounded-xl border border-primary/20 bg-card p-5 mb-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="font-mono text-[11px] uppercase tracking-widest text-primary flex items-center gap-2">
+              <Columns2 className="h-3.5 w-3.5" />
+              Draft Comparison
+            </div>
+            <button onClick={() => setCompareDraft(null)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              Close
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+                Current — {(contentJson as Record<string, unknown>)?.title as string || "Current Draft"}
+              </div>
+              <pre className="whitespace-pre-wrap font-sans text-xs leading-6 max-h-[400px] overflow-auto text-foreground/80 rounded-lg border border-border bg-background p-3">
+                {draft}
+              </pre>
+            </div>
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+                Comparing — {(compareDraft.content_json as Record<string, unknown>)?.title as string || new Date(compareDraft.created_at).toLocaleDateString()}
+              </div>
+              <pre className="whitespace-pre-wrap font-sans text-xs leading-6 max-h-[400px] overflow-auto text-foreground/80 rounded-lg border border-border bg-background p-3">
+                {compareDraft.content}
+              </pre>
+            </div>
+          </div>
         </div>
       )}
 

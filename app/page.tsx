@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Rss, ExternalLink, Loader2, Plus, PenLine } from "lucide-react";
+import { Rss, ExternalLink, Loader2, Plus, PenLine, Clock, Activity } from "lucide-react";
 import { PageHeader } from "./components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -13,11 +13,31 @@ type Signal = {
   captured_at: string;
 };
 
+type Run = {
+  run_type: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  output_refs_json: Record<string, unknown> | null;
+};
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
 export default function Home() {
   const [feedUrl, setFeedUrl] = useState("https://www.darkreading.com/rss.xml");
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lastIngest, setLastIngest] = useState<Run | null>(null);
+  const [freshCount, setFreshCount] = useState(0);
 
   const [showManual, setShowManual] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
@@ -51,6 +71,7 @@ export default function Home() {
       }
       setResult(data as Record<string, unknown>);
       await loadSignals();
+      await loadFreshness();
     } finally {
       setLoading(false);
     }
@@ -89,11 +110,60 @@ export default function Home() {
     setSignals(data.signals ?? []);
   }
 
-  useEffect(() => { loadSignals(); }, []);
+  async function loadFreshness() {
+    const runsRes = await fetch("/api/runs/list?limit=10");
+    const runsText = await runsRes.text();
+    let runsData: { runs?: Run[] } = {};
+    try { runsData = runsText ? JSON.parse(runsText) : {}; } catch { runsData = {}; }
+    const ingestRuns = (runsData.runs ?? []).filter((r) => r.run_type === "directive_ingest" && r.status === "completed");
+    setLastIngest(ingestRuns[0] ?? null);
+
+    const signalsRes = await fetch("/api/signals/list?limit=200");
+    const signalsText = await signalsRes.text();
+    let signalsData: { signals?: Signal[] } = {};
+    try { signalsData = signalsText ? JSON.parse(signalsText) : {}; } catch { signalsData = {}; }
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const fresh = (signalsData.signals ?? []).filter((s) => new Date(s.captured_at).getTime() > cutoff);
+    setFreshCount(fresh.length);
+  }
+
+  useEffect(() => { loadSignals(); loadFreshness(); }, []);
+
+  const isStale = lastIngest ? (Date.now() - new Date(lastIngest.finished_at ?? lastIngest.started_at ?? "").getTime()) > 3 * 24 * 60 * 60 * 1000 : true;
 
   return (
     <div className="p-6 lg:p-10 max-w-[1100px]">
       <PageHeader title="Signals" description="Ingest RSS feeds and browse captured signals" />
+
+      <div className="rounded-xl border border-border bg-card p-4 mb-4">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Activity className={cn("h-4 w-4", isStale ? "text-warning" : "text-success")} />
+            <span className="text-sm font-medium">
+              {freshCount} fresh signals
+              <span className="text-muted-foreground font-normal"> (last 14 days)</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" />
+            {lastIngest ? (
+              <span>
+                Last ingest: {timeAgo(lastIngest.finished_at ?? lastIngest.started_at ?? "")}
+                {lastIngest.output_refs_json && typeof lastIngest.output_refs_json === "object" && "inserted" in lastIngest.output_refs_json && (
+                  <span className="text-primary font-mono"> (+{(lastIngest.output_refs_json as { inserted?: number }).inserted ?? 0})</span>
+                )}
+              </span>
+            ) : (
+              <span className="text-warning">No ingests yet</span>
+            )}
+          </div>
+          {isStale && (
+            <span className="rounded-full bg-warning/15 px-3 py-1 text-[11px] font-mono uppercase tracking-wider text-warning">
+              Stale — run Research directives
+            </span>
+          )}
+        </div>
+      </div>
 
       <div className="rounded-xl border border-border bg-card p-5 mb-4">
         <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
@@ -133,7 +203,6 @@ export default function Home() {
           </div>
           <Plus className={cn("h-4 w-4 text-muted-foreground transition-transform", showManual && "rotate-45")} />
         </button>
-
         {showManual && (
           <div className="mt-4 space-y-3">
             <input value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Title (required)"
