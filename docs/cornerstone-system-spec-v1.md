@@ -106,15 +106,13 @@ Output:
 
 ---
 
-## 3.5 Publishing Engine (Phase 2)
+## 3.5 Publishing Engine
 Input:
-- Approved draft
+- Approved draft (draftId)
 
-Output (planned):
-- Beehiiv draft creation
-- Metadata persisted
-
-Not implemented in codebase.
+Output:
+- **HTML export** — renders `content_json` into newsletter-ready inline-styled HTML via `renderDraftHtml()`. Available immediately via `/api/publish/export-html` and "Export HTML" button on Issues page.
+- **Beehiiv integration** — creates a draft post in Beehiiv via their API. Gated behind `BEEHIIV_ENABLED=true` feature flag. Requires Enterprise Beehiiv plan. Endpoint: `/api/publish/beehiiv`. When enabled, a "Push to Beehiiv" button appears on the Issues page.
 
 ---
 
@@ -148,7 +146,7 @@ Stretch:
 | Draft history | Implemented | `/api/issues/list` + UI history panel for loading previous drafts |
 | Test suite | Implemented | 143+ Vitest tests covering lib modules and API routes |
 | UI | Implemented | Dark theme, sidebar nav, section regen controls, draft history, approved leads tab, manual injection |
-| Publishing (Beehiiv) | Not implemented | Phase 2 |
+| Publishing | Implemented | HTML export (always available) + Beehiiv API (behind `BEEHIIV_ENABLED` feature flag, requires Enterprise plan) |
 
 ---
 
