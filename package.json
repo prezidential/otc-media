@@ -33,8 +33,5 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.0.18"
-  },
-  "overrides": {
-    "@rolldown/pluginutils": "1.0.0-rc.9"
   }
 }
