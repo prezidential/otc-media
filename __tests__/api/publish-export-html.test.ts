@@ -2,17 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-const mockRenderDraftHtml = vi.fn(() => "<p>rendered</p>");
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
 
 vi.mock("@/lib/publish/renderHtml", () => ({
-  renderDraftHtml: mockRenderDraftHtml,
+  renderDraftHtml: vi.fn(() => "<p>rendered</p>"),
 }));
 
+import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import { POST } from "@/app/api/publish/export-html/route";
+const mockRenderDraftHtml = vi.mocked(renderDraftHtml);
 
 beforeEach(() => {
   vi.stubEnv("WORKSPACE_ID", "ws-123");

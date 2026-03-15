@@ -2,24 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-const mockIsBeehiivEnabled = vi.fn();
-const mockCreateBeehiivDraft = vi.fn();
-const mockRenderDraftHtml = vi.fn(() => "<p>rendered</p>");
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
 
 vi.mock("@/lib/publish/beehiiv", () => ({
-  isBeehiivEnabled: mockIsBeehiivEnabled,
-  createBeehiivDraft: mockCreateBeehiivDraft,
+  isBeehiivEnabled: vi.fn(),
+  createBeehiivDraft: vi.fn(),
 }));
 
 vi.mock("@/lib/publish/renderHtml", () => ({
-  renderDraftHtml: mockRenderDraftHtml,
+  renderDraftHtml: vi.fn(() => "<p>rendered</p>"),
 }));
 
+import { createBeehiivDraft, isBeehiivEnabled } from "@/lib/publish/beehiiv";
+import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import { POST } from "@/app/api/publish/beehiiv/route";
+const mockIsBeehiivEnabled = vi.mocked(isBeehiivEnabled);
+const mockCreateBeehiivDraft = vi.mocked(createBeehiivDraft);
+const mockRenderDraftHtml = vi.mocked(renderDraftHtml);
 
 beforeEach(() => {
   vi.stubEnv("WORKSPACE_ID", "ws-123");
