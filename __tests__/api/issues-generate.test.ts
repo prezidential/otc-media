@@ -54,6 +54,11 @@ function setCommonDbFixtures() {
 }
 
 function setCommonClaudeResponses(editorialAngleText: string) {
+  const curationResponse = {
+    selected: [1],
+    rationale: "Single approved lead available for this run.",
+  };
+
   const thesisResponse = {
     theses: [
       {
@@ -95,6 +100,7 @@ function setCommonClaudeResponses(editorialAngleText: string) {
 
   mockClaude.messages.create = vi
     .fn()
+    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(curationResponse) }] })
     .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(thesisResponse) }] })
     .mockResolvedValueOnce({ content: [{ type: "text", text: editorialAngleText }] })
     .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(draftSections) }] });
@@ -139,15 +145,15 @@ describe("POST /api/issues/generate", () => {
 
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
-    expect(mockClaude.messages.create).toHaveBeenCalledTimes(3);
+    expect(mockClaude.messages.create).toHaveBeenCalledTimes(4);
 
-    const anglePrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[1][0]
+    const anglePrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[2][0]
       .messages[0].content as string;
     expect(anglePrompt).toContain(
       'Do NOT reuse any of these previous titles: "Previous One", "Previous Two"'
     );
 
-    const finalDraftPrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[2][0]
+    const finalDraftPrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[3][0]
       .messages[0].content as string;
     expect(finalDraftPrompt).toContain("Title: Fenced Angle Title");
   });
@@ -163,6 +169,6 @@ describe("POST /api/issues/generate", () => {
     await expect(POST(req)).rejects.toThrow(
       "Editorial angle generation failed to produce valid JSON"
     );
-    expect(mockClaude.messages.create).toHaveBeenCalledTimes(2);
+    expect(mockClaude.messages.create).toHaveBeenCalledTimes(3);
   });
 });
