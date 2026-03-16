@@ -1,0 +1,168 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockClaudeClient, createMockSupabase, makeJsonRequest } from "./helpers";
+
+const mockSupabase = createMockSupabase();
+const mockClaude = createMockClaudeClient();
+
+vi.mock("@/lib/supabase/server", () => ({
+  supabaseAdmin: () => mockSupabase,
+}));
+
+vi.mock("@/lib/llm/claude", () => ({
+  claudeClient: () => mockClaude,
+}));
+
+import { POST } from "@/app/api/issues/generate/route";
+
+function setCommonDbFixtures() {
+  mockSupabase._setResult("brand_profiles", {
+    data: {
+      id: "bp-1",
+      name: "Identity Jedi",
+      voice_rules_json: {},
+      formatting_rules_json: {},
+      forbidden_patterns_json: [],
+      cta_rules_json: {},
+      emoji_policy_json: {},
+      narrative_preferences_json: {},
+    },
+    error: null,
+  });
+
+  mockSupabase._setResult("editorial_leads", {
+    data: [
+      {
+        id: "lead-1",
+        angle: "Credential boundaries are dissolving",
+        why_now: "Agentic workflows are now in production",
+        who_it_impacts: "Identity engineering teams",
+        contrarian_take: "Most teams are classifying automation as humans.\n\nSources:\n- https://example.com/signal-1",
+        created_at: "2026-03-10T00:00:00Z",
+      },
+    ],
+    error: null,
+  });
+
+  mockSupabase._setResult("issue_drafts", {
+    data: [
+      { content_json: { title: "Previous One" } },
+      { content_json: { title: "Previous Two" } },
+      { content_json: { title: 123 } },
+    ],
+    error: null,
+  });
+}
+
+function setCommonClaudeResponses(editorialAngleText: string) {
+  const thesisResponse = {
+    theses: [
+      {
+        id: "t1",
+        thesis: "Identity boundaries collapse when automation inherits human trust.",
+        scores: { distinctiveness: 3, tension: 3, operator_usefulness: 3, mode_fit: 3 },
+        total: 12,
+      },
+      {
+        id: "t2",
+        thesis: "Teams lose control when machine actors share human identity policy.",
+        scores: { distinctiveness: 4, tension: 4, operator_usefulness: 5, mode_fit: 5 },
+        total: 18,
+      },
+      {
+        id: "t3",
+        thesis: "Access failures accelerate when automation is treated as a user.",
+        scores: { distinctiveness: 2, tension: 3, operator_usefulness: 3, mode_fit: 2 },
+        total: 10,
+      },
+    ],
+    selected_id: "t2",
+  };
+
+  const draftSections = {
+    title: "Control Fails Quietly",
+    hook_paragraphs: ["Something just changed.", "Identity assumptions no longer hold."],
+    fresh_signals:
+      "**Fresh Signals**\n\n**Signal One**\n\nPolicy drift is widening.\n\nSources:\n- https://example.com/signal-1",
+    deep_dive: "Identity control fails when policy models lag behind machine behavior.",
+    dojo_checklist: [
+      "Separate machine identity classes.",
+      "Require explicit machine policy.",
+      "Add machine behavior audits.",
+      "Constrain machine lateral movement.",
+      "Review machine grants weekly.",
+    ],
+  };
+
+  mockClaude.messages.create = vi
+    .fn()
+    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(thesisResponse) }] })
+    .mockResolvedValueOnce({ content: [{ type: "text", text: editorialAngleText }] })
+    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(draftSections) }] });
+}
+
+beforeEach(() => {
+  vi.stubEnv("WORKSPACE_ID", "ws-123");
+  vi.clearAllMocks();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      json: vi.fn().mockResolvedValue({ ok: true, promoText: "Subscribe." }),
+    })
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("POST /api/issues/generate", () => {
+  it("parses fenced editorial-angle JSON and injects previous titles into prompt", async () => {
+    setCommonDbFixtures();
+    setCommonClaudeResponses(`\`\`\`json
+{
+  "title": "Fenced Angle Title",
+  "hook_line": "A boundary just shifted",
+  "hook_paragraphs": ["One short paragraph.", "Second short paragraph."],
+  "deep_dive_thesis": "Identity policy breaks when machine identities are misclassified.",
+  "uncomfortable_truth": "Most identity programs are built for users, not machines.",
+  "reframe": "This is a classification failure before it is a tooling failure.",
+  "deep_dive_outline": ["Point one", "Point two", "Point three", "Point four", "Point five"],
+  "dojo_checklist": ["Item one", "Item two", "Item three", "Item four", "Item five"]
+}
+\`\`\``);
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(mockClaude.messages.create).toHaveBeenCalledTimes(3);
+
+    const anglePrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[1][0]
+      .messages[0].content as string;
+    expect(anglePrompt).toContain(
+      'Do NOT reuse any of these previous titles: "Previous One", "Previous Two"'
+    );
+
+    const finalDraftPrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[2][0]
+      .messages[0].content as string;
+    expect(finalDraftPrompt).toContain("Title: Fenced Angle Title");
+  });
+
+  it("fails fast when editorial-angle payload is not valid JSON", async () => {
+    setCommonDbFixtures();
+    setCommonClaudeResponses("not-json");
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+    });
+
+    await expect(POST(req)).rejects.toThrow(
+      "Editorial angle generation failed to produce valid JSON"
+    );
+    expect(mockClaude.messages.create).toHaveBeenCalledTimes(2);
+  });
+});
