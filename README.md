@@ -37,7 +37,12 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
 SUPABASE_SECRET_KEY=your-service-role-key
 ANTHROPIC_API_KEY=your-anthropic-key
 WORKSPACE_ID=your-workspace-uuid
+BEEHIIV_ENABLED=false
+BEEHIIV_API_KEY=your-beehiiv-api-key
+BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
 ```
+
+Beehiiv variables are optional unless you plan to push drafts directly to Beehiiv.
 
 ### Install & Run
 
@@ -57,6 +62,7 @@ Open [http://localhost:3000](http://localhost:3000).
 5. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
 6. **Approve leads:** Review and approve leads on the Leads page
 7. **Generate draft:** Go to Issues → configure steering → click "Generate Issue Draft"
+8. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
 ## Available Scripts
 
@@ -85,6 +91,7 @@ app/
     ├── issues/              # Generate, latest, regenerate-section
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
+    ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
     └── runs/list/           # List ingest/generation runs
 
@@ -103,6 +110,70 @@ docs/                    # System specification v1.1
 ## Architecture
 
 See [`docs/cornerstone-system-spec-v1.md`](docs/cornerstone-system-spec-v1.md) for the full system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Publishing Runbook
+
+### Publish Paths
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/publish/status` | `GET` | Returns publish capability flags used by the Issues UI |
+| `/api/publish/export-html` | `POST` | Returns rendered HTML from `issue_drafts.content_json` |
+| `/api/publish/beehiiv` | `POST` | Pushes a draft post to Beehiiv when integration is enabled |
+
+### Capability Check
+
+`/api/publish/status` always reports HTML export as available. Beehiiv reports enabled only when all of these are true:
+
+- `BEEHIIV_ENABLED=true`
+- `BEEHIIV_API_KEY` is set
+- `BEEHIIV_PUBLICATION_ID` is set
+
+```bash
+curl -s http://localhost:3000/api/publish/status
+```
+
+```json
+{
+  "beehiiv": false,
+  "export_html": true
+}
+```
+
+### Export HTML
+
+Use after generating and saving a draft:
+
+```bash
+curl -s -X POST http://localhost:3000/api/publish/export-html \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>"}'
+```
+
+Returns `ok`, `title`, and inline-styled `html`.
+
+### Push To Beehiiv
+
+Prerequisites:
+
+- Beehiiv env vars configured
+- Saved draft row with `content_json`
+
+```bash
+curl -s -X POST http://localhost:3000/api/publish/beehiiv \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>"}'
+```
+
+Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, and `beehiiv.web_url`.
+
+### Troubleshooting
+
+- `400 draftId required`: request body omitted `draftId` (or `id`).
+- `404 Draft not found`: draft ID is incorrect or from a different workspace.
+- `400 Draft has no structured content`: draft exists but `content_json` is null.
+- `403 Beehiiv integration is not enabled`: Beehiiv env vars are missing or `BEEHIIV_ENABLED` is not `true`.
+- `500 Beehiiv API error: ...`: Beehiiv rejected the request or returned an upstream error.
 
 ## License
 
