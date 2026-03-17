@@ -1,36 +1,37 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-const isBeehiivEnabledMock = vi.fn();
-const createBeehiivDraftMock = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
+
 vi.mock("@/lib/publish/beehiiv", () => ({
-  isBeehiivEnabled: () => isBeehiivEnabledMock(),
-  createBeehiivDraft: (params: unknown) => createBeehiivDraftMock(params),
+  isBeehiivEnabled: vi.fn(),
+  createBeehiivDraft: vi.fn(),
 }));
 
+vi.mock("@/lib/publish/renderHtml", () => ({
+  renderDraftHtml: vi.fn(() => "<p>rendered</p>"),
+}));
+
+import { createBeehiivDraft, isBeehiivEnabled } from "@/lib/publish/beehiiv";
+import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import { POST } from "@/app/api/publish/beehiiv/route";
+const mockIsBeehiivEnabled = vi.mocked(isBeehiivEnabled);
+const mockCreateBeehiivDraft = vi.mocked(createBeehiivDraft);
+const mockRenderDraftHtml = vi.mocked(renderDraftHtml);
 
 beforeEach(() => {
   vi.stubEnv("WORKSPACE_ID", "ws-123");
   vi.clearAllMocks();
-
-  isBeehiivEnabledMock.mockReturnValue(true);
-  createBeehiivDraftMock.mockResolvedValue({
-    id: "post-1",
-    title: "Issue 1",
-    status: "draft",
-    web_url: "https://example.com/post-1",
-  });
+  mockIsBeehiivEnabled.mockReturnValue(true);
 });
 
 describe("POST /api/publish/beehiiv", () => {
   it("returns 403 when integration is disabled", async () => {
-    isBeehiivEnabledMock.mockReturnValue(false);
+    mockIsBeehiivEnabled.mockReturnValue(false);
 
     const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {
       draftId: "draft-1",
@@ -39,17 +40,16 @@ describe("POST /api/publish/beehiiv", () => {
     const json = await res.json();
 
     expect(res.status).toBe(403);
-    expect(json.error).toContain("not enabled");
+    expect(json.error).toContain("Beehiiv integration is not enabled");
     expect(mockSupabase.from).not.toHaveBeenCalled();
   });
 
   it("returns 400 when draftId is missing", async () => {
     const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {});
     const res = await POST(req);
-    const json = await res.json();
 
     expect(res.status).toBe(400);
-    expect(json.error).toContain("draftId required");
+    await expect(res.json()).resolves.toMatchObject({ error: "draftId required" });
   });
 
   it("returns 400 when draft has no structured content", async () => {
@@ -62,30 +62,34 @@ describe("POST /api/publish/beehiiv", () => {
       draftId: "draft-1",
     });
     const res = await POST(req);
-    const json = await res.json();
 
     expect(res.status).toBe(400);
-    expect(json.error).toContain("no structured content");
-    expect(createBeehiivDraftMock).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toMatchObject({
+      error: "Draft has no structured content",
+    });
   });
 
-  it("publishes draft content with thesis as subtitle", async () => {
+  it("publishes draft with rendered html and thesis subtitle", async () => {
+    const contentJson = {
+      title: "Identity at scale",
+      hook_paragraphs: [],
+      fresh_signals: "",
+      deep_dive: "",
+      dojo_checklist: [],
+      promo_slot: "",
+      close: "",
+      sources: [],
+      metadata: { thesis: "The stack changed faster than controls" },
+    };
     mockSupabase._setResult("issue_drafts", {
-      data: {
-        id: "draft-1",
-        content_json: {
-          title: "Identity <Shift>",
-          hook_paragraphs: ["First paragraph"],
-          fresh_signals: "",
-          deep_dive: "This is **important**",
-          dojo_checklist: [],
-          promo_slot: "",
-          close: "",
-          sources: [],
-          metadata: { thesis: "Agents need guardrails" },
-        },
-      },
+      data: { id: "draft-1", content_json: contentJson },
       error: null,
+    });
+    mockCreateBeehiivDraft.mockResolvedValue({
+      id: "post-1",
+      title: "Identity at scale",
+      status: "draft",
+      web_url: "https://beehiiv.com/post-1",
     });
 
     const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {
@@ -97,16 +101,42 @@ describe("POST /api/publish/beehiiv", () => {
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
     expect(json.beehiiv.id).toBe("post-1");
-    expect(createBeehiivDraftMock).toHaveBeenCalledTimes(1);
+    expect(mockRenderDraftHtml).toHaveBeenCalledWith(contentJson);
+    expect(mockCreateBeehiivDraft).toHaveBeenCalledWith({
+      title: "Identity at scale",
+      subtitle: "The stack changed faster than controls",
+      htmlContent: "<p>rendered</p>",
+    });
+  });
 
-    const publishArgs = createBeehiivDraftMock.mock.calls[0][0] as {
-      title: string;
-      subtitle?: string;
-      htmlContent: string;
-    };
-    expect(publishArgs.title).toBe("Identity <Shift>");
-    expect(publishArgs.subtitle).toBe("Agents need guardrails");
-    expect(publishArgs.htmlContent).toContain("&lt;Shift&gt;");
-    expect(publishArgs.htmlContent).toContain("<strong>important</strong>");
+  it("returns 500 with publish error details", async () => {
+    mockSupabase._setResult("issue_drafts", {
+      data: {
+        id: "draft-1",
+        content_json: {
+          title: "",
+          hook_paragraphs: [],
+          fresh_signals: "",
+          deep_dive: "",
+          dojo_checklist: [],
+          promo_slot: "",
+          close: "",
+          sources: [],
+          metadata: {},
+        },
+      },
+      error: null,
+    });
+    mockCreateBeehiivDraft.mockRejectedValue(new Error("Beehiiv API error: quota exceeded"));
+
+    const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {
+      draftId: "draft-1",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain("quota exceeded");
   });
 });

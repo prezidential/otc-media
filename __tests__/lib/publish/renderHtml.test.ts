@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import type { DraftContentJson } from "@/lib/draft/content";
 
 function makeDraft(overrides: Partial<DraftContentJson> = {}): DraftContentJson {
   return {
-    title: "Issue Title",
-    hook_paragraphs: [],
+    title: "Identity Weekly",
+    hook_paragraphs: ["Hook paragraph"],
     fresh_signals: "",
     deep_dive: "",
     dojo_checklist: [],
@@ -18,43 +18,55 @@ function makeDraft(overrides: Partial<DraftContentJson> = {}): DraftContentJson 
 }
 
 describe("renderDraftHtml", () => {
-  it("escapes HTML while preserving markdown bold in prose", () => {
+  it("escapes potentially unsafe html in title and prose", () => {
     const html = renderDraftHtml(
       makeDraft({
         title: "<script>alert(1)</script>",
-        hook_paragraphs: ["Hook with <b>tag</b>"],
-        deep_dive: "This is **critical** and <i>unsafe</i>",
+        hook_paragraphs: ["Use <b>only</b> trusted inputs & escapes"],
+        deep_dive: "**Critical** <img src=x onerror=alert(1)>",
       })
     );
 
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(html).toContain("Hook with &lt;b&gt;tag&lt;/b&gt;");
-    expect(html).toContain("<strong>critical</strong>");
-    expect(html).toContain("&lt;i&gt;unsafe&lt;/i&gt;");
-    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("trusted inputs &amp; escapes");
+    expect(html).toContain("<strong>Critical</strong> &lt;img src=x onerror=alert(1)&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<img src=x onerror=alert(1)>");
   });
 
-  it("renders Fresh Signals headers and source links", () => {
+  it("renders fresh signals headings and source urls as links", () => {
     const html = renderDraftHtml(
       makeDraft({
-        fresh_signals: [
-          "**Fresh Signals**",
-          "**Signal One**",
-          "A notable shift",
-          "Sources:",
-          "- http://example.com/a?x=<tag>",
-          "- http://example.com/b",
-        ].join("\n"),
+        fresh_signals: `**Fresh Signals**
+
+**Signal A**
+Identity moved from static policy to runtime posture.
+Sources:
+- https://example.com/a
+
+Follow-up note`,
       })
     );
 
     expect(html).toContain(">Fresh Signals</h2>");
-    expect(html).toContain(">Signal One</h3>");
-    expect(html).toContain("A notable shift");
-    expect(html).toContain('href="http://example.com/a?x=&lt;tag&gt;"');
-    expect(html).toContain('href="http://example.com/b"');
+    expect(html).toContain(">Signal A</h3>");
+    expect(html).toContain('<a href="https://example.com/a"');
+    expect(html).toContain(">Follow-up note</p>");
+  });
 
-    const linkMatches = html.match(/<a href="/g) ?? [];
-    expect(linkMatches).toHaveLength(2);
+  it("renders dojo, promo, and close containers", () => {
+    const html = renderDraftHtml(
+      makeDraft({
+        dojo_checklist: ["First move", "Second move"],
+        promo_slot: "Upgrade for deeper analysis.",
+        close: "Stay sharp.\n\nSubscribe.",
+      })
+    );
+
+    expect(html).toContain(">From the Dojo</h2>");
+    expect(html).toContain("<li style=");
+    expect(html).toContain("Upgrade for deeper analysis.");
+    expect(html).toContain("Stay sharp.");
+    expect(html).toContain("Subscribe.");
   });
 });
