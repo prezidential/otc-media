@@ -111,8 +111,10 @@ Input:
 - Approved draft (draftId)
 
 Output:
-- **HTML export** — renders `content_json` into newsletter-ready inline-styled HTML via `renderDraftHtml()`. Available immediately via `/api/publish/export-html` and "Export HTML" button on Issues page.
-- **Beehiiv integration** — creates a draft post in Beehiiv via their API. Gated behind `BEEHIIV_ENABLED=true` feature flag. Requires Enterprise Beehiiv plan. Endpoint: `/api/publish/beehiiv`. When enabled, a "Push to Beehiiv" button appears on the Issues page.
+- **Capability status endpoint** — `/api/publish/status` returns `{ beehiiv, export_html }` so the UI can conditionally show publish controls.
+- **HTML export** — `/api/publish/export-html` renders `content_json` into newsletter-ready inline-styled HTML via `renderDraftHtml()`. Also exposed by the "Export HTML" button on Issues page.
+- **Beehiiv integration** — `/api/publish/beehiiv` creates a draft post in Beehiiv via their API. It is enabled only when `BEEHIIV_ENABLED=true` and both `BEEHIIV_API_KEY` and `BEEHIIV_PUBLICATION_ID` are present. When enabled, a "Push to Beehiiv" button appears on the Issues page.
+- **Publish constraints** — publish endpoints require `draftId` and a saved `issue_drafts.content_json`; missing draft IDs return `400`, unknown IDs return `404`, and missing structured content returns `400`.
 
 ---
 
@@ -127,7 +129,7 @@ Cornerstone OS must:
 5. Persist structured drafts (`DraftObject` in `content_json` + rendered markdown in `content`)  
 
 Stretch:
-6. Push approved draft to Beehiiv as draft (Phase 2, not implemented)
+6. Harden external publishing workflows (Beehiiv error handling, rollout policy, observability)
 
 ---
 
@@ -146,7 +148,7 @@ Stretch:
 | Draft history | Implemented | `/api/issues/list` + UI history panel for loading previous drafts |
 | Test suite | Implemented | 143+ Vitest tests covering lib modules and API routes |
 | UI | Implemented | Dark theme, sidebar nav, section regen controls, draft history, approved leads tab, manual injection |
-| Publishing | Implemented | HTML export (always available) + Beehiiv API (behind `BEEHIIV_ENABLED` feature flag, requires Enterprise plan) |
+| Publishing | Implemented | HTML export (always available) + Beehiiv API (feature-flagged with env-based capability checks) |
 
 ---
 
@@ -169,7 +171,7 @@ The regenerate endpoint additionally enforces editorial bias via internal prompt
 # 7. Long-Term Roadmap (Not MVP)
 
 Phase 2:
-- Beehiiv publishing integration
+- Beehiiv production hardening (scheduling/automation, richer telemetry, rollback-safe workflows)
 - Social snippet generator
 - Podcast outline mode
 - Sponsorship alignment logic
