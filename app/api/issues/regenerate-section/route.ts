@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { claudeClient } from "@/lib/llm/claude";
+import { callLLM } from "@/lib/llm/provider";
 import {
   applyDashReplaceMap,
   lintDraft,
@@ -14,9 +14,6 @@ import {
   emptyContentJson,
   type RegeneratableSection,
 } from "@/lib/draft/parse";
-
-const MODEL = "claude-sonnet-4-20250514";
-const MAX_TOKENS = 4092;
 const LINT_RETRIES = 2;
 
 const SECTION_HEADERS: Record<RegeneratableSection, string> = {
@@ -218,18 +215,11 @@ Return ONLY the new section body. Do not include the section number or title (e.
 
   let newBody = "";
   try {
-    const client = claudeClient();
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    });
-    const textBlock = msg.content?.find((b) => b.type === "text");
-    newBody =
-      textBlock && textBlock.type === "text"
-        ? (textBlock as { type: "text"; text: string }).text.trim()
-        : "";
+    const response = await callLLM("revision", [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { max_tokens: 4096 });
+    newBody = response.text;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { claudeClient } from "@/lib/llm/claude";
+import { callLLM } from "@/lib/llm/provider";
 import { LeadsOutputSchema, type LeadItem } from "@/lib/leads/leadSchema";
-
-const MODEL = "claude-sonnet-4-20250514";
-const MAX_TOKENS = 4096;
 
 function parseJsonFromContent(text: string): unknown {
   const trimmed = text.trim();
@@ -160,8 +157,6 @@ export async function POST(req: Request) {
       return false;
     }
 
-    const client = claudeClient();
-
     for (const dirId of directiveIds) {
       const signalsList = byDirective.get(dirId) ?? [];
       if (signalsList.length === 0) continue;
@@ -196,17 +191,11 @@ Produce exactly 2-4 leads. Every "sources" array must contain only URLs from the
 
       let parsed: unknown;
       try {
-        const msg = await client.messages.create({
-          model: MODEL,
-          max_tokens: MAX_TOKENS,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        });
-        const text =
-          msg.content?.find((b) => b.type === "text")?.type === "text"
-            ? (msg.content.find((b) => b.type === "text") as { type: "text"; text: string }).text
-            : "";
-        parsed = parseJsonFromContent(text);
+        const response = await callLLM("leads", [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ], { max_tokens: 4096 });
+        parsed = parseJsonFromContent(response.text);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await supabase

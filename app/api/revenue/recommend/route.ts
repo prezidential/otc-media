@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { claudeClient } from "@/lib/llm/claude";
-
-const MODEL = "claude-sonnet-4-20250514";
-const MAX_TOKENS = 512;
+import { callLLM } from "@/lib/llm/provider";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
@@ -90,19 +87,12 @@ Strict voice rules: ${voiceForbidden}
 Output format: exactly 3 to 5 lines, one sentence per line. Line 1 = one concrete outcome in plain language. Final line = exactly "Subscribe."`;
 
   try {
-    const client = claudeClient();
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    });
+    const response = await callLLM("drafting", [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { max_tokens: 512 });
 
-    const textBlock = msg.content?.find((b) => b.type === "text");
-    const promoText =
-      textBlock && textBlock.type === "text"
-        ? (textBlock as { type: "text"; text: string }).text.trim()
-        : "";
+    const promoText = response.text;
 
     return NextResponse.json({
       ok: true,

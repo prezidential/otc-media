@@ -1,17 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockClaudeClient, createMockSupabase, makeJsonRequest } from "./helpers";
+import { createMockSupabase, makeJsonRequest } from "./helpers";
 import type { DraftContentJson } from "@/lib/draft/content";
 import type { LintViolation } from "@/lib/draft/lint";
 
 const mockSupabase = createMockSupabase();
-const mockClaude = createMockClaudeClient();
+const mockCallLLM = vi.fn().mockResolvedValue({ text: "New section body", provider: "anthropic", model: "claude-test" });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
 
-vi.mock("@/lib/llm/claude", () => ({
-  claudeClient: () => mockClaude,
+vi.mock("@/lib/llm/provider", () => ({
+  callLLM: (...args: unknown[]) => mockCallLLM(...args),
+  getModelForRole: () => ({ provider: "anthropic", model: "claude-test" }),
 }));
 
 vi.mock("@/lib/draft/lint", () => ({
@@ -127,9 +128,7 @@ describe("POST /api/issues/regenerate-section", () => {
 
   it("normalizes regenerated dojo checklist bullets before persisting", async () => {
     setCommonFixtures();
-    mockClaude.messages.create = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "- Rotate API keys\n* Restrict machine grants\nMonitor drift" }],
-    });
+    mockCallLLM.mockResolvedValue({ text: "- Rotate API keys\n* Restrict machine grants\nMonitor drift", provider: "anthropic", model: "claude-test" });
 
     const req = makeJsonRequest("http://localhost:3000/api/issues/regenerate-section", {
       draftId: "draft-1",
@@ -171,9 +170,7 @@ describe("POST /api/issues/regenerate-section", () => {
       lineNumber: 1,
     };
 
-    mockClaude.messages.create = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "the real risk is invisible automation drift" }],
-    });
+    mockCallLLM.mockResolvedValue({ text: "the real risk is invisible automation drift", provider: "anthropic", model: "claude-test" });
     mockLintDraft.mockReturnValue([violation]);
     mockRewriteLintViolations.mockResolvedValue("still violating copy");
 

@@ -1,6 +1,4 @@
-import { claudeClient } from "@/lib/llm/claude";
-
-const LINT_MODEL = "claude-sonnet-4-20250514";
+import { callLLM } from "@/lib/llm/provider";
 
 export const FORBIDDEN_LINT_PATTERNS = [
   "the real issue is",
@@ -81,19 +79,12 @@ export async function rewriteLintViolations(
   const lineNumbers = [...new Set(violations.map((v) => v.lineNumber))].sort((a, b) => a - b);
   const lines = text.split("\n");
   const offendingLines = lineNumbers.map((n) => lines[n - 1] ?? "");
-  const client = claudeClient();
   const prompt = `Rewrite only these sentences to comply: no forbidden phrases ("the real issue is", "the real risk is", "the real problem is"); no em dash (—) or en dash (–); no space-dash-space in prose. Do not change structure or add facts. Return a JSON array of the corrected sentences in the same order, one per line. Example: ["First corrected sentence.", "Second corrected sentence."]
 
 Sentences to fix (one per line, in order):
 ${offendingLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
-  const msg = await client.messages.create({
-    model: LINT_MODEL,
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
-  const block = msg.content?.find((b) => b.type === "text");
-  const raw = block && block.type === "text" ? (block as { type: "text"; text: string }).text.trim() : "";
-  const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  const response = await callLLM("lint", [{ role: "user", content: prompt }], { max_tokens: 4096 });
+  const stripped = response.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
   const parsed = safeJsonParse<string[]>(stripped);
   if (!parsed || !Array.isArray(parsed) || parsed.length !== lineNumbers.length) {
     return text;
