@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { claudeClient } from "@/lib/llm/claude";
+import { callLLM } from "@/lib/llm/provider";
 import { createDraftContent, DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   applyDashReplaceMap,
@@ -8,9 +8,6 @@ import {
   rewriteLintViolations,
   type LintViolation,
 } from "@/lib/draft/lint";
-
-const MODEL = "claude-sonnet-4-20250514";
-const MAX_TOKENS = 8192;
 
 function extractSourcesFromContrarianTake(contrarian_take: string): string[] {
   const match = contrarian_take.match(/\n\nSources:\s*\n([\s\S]*?)(?=\n\n|$)/i) || contrarian_take.match(/Sources:\s*\n([\s\S]*?)(?=\n\n|$)/i);
@@ -51,8 +48,6 @@ async function curateLeads(
   steering: { aggressionLevel: number; audienceLevel: string; focusArea: string; toneMode: string },
   maxLeads: number
 ): Promise<CurationResult> {
-  const client = claudeClient();
-
   const leadsText = allLeads
     .map(
       (l) => `[Lead ${l.index + 1}]
@@ -84,15 +79,11 @@ Return strict JSON only. No markdown. No commentary.
 "selected" must be an array of lead numbers (1-indexed) from the list above. Select between 3 and ${maxLeads} leads.`;
 
   try {
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: 512,
-      system: "You are a senior editorial desk editor. Output strict JSON only.",
-      messages: [{ role: "user", content: prompt }],
-    });
-    const textBlock = msg.content?.find((b) => b.type === "text");
-    const raw = (textBlock && textBlock.type === "text" ? (textBlock as { type: "text"; text: string }).text : "").trim();
-    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const response = await callLLM("editor", [
+      { role: "system", content: "You are a senior editorial desk editor. Output strict JSON only." },
+      { role: "user", content: prompt },
+    ], { max_tokens: 512 });
+    const stripped = response.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = safeJsonParse<{ selected: number[]; rationale: string }>(stripped);
 
     if (parsed?.selected && Array.isArray(parsed.selected) && parsed.selected.length > 0) {
@@ -213,16 +204,11 @@ Approved leads:
 ${leadsBlock}`;
 
   try {
-    const client = claudeClient();
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: systemThesis,
-      messages: [{ role: "user", content: userThesis }],
-    });
-    const textBlock = msg.content?.find((b) => b.type === "text");
-    const raw = (textBlock && textBlock.type === "text" ? (textBlock as { type: "text"; text: string }).text : "").trim();
-    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const thesisResponse = await callLLM("editor", [
+      { role: "system", content: systemThesis },
+      { role: "user", content: userThesis },
+    ], { max_tokens: 1024 });
+    const stripped = thesisResponse.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = safeJsonParse<ThesisEngineResponse>(stripped);
 
     if (!parsed?.theses || !Array.isArray(parsed.theses) || parsed.theses.length !== 3) {
@@ -325,14 +311,11 @@ ${leadsBlock}`;
 }
 
 async function generateEditorialAngle(params: {
-  client: any;
-  model: string;
-  max_tokens: number;
   brandProfile: any;
   leadsWithSources: Array<{ angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; sources: string[] }>;
   previousTitles?: string[];
 }): Promise<EditorialAngle> {
-  const { client, model, max_tokens, brandProfile, leadsWithSources, previousTitles } = params;
+  const { brandProfile, leadsWithSources, previousTitles } = params;
 
   const leadsMini = leadsWithSources.map((l) => ({
     angle: l.angle,
@@ -385,22 +368,17 @@ Notes:
 - The title MUST be unique and specific to these leads. Do not use generic titles.${previousTitles && previousTitles.length > 0 ? `\n- Do NOT reuse any of these previous titles: ${previousTitles.map((t) => `"${t}"`).join(", ")}` : ""}
 `;
 
-  const msg = await client.messages.create({
-    model,
-    max_tokens: 2048,
-    temperature: 0.6,
-    system,
-    messages: [{ role: "user", content: user }],
-  });
+  const angleResponse = await callLLM("editor", [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ], { max_tokens: 2048, temperature: 0.6 });
 
-  const textBlock = msg.content?.find((b: any) => b.type === "text");
-  const raw = textBlock?.text?.trim() ?? "";
-  const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  const stripped = angleResponse.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
   const parsed = safeJsonParse<EditorialAngle>(stripped);
 
   if (!parsed?.title || !parsed?.deep_dive_thesis) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[editorial-angle] JSON parse failed. Raw length:", raw.length, "First 300 chars:", raw.slice(0, 300));
+      console.warn("[editorial-angle] JSON parse failed. Raw length:", angleResponse.text.length, "First 300 chars:", angleResponse.text.slice(0, 300));
     }
     throw new Error("Editorial angle generation failed to produce valid JSON");
   }
@@ -473,17 +451,11 @@ Output only the artifact text. No meta commentary.`;
 
   const insiderSystemPrompt = `You write in Identity Jedi voice: surgical, direct, no fluff. Insider Access is for experienced IAM practitioners. Do not invent sources; cite only URLs provided for each lead. No dashes inside sentences.`;
 
-  const client = claudeClient();
-  const msg = await client.messages.create({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    system: insiderSystemPrompt,
-    messages: [{ role: "user", content: insiderUserPrompt }],
-  });
-  const textBlock = msg.content?.find((b) => b.type === "text");
-  return textBlock && textBlock.type === "text"
-    ? (textBlock as { type: "text"; text: string }).text.trim()
-    : "";
+  const response = await callLLM("drafting", [
+    { role: "system", content: insiderSystemPrompt },
+    { role: "user", content: insiderUserPrompt },
+  ], { max_tokens: 8192 });
+  return response.text;
 }
 
 export async function POST(req: Request) {
@@ -673,8 +645,6 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
   }
   if (!promoText.trim()) promoText = "Subscribe.";
 
-    const client = claudeClient();
-
     const { data: recentDrafts } = await supabase
       .from("issue_drafts")
       .select("content_json")
@@ -686,9 +656,6 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
       .filter((t): t is string => typeof t === "string" && t.length > 0);
 
     const angle = await generateEditorialAngle({
-      client,
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
       brandProfile,
       leadsWithSources,
       previousTitles,
@@ -886,20 +853,14 @@ Avoid explanatory tone in the first section.
   };
 
   let contentJson: DraftObject;
+  let draftModelName = "unknown";
   try {
-    const client = claudeClient();
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    });
-    const textBlock = msg.content?.find((b) => b.type === "text");
-    const raw =
-      textBlock && textBlock.type === "text"
-        ? (textBlock as { type: "text"; text: string }).text.trim()
-        : "";
-    const stripped = raw.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const draftResponse = await callLLM("drafting", [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { max_tokens: 8192 });
+    draftModelName = draftResponse.model;
+    const stripped = draftResponse.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(stripped) as ClaudeSections;
 
     const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
@@ -924,7 +885,7 @@ Avoid explanatory tone in the first section.
       promo_slot: promoText,
       close: DEFAULT_CLOSE,
       sources: uniqueSources,
-      metadata: { thesis: selectedThesisForFull, model: MODEL },
+      metadata: { thesis: selectedThesisForFull, model: draftModelName },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

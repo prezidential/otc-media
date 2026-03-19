@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockClaudeClient, createMockSupabase, makeJsonRequest } from "./helpers";
+import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-const mockClaude = createMockClaudeClient();
+const mockCallLLM = vi.fn().mockResolvedValue({ text: "{}", provider: "anthropic", model: "claude-test" });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
 
-vi.mock("@/lib/llm/claude", () => ({
-  claudeClient: () => mockClaude,
+vi.mock("@/lib/llm/provider", () => ({
+  callLLM: (...args: unknown[]) => mockCallLLM(...args),
+  getModelForRole: () => ({ provider: "anthropic", model: "claude-test" }),
 }));
 
 import { POST } from "@/app/api/issues/generate/route";
@@ -98,12 +99,11 @@ function setCommonClaudeResponses(editorialAngleText: string) {
     ],
   };
 
-  mockClaude.messages.create = vi
-    .fn()
-    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(curationResponse) }] })
-    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(thesisResponse) }] })
-    .mockResolvedValueOnce({ content: [{ type: "text", text: editorialAngleText }] })
-    .mockResolvedValueOnce({ content: [{ type: "text", text: JSON.stringify(draftSections) }] });
+  mockCallLLM
+    .mockResolvedValueOnce({ text: JSON.stringify(curationResponse), provider: "anthropic", model: "claude-test" })
+    .mockResolvedValueOnce({ text: JSON.stringify(thesisResponse), provider: "anthropic", model: "claude-test" })
+    .mockResolvedValueOnce({ text: editorialAngleText, provider: "anthropic", model: "claude-test" })
+    .mockResolvedValueOnce({ text: JSON.stringify(draftSections), provider: "anthropic", model: "claude-test" });
 }
 
 beforeEach(() => {
@@ -145,17 +145,17 @@ describe("POST /api/issues/generate", () => {
 
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
-    expect(mockClaude.messages.create).toHaveBeenCalledTimes(4);
+    expect(mockCallLLM).toHaveBeenCalledTimes(4);
 
-    const anglePrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[2][0]
-      .messages[0].content as string;
-    expect(anglePrompt).toContain(
+    const angleMessages = mockCallLLM.mock.calls[2][1] as Array<{ role: string; content: string }>;
+    const angleUserMsg = angleMessages.find((m) => m.role === "user")?.content ?? "";
+    expect(angleUserMsg).toContain(
       'Do NOT reuse any of these previous titles: "Previous One", "Previous Two"'
     );
 
-    const finalDraftPrompt = (mockClaude.messages.create as ReturnType<typeof vi.fn>).mock.calls[3][0]
-      .messages[0].content as string;
-    expect(finalDraftPrompt).toContain("Title: Fenced Angle Title");
+    const draftMessages = mockCallLLM.mock.calls[3][1] as Array<{ role: string; content: string }>;
+    const draftUserMsg = draftMessages.find((m) => m.role === "user")?.content ?? "";
+    expect(draftUserMsg).toContain("Title: Fenced Angle Title");
   });
 
   it("fails fast when editorial-angle payload is not valid JSON", async () => {
@@ -169,6 +169,6 @@ describe("POST /api/issues/generate", () => {
     await expect(POST(req)).rejects.toThrow(
       "Editorial angle generation failed to produce valid JSON"
     );
-    expect(mockClaude.messages.create).toHaveBeenCalledTimes(3);
+    expect(mockCallLLM).toHaveBeenCalledTimes(3);
   });
 });

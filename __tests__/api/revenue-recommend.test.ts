@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createMockSupabase, createMockClaudeClient, makeJsonRequest } from "./helpers";
+import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-const mockClaude = createMockClaudeClient();
+const mockCallLLM = vi.fn().mockResolvedValue({ text: "Get deeper IAM content.\n\nSubscribe.", provider: "anthropic", model: "claude-test" });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
-vi.mock("@/lib/llm/claude", () => ({
-  claudeClient: () => mockClaude,
+vi.mock("@/lib/llm/provider", () => ({
+  callLLM: (...args: unknown[]) => mockCallLLM(...args),
+  getModelForRole: () => ({ provider: "anthropic", model: "claude-test" }),
 }));
 
 import { POST } from "@/app/api/revenue/recommend/route";
@@ -73,9 +74,7 @@ describe("POST /api/revenue/recommend", () => {
       error: null,
     });
 
-    mockClaude.messages.create = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "Get deeper IAM content.\n\nSubscribe." }],
-    });
+    mockCallLLM.mockResolvedValue({ text: "Get deeper IAM content.\n\nSubscribe.", provider: "anthropic", model: "claude-test" });
 
     const req = makeJsonRequest("http://localhost:3000/api/revenue/recommend", {
       brandProfileId: "bp-1",
