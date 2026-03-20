@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.0
+## System Specification v2.1
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v1.1 (sections marked **[REVISED]** replace v1.1 equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.0 (sections marked **[REVISED]** replace v2.0 equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -14,7 +14,7 @@ Cornerstone OS exists to eliminate blank page friction and transform research in
 
 It must:
 
-- Ingest research
+- Ingest research autonomously
 - Extract structured editorial angles
 - Generate viewpoint-driven drafts
 - Enforce per-creator writing constraints
@@ -22,8 +22,9 @@ It must:
 - Persist structured draft objects
 - Prepare publish-ready drafts across multiple output channels
 - Support multiple creators via workspace-scoped configuration
+- **Operate as a team of specialized agents, not a sequence of button clicks**
 
-It is infrastructure, not a chatbot. It is a product, not a single-creator tool.
+It is infrastructure, not a chatbot. It is a product, not a single-creator tool. It is a newsroom, not a prompt template.
 
 ---
 
@@ -36,344 +37,248 @@ It is infrastructure, not a chatbot. It is a product, not a single-creator tool.
 5. Human approval before publish
 6. Voice guardrails enforced at system level
 7. Replaceable LLM abstraction
-8. **Creator-configured, not system-hardcoded** — no creator identity, voice rules, or content types live in system code
-9. **API-connected over file import** — wherever external data is available via API, connect; never require file uploads when an API exists
-10. **Workspace-scoped by default** — every record, profile, signal, lead, and draft belongs to a workspace
+8. Creator-configured, not system-hardcoded
+9. API-connected over file import
+10. Workspace-scoped by default
+11. **Agents over endpoints** — each pipeline stage is an autonomous agent with tools, memory, and judgment — not a dumb prompt call
+12. **Human gates, not human labor** — humans approve, they don't operate
 
 ---
 
 # 3. System Architecture [REVISED]
 
 ## 3.0 Multi-Tenancy Model
-
-Every entity in the system is scoped to a `workspace_id`. A workspace maps 1:1 to a creator or organization. All API routes require a resolved `workspace_id` (from session or request context). No cross-workspace data access is permitted at the query level.
-
-The `WORKSPACE_ID` env var remains valid for single-workspace development instances. In production SaaS, workspace resolution moves to auth middleware.
+_Unchanged from v2.0._
 
 ---
 
-## 3.1 Research Engine
-_No changes from v1.1. Directive configuration remains workspace-scoped via existing `workspace_id` on directives table._
+## 3.1 Agent Architecture [NEW]
 
----
+### Overview
 
-## 3.2 Leads Pipeline [REVISED]
+Cornerstone OS operates as a **newsroom staffed by specialized agents**. Each agent has a defined role, a set of tools it can invoke, memory of its previous runs, and the ability to make autonomous decisions within its scope.
 
-Added field: `channel` on `editorial_leads`.
-
-```sql
-ALTER TABLE editorial_leads
-ADD COLUMN channel TEXT NOT NULL DEFAULT 'newsletter'
-CHECK (channel IN ('newsletter', 'linkedin', 'both'));
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Researcher  │────▶│    Writer     │────▶│    Editor     │────▶│  Publisher   │
+│              │     │              │     │              │     │              │
+│  Ingests     │     │  Generates   │     │  Curates &   │     │  Exports &   │
+│  signals     │     │  leads from  │     │  drafts from │     │  publishes   │
+│  from feeds  │     │  signals     │     │  leads       │     │  content     │
+│              │     │              │     │              │     │              │
+│  Trigger:    │     │  Trigger:    │     │  Trigger:    │     │  Trigger:    │
+│  scheduled   │     │  auto after  │     │  HUMAN GATE  │     │  HUMAN GATE  │
+│  or manual   │     │  research    │     │  (approval)  │     │  (publish)   │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
-Behavior change: When a lead is approved, the approval UI presents a channel selector. Leads flagged `linkedin` or `both` are eligible for LinkedIn draft generation (Section 3.6). Leads flagged `newsletter` flow exactly as in v1.1 — no existing behavior changes.
+### Agent Definition
 
-All other lead pipeline behavior (generate, approve, deduplication, drafted lifecycle, 14-day window) is unchanged from v1.1.
-
----
-
-## 3.3 Angle + Draft Engine
-_No changes from v1.1._
-
----
-
-## 3.4 Revision Engine
-_No changes from v1.1._
-
----
-
-## 3.5 Publishing Engine [REVISED]
-
-`/api/publish/status` adds LinkedIn to capability flags:
-
-```json
-{
-  "beehiiv": false,
-  "export_html": true,
-  "linkedin": true
-}
-```
-
-`linkedin` capability reports `true` when the workspace has a valid `linkedin_connection` record (see Section 3.7). The LinkedIn publish path exports formatted post text. Direct LinkedIn API posting is Phase 3 (see Section 8).
-
----
-
-## 3.6 LinkedIn Draft Engine [NEW]
-
-### Input
-- Approved editorial lead with `channel: 'linkedin' | 'both'`
-- OR: existing `issue_drafts.content_json.deep_dive` section (extraction path)
-- Creator's `brand_profile.linkedin` config (from workspace brand profile)
-- Selected `content_type` from creator's configured types
-
-### Behavior
-- Generates a `LinkedInDraftObject` using the creator's content type structure and voice config as prompt input
-- Lint guardrails run against creator's `forbidden_patterns` plus system-level patterns
-- Up to 2 lint retries on failure (same pattern as Revision Engine)
-- Editorial bias injected via system prompt (never surfaced in API response)
-- `hook_line` is extracted and stored separately for quick review
-- For `podcast_bridge` type: `comment_content` field populated with episode link; post text contains no direct link
-
-### Extraction Path
-When source is `issue_drafts.content_json.deep_dive`, content type defaults to the first IAM-narrative equivalent in the creator's configured types. Creator can override before generation.
-
-### Output
-`LinkedInDraftObject` persisted to `linkedin_drafts` table.
+Each agent is defined by:
 
 ```typescript
-type LinkedInDraftObject = {
-  content_type: string;           // matches creator's configured content_type.id
-  post_text: string;              // full post copy, lint-passed
-  hook_line: string;              // first line, extracted for review
-  community_question?: string;    // close question if structure requires it
-  hashtags: string[];             // max 4, derived from creator's expertise config
-  comment_content?: string;       // for podcast bridge — episode link goes here
-  word_count: number;
-  character_count: number;
-  lint_passed: boolean;
-  source_lead_id?: string;
-  source_issue_id?: string;
-  generated_at: string;
+type AgentDefinition = {
+  id: string;                          // e.g. "researcher"
+  name: string;                        // e.g. "Researcher Agent"
+  role: AgentRole;                     // maps to LLM config
+  systemPrompt: string;                // persistent identity and instructions
+  tools: AgentTool[];                  // functions the agent can invoke
+  triggerMode: "scheduled" | "event" | "manual";
+  humanGate: boolean;                  // if true, agent stops and waits for human approval before next stage
+};
+
+type AgentTool = {
+  name: string;                        // e.g. "query_signals"
+  description: string;                 // what the tool does (provided to LLM)
+  execute: (params: unknown) => Promise<unknown>;
+};
+
+type AgentRunState = {
+  agent_id: string;
+  workspace_id: string;
+  run_id: string;
+  started_at: string;
+  status: "running" | "completed" | "failed" | "awaiting_human";
+  context: Record<string, unknown>;    // what the agent learned this run
+  decisions: string[];                 // what it decided and why
+  output_summary: string;             // human-readable result
 };
 ```
 
-### New API Routes
+### Agents
+
+#### Researcher Agent
+- **Role:** Ingest fresh signals from RSS feeds and manual sources
+- **LLM role:** `research`
+- **Trigger:** Scheduled (daily) or manual
+- **Human gate:** No
+- **Tools:**
+  - `check_signal_freshness` — query signals table to determine staleness per directive
+  - `ingest_directive` — run RSS ingest for a specific directive
+  - `ingest_all` — run all directives (daily + weekly based on schedule)
+  - `report_summary` — log what was ingested, what's new vs. skipped
+- **Decision-making:** Checks which directives have stale signals (>24h for daily, >7d for weekly) and only runs those. Reports what it found.
+
+#### Writer Agent
+- **Role:** Generate editorial leads from fresh signals
+- **LLM role:** `leads`
+- **Trigger:** Event (fires after Researcher completes, if new signals were ingested)
+- **Human gate:** No (leads are generated as `pending_review`)
+- **Tools:**
+  - `query_fresh_signals` — get signals from the last 14 days grouped by directive
+  - `check_existing_leads` — check for duplicate angles before generating
+  - `generate_leads` — call LLM to produce leads from signals
+  - `save_leads` — persist leads to DB with proper deduplication
+- **Decision-making:** Skips directives that already have sufficient pending leads. Adjusts lead count based on signal volume.
+
+#### Editor Agent
+- **Role:** Curate approved leads and generate newsletter/LinkedIn drafts
+- **LLM role:** `editor` (curation), `drafting` (content generation)
+- **Trigger:** Manual (user clicks "Generate Draft") — this stage requires human judgment on which leads to use
+- **Human gate:** Yes — user must approve leads before Editor runs. User reviews draft before publishing.
+- **Tools:**
+  - `get_approved_leads` — fetch approved leads for the workspace
+  - `curate_leads` — select best leads for a cohesive newsletter (existing Editor Agent curation)
+  - `get_previous_titles` — avoid title repetition
+  - `generate_thesis` — run thesis engine
+  - `generate_angle` — generate editorial angle
+  - `generate_draft` — produce the full draft
+  - `apply_guardrails` — lint and auto-rewrite
+  - `save_draft` — persist and move leads to `drafted`
+- **Decision-making:** Evaluates lead pool quality. Can report "not enough fresh angles" instead of generating a weak draft.
+
+#### Publisher Agent
+- **Role:** Export and distribute finished drafts
+- **LLM role:** None (no LLM needed — deterministic rendering)
+- **Trigger:** Manual (human clicks publish)
+- **Human gate:** Yes — human must review draft before publishing
+- **Tools:**
+  - `render_html` — convert draft to newsletter-ready HTML
+  - `push_beehiiv` — create Beehiiv draft (feature-flagged)
+  - `render_linkedin` — format for LinkedIn posting (Phase 2)
+
+### Orchestrator
+
+The **Pipeline Orchestrator** coordinates agent handoffs:
 
 ```
-POST /api/linkedin/generate          — generate LinkedIn draft from lead or issue section
-POST /api/linkedin/regenerate        — regenerate with instruction (same pattern as issues/regenerate-section)
-GET  /api/linkedin/list              — list linkedin_drafts for workspace
-POST /api/publish/linkedin           — export formatted post text (Phase 1: returns text; Phase 3: posts via API)
+POST /api/pipeline/run
 ```
 
-### Supabase Schema
+Accepts:
+- `stages`: which agents to run (default: all non-gated)
+- `workspace_id`: scope
+- `options`: per-agent overrides
+
+Behavior:
+1. Runs Researcher Agent
+2. If new signals were ingested → triggers Writer Agent
+3. Writer generates leads → stops (human gate: lead approval)
+4. When user triggers draft generation → runs Editor Agent
+5. When user triggers publish → runs Publisher Agent
+
+Each agent run is logged to the `runs` table with its `AgentRunState`, enabling full audit trail and trend analysis.
+
+### Run State Persistence
 
 ```sql
-CREATE TABLE linkedin_drafts (
+CREATE TABLE agent_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL,
-  source_lead_id UUID REFERENCES editorial_leads(id),
-  source_issue_id UUID REFERENCES issue_drafts(id),
-  content_type TEXT NOT NULL,
-  content_json JSONB NOT NULL,      -- LinkedInDraftObject
-  content TEXT NOT NULL,            -- rendered post text (plain)
-  status TEXT NOT NULL DEFAULT 'draft'
-    CHECK (status IN ('draft', 'approved', 'published')),
-  published_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
+  agent_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'completed', 'failed', 'awaiting_human')),
+  context JSONB DEFAULT '{}',
+  decisions JSONB DEFAULT '[]',
+  output_summary TEXT,
+  started_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  triggered_by TEXT                    -- 'schedule', 'event:researcher_completed', 'manual', etc.
 );
 ```
 
 ---
 
-## 3.7 Creator Onboarding + LinkedIn Connection [NEW]
+## 3.2 LLM Abstraction Layer [NEW]
 
-### Purpose
-Replaces the hardcoded brand profile seed with a creator-configured onboarding flow. Every creator — including the workspace owner — configures their brand profile through this flow. No creator identity, voice rules, or content types are seeded from system code.
+### Overview
 
-### LinkedIn OAuth Connection
+All LLM calls route through a unified provider abstraction. Each agent role can use a different provider and model, configured via environment variables.
 
-The system connects to LinkedIn via OAuth 2.0 to pull creator data. This replaces any file-based import.
+**Implemented:** `lib/llm/provider.ts`
 
-**Scopes required:**
-- `r_liteprofile` — name, headline, profile URL
-- `r_emailaddress` — email
-- `w_member_social` — required for future post publishing (Phase 3)
-- `r_organization_social` — analytics (requires LinkedIn Marketing API partner status; graceful degradation if unavailable)
+### Providers Supported
+- **Anthropic** (Claude) — default
+- **OpenAI** (GPT-4o, GPT-4o-mini, etc.)
 
-**Connection record:**
-
-```sql
-CREATE TABLE linkedin_connections (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL UNIQUE,
-  linkedin_member_id TEXT NOT NULL,
-  access_token TEXT NOT NULL,       -- encrypted at rest
-  refresh_token TEXT,
-  token_expires_at TIMESTAMPTZ,
-  scopes TEXT[] NOT NULL,
-  profile_snapshot JSONB,           -- name, headline, pulled at connect time
-  connected_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
-**API routes:**
+### Configuration
 
 ```
-GET  /api/linkedin/auth              — initiates OAuth flow, returns authorization URL
-GET  /api/linkedin/callback          — OAuth callback, exchanges code for tokens, stores connection
-GET  /api/linkedin/connection        — returns current connection status for workspace
-DELETE /api/linkedin/connection      — revokes and removes connection
+# Global default
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-20250514
+
+# Per-role overrides (format: provider:model)
+LLM_RESEARCH=openai:gpt-4o-mini
+LLM_LEADS=anthropic:claude-sonnet-4-20250514
+LLM_EDITOR=anthropic:claude-sonnet-4-20250514
+LLM_DRAFTING=openai:gpt-4o
+LLM_REVISION=anthropic:claude-sonnet-4-20250514
+LLM_LINT=openai:gpt-4o-mini
+LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
 ```
 
-### Onboarding Flow — 5 Steps
-
-**Step 1 — Creator Brief**  
-Collected via form. Stored directly in `brand_profiles`.
-
-Fields:
-- `creator_name` (string)
-- `headline` (string) — their professional positioning line
-- `primary_expertise` (string) — e.g. "Identity & Access Management"
-- `secondary_expertise` (string[]) — up to 3 additional domains
-- `audience_target` (string) — who they write for, e.g. "CISOs, security architects, IAM practitioners"
-- `content_mission` (string) — what their content is trying to do
-
-**Step 2 — LinkedIn Profile Pull**  
-Triggered automatically after OAuth connection. System calls LinkedIn Profile API and populates `headline` and `creator_name` if not already provided. Creator confirms or edits.
-
-**Step 3 — Top Post Analysis**  
-Creator pastes 10–15 of their best-performing LinkedIn posts into a structured text input (no file upload). One post per entry. System sends these to Claude with a structured analysis prompt that returns:
+### API
 
 ```typescript
-type PostAnalysisResult = {
-  content_types: DerivedContentType[];   // 3-5 types derived from post patterns
-  voice_patterns: VoicePattern[];         // structural patterns found in top posts
-  forbidden_patterns: string[];           // things to avoid, inferred from weak posts if provided
-  signature_moves: string[];              // what the creator does that works
-  example_posts: string[];                // top 3 posts selected as voice reference
-};
-
-type DerivedContentType = {
-  id: string;                            // slug, e.g. "iam_narrative"
-  label: string;                         // human label, e.g. "IAM Narrative"
-  suggested_cadence: string;             // e.g. "weekly"
-  structure: string[];                   // ordered structural steps
-  voice_register: string;                // e.g. "practitioner authority"
-  example_post?: string;                 // best example from submitted posts
-};
-```
-
-Creator reviews and edits derived content types before they are saved. Content types are not locked after onboarding — creators can add, edit, or remove via settings.
-
-**Step 4 — Performance Benchmarks (Optional)**  
-If LinkedIn Marketing API analytics are available via the connected OAuth token, the system pulls 90-day engagement data and populates `engagement_benchmarks` automatically.
-
-If analytics are not available via API (Marketing API access not granted), this step is skipped. Benchmarks default to `null` and are populated later as the system accumulates post performance data from the LinkedIn draft lifecycle.
-
-**Step 5 — Brand Profile Generated**  
-All of the above is written to `brand_profiles` as a single workspace-scoped record. The creator is taken to the Research console. Onboarding is complete.
-
----
-
-# 4. Brand Profile Schema [REVISED]
-
-Replaces the hardcoded Identity Jedi seed. All brand profile data is creator-configured via onboarding or settings. `POST /api/brand-profiles/seed` is deprecated — remove after migrating the existing workspace through the onboarding flow.
-
-### Updated Schema
-
-```typescript
-type CreatorBrandProfile = {
-  id: string;
-  workspace_id: string;
-
-  // Step 1 — Creator Brief
-  creator_name: string;
-  headline: string;
-  primary_expertise: string;
-  secondary_expertise: string[];
-  audience_target: string;
-  content_mission: string;
-
-  // Newsletter config (unchanged from v1.1, now explicit)
-  newsletter: {
-    name: string;
-    sections: string[];
-    publish_cadence: string;
-    distribution_platform: string;   // 'beehiiv' | 'substack' | 'convertkit' | 'other'
-    beehiiv_publication_id?: string;
-  };
-
-  // Voice config — derived from post analysis (Step 3)
-  voice: {
-    tone_descriptors: string[];
-    forbidden_patterns: string[];    // fed into lint config at generation time
-    signature_structures: string[];
-    example_posts: string[];         // 3-5 verbatim posts used as voice reference in prompts
-  };
-
-  // LinkedIn config — derived from post analysis (Steps 3-4)
-  linkedin: {
-    content_types: CreatorContentType[];
-    engagement_benchmarks: EngagementBenchmarks | null;
-    format_constraints: LinkedInFormatConstraints;
-  };
-
-  created_at: string;
-  updated_at: string;
-};
-
-type CreatorContentType = {
-  id: string;
-  label: string;
-  cadence: string;
-  structure: string[];
-  voice_register: string;
-  benchmark_engagement_rate: number | null;
-  example_post?: string;
-};
-
-type EngagementBenchmarks = {
-  avg_engagement_rate: number;
-  peak_engagement_rate: number;
-  baseline_impressions: number;
-  data_period_days: number;
-  sourced_at: string;
-};
-
-type LinkedInFormatConstraints = {
-  max_characters: number;            // default 3000
-  paragraph_max_sentences: number;   // default 3
-  opening_rule: string;              // e.g. "no preamble — first line must be the hook"
-  cta_placement: string;             // e.g. "close only"
-};
-```
-
-### Supabase Schema Update
-
-```sql
--- brand_profiles table: replace current columns with JSONB config
--- Keep id, workspace_id, created_at, updated_at
--- Add:
-ALTER TABLE brand_profiles
-  ADD COLUMN creator_name TEXT,
-  ADD COLUMN headline TEXT,
-  ADD COLUMN primary_expertise TEXT,
-  ADD COLUMN secondary_expertise JSONB DEFAULT '[]',
-  ADD COLUMN audience_target TEXT,
-  ADD COLUMN content_mission TEXT,
-  ADD COLUMN newsletter_config JSONB DEFAULT '{}',
-  ADD COLUMN voice_config JSONB DEFAULT '{}',
-  ADD COLUMN linkedin_config JSONB DEFAULT '{}';
+callLLM(role: AgentRole, messages: LLMMessage[], opts?: LLMRequestOptions): Promise<LLMResponse>
+getModelForRole(role: AgentRole): { provider: LLMProvider; model: string }
 ```
 
 ---
 
-# 5. Guardrails [REVISED]
+## 3.3 Research Engine
+_Unchanged from v2.0. Will be wrapped by Researcher Agent._
 
-Guardrails operate at two levels:
+---
 
-**System-level (apply to all workspaces, all channels):**
-- No em dashes
-- No en dashes
-- No space-dash-space
-- No forbidden thesis phrases (existing list)
-- No filler or corporate jargon (existing list)
+## 3.4 Leads Pipeline [REVISED]
+_Unchanged from v2.0. Will be wrapped by Writer Agent. Added field: `channel` on `editorial_leads`._
 
-**Creator-level (apply per workspace, sourced from `brand_profile.voice.forbidden_patterns`):**
-- Populated during onboarding post analysis
-- Editable via settings after onboarding
-- Applied to both newsletter and LinkedIn generation
+---
 
-**LinkedIn-specific system patterns (apply to all LinkedIn drafts regardless of creator):**
-- No lazy contrast structure: `/that'?s not .+, that'?s (my|our|your)/i`
-- No corporate opener: `/^(Great|Excited|Thrilled|Honored|Delighted)/i`
-- No mid-post external links (links go in comments for podcast bridge type only)
+## 3.5 Angle + Draft Engine
+_Unchanged from v2.0. Will be wrapped by Editor Agent._
 
-All guardrail sources are merged at generation time into a single lint config. The lint + auto-rewrite retry behavior (up to 2 retries) is unchanged from v1.1.
+---
+
+## 3.6 Revision Engine
+_Unchanged from v2.0._
+
+---
+
+## 3.7 Publishing Engine [REVISED]
+_Unchanged from v2.0. Will be wrapped by Publisher Agent._
+
+---
+
+## 3.8 LinkedIn Draft Engine
+_Unchanged from v2.0._
+
+---
+
+## 3.9 Creator Onboarding + LinkedIn Connection
+_Unchanged from v2.0._
+
+---
+
+# 4. Brand Profile Schema
+_Unchanged from v2.0._
+
+---
+
+# 5. Guardrails
+_Unchanged from v2.0._
 
 ---
 
@@ -382,19 +287,22 @@ All guardrail sources are merged at generation time into a single lint config. T
 Cornerstone OS must:
 
 1. Support workspace-scoped multi-tenancy (existing)
-2. Pull research via RSS directives (existing)
-3. Produce editorial-ready leads with channel selection (newsletter | linkedin | both)
-4. Generate newsletter drafts from approved leads (existing)
-5. Generate LinkedIn drafts from approved leads or newsletter deep dive sections
+2. Pull research via RSS directives — autonomously via Researcher Agent
+3. Produce editorial-ready leads — autonomously via Writer Agent after research
+4. Generate newsletter drafts from approved leads via Editor Agent with curation intelligence
+5. Generate LinkedIn drafts from approved leads or newsletter sections
 6. Apply per-creator voice guardrails to all generated content
-7. Allow regeneration of individual sections — newsletter and LinkedIn (existing + new)
+7. Allow regeneration of individual sections — newsletter and LinkedIn
 8. Persist structured drafts — `DraftObject` for newsletter, `LinkedInDraftObject` for LinkedIn
-9. Support creator onboarding via API-connected flow (LinkedIn OAuth + post analysis)
-10. Export publish-ready content for both channels
+9. Support creator onboarding via API-connected flow
+10. Export publish-ready content for both channels via Publisher Agent
+11. **Operate Research → Leads as an autonomous pipeline with human gate at lead approval**
+12. **Support pluggable LLM providers per agent role**
 
 Stretch:
-11. LinkedIn Marketing API analytics pull (requires Marketing API partner approval)
-12. Direct LinkedIn post publishing via API (Phase 3)
+13. LinkedIn Marketing API analytics pull
+14. Direct LinkedIn post publishing via API
+15. Scheduled pipeline automation (Vercel cron → Pipeline Orchestrator)
 
 ---
 
@@ -402,17 +310,25 @@ Stretch:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Research Engine | Implemented | Unchanged from v1.1 |
-| Leads pipeline | Implemented | Needs `channel` field addition |
-| Thesis + Angle + Draft | Implemented | Unchanged from v1.1 |
-| Draft persistence | Implemented | Unchanged from v1.1 |
-| Deterministic renderer | Implemented | Unchanged from v1.1 |
-| Guardrails — system level | Implemented | Unchanged from v1.1 |
+| Research Engine | Implemented | Unchanged from v1.1; ready for Researcher Agent wrapping |
+| Leads pipeline | Implemented | Lifecycle: pending → approved → drafted → dismissed; 14-day window; dedup |
+| Thesis + Angle + Draft | Implemented | Editor Agent curation, editorial angle with title uniqueness |
+| Draft persistence | Implemented | `content_json` with `DraftObject` + runtime validation |
+| Deterministic renderer | Implemented | `renderDraftMarkdown()` + `renderDraftHtml()` |
+| Guardrails — system level | Implemented | Lint + auto-rewrite; em/en dash, forbidden phrases, editorial bias |
 | Guardrails — creator level | Not started | Requires brand profile refactor |
 | Guardrails — LinkedIn patterns | Not started | New |
-| Revision Engine | Implemented | Unchanged from v1.1 |
-| Publishing — HTML + Beehiiv | Implemented | Unchanged from v1.1 |
+| Revision Engine | Implemented | Section-level regen with lint retries |
+| Publishing — HTML + Beehiiv | Implemented | HTML export always on; Beehiiv feature-flagged |
 | Publishing — LinkedIn export | Not started | New |
+| **LLM Abstraction Layer** | **Implemented** | Anthropic + OpenAI; per-role config via env vars |
+| **Agent Framework** | **Not started** | Agent definitions, tool registry, orchestrator |
+| **Researcher Agent** | **Not started** | First agent — wraps research engine |
+| **Writer Agent** | **Not started** | Wraps leads pipeline |
+| **Editor Agent** | **Partially implemented** | Curation exists; needs agent wrapping |
+| **Publisher Agent** | **Not started** | Wraps publish endpoints |
+| **Pipeline Orchestrator** | **Not started** | `/api/pipeline/run` |
+| **Agent run state** | **Not started** | `agent_runs` table |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
 | Creator onboarding flow | Not started | New |
 | LinkedIn OAuth connection | Not started | New |
@@ -421,76 +337,61 @@ Stretch:
 | LinkedIn Revision Engine | Not started | New |
 | linkedin_drafts table | Not started | New |
 | linkedin_connections table | Not started | New |
-| Manual topic injection | Implemented | Unchanged from v1.1 |
-| Draft history | Implemented | Unchanged from v1.1 |
-| Test suite | Implemented | 143+ tests; expand for new routes |
-| UI — LinkedIn tab on Issues page | Not started | New |
-| UI — Onboarding flow | Not started | New |
-| UI — LinkedIn draft management | Not started | New |
+| Manual topic injection | Implemented | `/api/signals/create` + UI |
+| Draft history | Implemented | `/api/issues/list` + UI with compare view |
+| QoL — signals freshness | Implemented | Freshness indicator + stale warning |
+| QoL — bulk lead actions | Implemented | Approve All / Dismiss All |
+| QoL — draft comparison | Implemented | Side-by-side compare view |
+| Test suite | Implemented | 171+ tests |
+| UI | Implemented | Dark theme, sidebar nav, full feature access |
 
 ---
 
 # 8. Roadmap [REVISED]
 
-## Phase 1 — Brand Profile Refactor + LinkedIn Foundation
+## Phase 1 — Agent Framework + Autonomous Pipeline
+- Build agent abstraction (`lib/agents/framework.ts`): agent definition, tool registry, run loop
+- Implement Researcher Agent with tools: `check_signal_freshness`, `ingest_directive`, `report_summary`
+- Implement Writer Agent with tools: `query_fresh_signals`, `check_existing_leads`, `generate_leads`
+- Build Pipeline Orchestrator (`/api/pipeline/run`)
+- Add `agent_runs` table for run state persistence
+- Research → Leads runs autonomously; human gate at lead approval
+- UI: pipeline status dashboard showing agent run history
+
+## Phase 2 — Brand Profile Refactor + LinkedIn Foundation
 - Deprecate `POST /api/brand-profiles/seed`
-- Implement generic `CreatorBrandProfile` schema in Supabase
+- Implement generic `CreatorBrandProfile` schema
 - Build creator onboarding flow (Steps 1–5)
-- Implement LinkedIn OAuth connection (`/api/linkedin/auth`, `/api/linkedin/callback`, `/api/linkedin/connection`)
+- Implement LinkedIn OAuth connection
 - Add `channel` field to `editorial_leads`
 - Add `linkedin_connections` and `linkedin_drafts` tables
-- Add LinkedIn-specific lint patterns to guardrails
-- Migrate existing workspace through onboarding flow; validate brand profile parity with v1.1 seed
+- Add LinkedIn-specific lint patterns
+- Migrate existing workspace through onboarding flow
 
-## Phase 2 — LinkedIn Draft Engine
-- Build `/api/linkedin/generate`
-- Build `/api/linkedin/regenerate`
-- Build `/api/linkedin/list`
-- Build `/api/publish/linkedin` (formatted text export)
-- Add LinkedIn tab to Issues page (extraction path from newsletter deep dive)
+## Phase 3 — LinkedIn Draft Engine
+- Build LinkedIn generate / regenerate / list / publish endpoints
+- Add LinkedIn tab to Issues page
 - Add channel selector to Leads approval UI
-- Add LinkedIn draft management UI
-- Expand test suite for all new routes
+- LinkedIn draft management UI
+- Expand test suite
 
-## Phase 3 — Direct Publishing + Analytics
-- LinkedIn post publishing via API (`w_member_social` scope)
-- LinkedIn Marketing API analytics pull (requires partner approval)
-- Auto-populate `engagement_benchmarks` from API data
-- Feedback loop: published post performance updates creator benchmarks
+## Phase 4 — Direct Publishing + Analytics
+- LinkedIn post publishing via API
+- LinkedIn Marketing API analytics pull
+- Feedback loop: performance data updates benchmarks
+- Scheduled pipeline automation (Vercel cron → Pipeline Orchestrator)
 
-## Phase 4 — Multi-Brand + Platform Expansion
-- Multi-brand orchestration (multiple brand profiles per workspace)
+## Phase 5 — Multi-Brand + Platform Expansion
+- Multi-brand orchestration
 - Revenue alignment scoring
 - Semi-autonomous issue drafting with confidence scoring
 - Additional output channels (Twitter/X, Substack Notes)
 
 ---
 
-# 9. Migration Notes [NEW]
-
-### Migrating the Existing Workspace (Identity Jedi)
-
-The existing hardcoded brand profile seed must be migrated to the generic schema before Phase 2 work begins. Steps:
-
-1. Run the new onboarding flow against the existing workspace
-2. In Step 3, use the top-performing posts identified in the LinkedIn audit as the post analysis input. Content types to configure:
-
-| id | label | cadence | voice_register |
-|----|-------|---------|----------------|
-| `iam_narrative` | IAM Narrative | weekly | practitioner authority |
-| `field_cto_perspective` | Field CTO Perspective | biweekly | humble authority |
-| `podcast_bridge` | Podcast Bridge | monthly | conversational expert |
-| `community_milestone` | Community Milestone | quarterly | personal and warm |
-
-3. Voice forbidden patterns to configure (sourced from audit):
-   - No em dashes (system-level, already enforced)
-   - No lazy contrast structure `that's not X, that's my Y`
-   - Specific over abstract — flag overly generic claims in lint
-   - No corporate opener
-
-4. Confirm generated brand profile matches v1.1 behavior for newsletter generation before deprecating seed
-5. Remove `POST /api/brand-profiles/seed` route and seed data file
+# 9. Migration Notes
+_Unchanged from v2.0._
 
 ---
 
-End of Specification v2.0
+End of Specification v2.1
