@@ -10,7 +10,7 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabase
     .from("issue_drafts")
-    .select("id,content,content_json,brand_profile_id,created_at")
+    .select("id,content,content_json,brand_profile_id,status,created_at")
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false })
     .limit(limit);

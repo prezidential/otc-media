@@ -3,13 +3,14 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { runAgent, type AgentRunState } from "@/lib/agents/framework";
 import { createResearcherAgent } from "@/lib/agents/researcher";
 import { createWriterAgent } from "@/lib/agents/writer";
+import { createEditorAgent } from "@/lib/agents/editor";
 import { saveAgentRun } from "@/lib/agents/persistence";
 
-type PipelineStage = "researcher" | "writer";
+type PipelineStage = "researcher" | "writer" | "editor";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
-  const stages = (body.stages as PipelineStage[] | undefined) ?? ["researcher", "writer"];
+  const stages = (body.stages as PipelineStage[] | undefined) ?? ["researcher", "writer", "editor"];
   const triggeredBy = (body.triggered_by as string) ?? "manual";
 
   const workspaceId = process.env.WORKSPACE_ID!;
@@ -41,11 +42,23 @@ export async function POST(req: Request) {
         continue;
       }
       agent = createWriterAgent(workspaceId, brandProfileId);
+    } else if (stage === "editor") {
+      if (!brandProfileId) {
+        results[stage] = { success: false, summary: "No brand profile found", decisions: [], data: {} };
+        continue;
+      }
+      agent = createEditorAgent(workspaceId);
     } else {
       continue;
     }
 
-    const result = await runAgent(agent, { workspace_id: workspaceId, triggered_by: triggeredBy });
+    const context: Record<string, unknown> = {
+      workspace_id: workspaceId,
+      triggered_by: triggeredBy,
+      brand_profile_id: brandProfileId,
+    };
+
+    const result = await runAgent(agent, context);
 
     results[stage] = {
       success: result.success,
