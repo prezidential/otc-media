@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, BookCheck, Rocket } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
-type DraftSummary = { id: string; content: string; content_json: Record<string, unknown> | null; created_at: string };
+type DraftSummary = { id: string; content: string; content_json: Record<string, unknown> | null; status?: string; created_at: string };
 type RegeneratableSection = "title" | "hook" | "deep_dive" | "dojo_checklist";
 
 const SECTION_LABELS: Record<RegeneratableSection, string> = {
@@ -126,6 +126,14 @@ export default function IssuesPage() {
       setDraft(data.draft);
       setContentJson(data.content_json ?? null);
     }
+  }
+
+  async function updateDraftStatus(id: string, status: string) {
+    await fetch("/api/issues/update-status", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    });
+    await loadDraftHistory();
   }
 
   async function deleteDraft(id: string) {
@@ -265,14 +273,30 @@ export default function IssuesPage() {
                   )}>
                   <button onClick={() => loadDraftFromHistory(d)} className="flex-1 text-left min-w-0">
                     <div className="flex items-center justify-between">
-                      <span className="font-medium truncate mr-4">
-                        {(d.content_json as Record<string, unknown>)?.title as string || d.content?.slice(0, 60) || "Untitled draft"}
-                      </span>
+                      <div className="flex items-center gap-2 truncate mr-4">
+                        <span className="font-medium truncate">
+                          {(d.content_json as Record<string, unknown>)?.title as string || d.content?.slice(0, 60) || "Untitled draft"}
+                        </span>
+                        {d.status && d.status !== "draft" && (
+                          <span className={cn("font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full flex-shrink-0",
+                            d.status === "published" ? "bg-primary/15 text-primary" : "bg-success/15 text-success"
+                          )}>
+                            {d.status}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {new Date(d.created_at).toLocaleString()}
                       </span>
                     </div>
                   </button>
+                  {d.status !== "published" && (
+                    <button onClick={() => updateDraftStatus(d.id, "published")}
+                      className="ml-2 p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors flex-shrink-0"
+                      title="Mark as published">
+                      <Rocket className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   {draft && d.id !== draftId && (
                     <button onClick={() => setCompareDraft(compareDraft?.id === d.id ? null : d)}
                       className={cn("ml-2 p-1.5 rounded-md transition-colors flex-shrink-0",

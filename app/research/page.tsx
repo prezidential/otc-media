@@ -62,7 +62,7 @@ export default function ResearchPage() {
       const res = await fetch("/api/pipeline/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stages: ["researcher", "writer"], triggered_by: "manual" }),
+        body: JSON.stringify({ stages: ["researcher", "writer", "editor"], triggered_by: "manual" }),
       });
       const data = await res.json().catch(() => ({}));
       setPipelineResult(data.stages ?? null);
@@ -88,7 +88,7 @@ export default function ResearchPage() {
           Agent Pipeline
         </div>
         <div className="text-sm text-foreground/80 mb-4">
-          Runs the <strong>Researcher Agent</strong> (checks staleness, ingests fresh signals) then the <strong>Writer Agent</strong> (generates editorial leads from new signals). Leads appear in the Leads page for your review.
+          Runs the full newsroom pipeline: <strong>Researcher</strong> (ingests fresh signals) → <strong>Writer</strong> (generates editorial leads) → <strong>Editor</strong> (curates leads, picks steering, generates the newsletter draft). The finished draft appears on the Issues page for your final review.
         </div>
         <div className="flex gap-3 items-center flex-wrap">
           <button onClick={runPipeline} disabled={pipelineRunning}
@@ -115,7 +115,7 @@ export default function ResearchPage() {
                 <div className="flex items-center gap-2 mb-2">
                   {result.success ? <CheckCircle2 className="h-4 w-4 text-success" /> : <XCircle className="h-4 w-4 text-danger" />}
                   <span className="font-mono text-xs font-semibold uppercase tracking-wider">
-                    {stage === "researcher" ? "Researcher Agent" : "Writer Agent"}
+                    {stage === "researcher" ? "Researcher Agent" : stage === "writer" ? "Writer Agent" : "Editor Agent"}
                   </span>
                 </div>
                 <div className="text-sm mb-2">{result.summary}</div>
