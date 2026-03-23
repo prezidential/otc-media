@@ -184,8 +184,9 @@ POST /api/pipeline/run
 
 Accepts:
 - `stages`: which agents to run (default: all non-gated)
-- `workspace_id`: scope
-- `options`: per-agent overrides
+- `triggered_by`: run provenance label (default: `manual`)
+
+Workspace scope is taken from `WORKSPACE_ID` environment configuration.
 
 Behavior:
 1. Runs Researcher Agent — checks staleness, ingests stale directives
@@ -196,23 +197,26 @@ Behavior:
 
 The pipeline runs Researcher → Writer → Editor as a single autonomous sequence. The human gate is *after* the Editor, not before it.
 
-Each agent run is logged to the `runs` table with its `AgentRunState`, enabling full audit trail and trend analysis.
+Each agent run is logged to the `runs` table with agent metadata, enabling audit trail and trend analysis.
 
 ### Run State Persistence
 
 ```sql
-CREATE TABLE agent_runs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL,
-  agent_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'running'
-    CHECK (status IN ('running', 'completed', 'failed', 'awaiting_human')),
-  context JSONB DEFAULT '{}',
-  decisions JSONB DEFAULT '[]',
-  output_summary TEXT,
-  started_at TIMESTAMPTZ DEFAULT now(),
-  completed_at TIMESTAMPTZ,
-  triggered_by TEXT                    -- 'schedule', 'event:researcher_completed', 'manual', etc.
+-- Persisted via lib/agents/persistence.ts
+INSERT INTO runs (
+  workspace_id,
+  run_type,
+  status,
+  input_refs_json,
+  output_refs_json,
+  finished_at
+) VALUES (
+  :workspace_id,
+  'agent:' || :agent_id,
+  :status,               -- initiated | completed | failed
+  :input_refs_json,      -- includes agent_id, triggered_by, context
+  :output_refs_json,     -- includes decisions, summary
+  :finished_at
 );
 ```
 
@@ -402,7 +406,7 @@ Stretch:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Research Engine | Implemented | Unchanged from v1.1; ready for Researcher Agent wrapping |
+| Research Engine | Implemented | Used by Researcher Agent tools for staleness checks + RSS ingest |
 | Leads pipeline | Implemented | Lifecycle: pending → approved → drafted → dismissed; 14-day window; dedup |
 | Thesis + Angle + Draft | Implemented | Editor Agent curation, editorial angle with title uniqueness |
 | Draft persistence | Implemented | `content_json` with `DraftObject` + runtime validation |
@@ -414,15 +418,15 @@ Stretch:
 | Publishing — HTML + Beehiiv | Implemented | HTML export always on; Beehiiv feature-flagged |
 | Publishing — LinkedIn export | Not started | New |
 | **LLM Abstraction Layer** | **Implemented** | Anthropic + OpenAI; per-role config via env vars |
-| **Agent Framework** | **Not started** | Agent definitions, tool registry, orchestrator |
-| **Researcher Agent** | **Not started** | First agent — wraps research engine |
-| **Writer Agent** | **Not started** | Wraps leads pipeline |
+| **Agent Framework** | **Implemented** | `lib/agents/framework.ts` with tool loop and role-routed LLM calls |
+| **Researcher Agent** | **Implemented** | `lib/agents/researcher.ts` (freshness + ingest tools) |
+| **Writer Agent** | **Implemented** | `lib/agents/writer.ts` (signal query + lead generation tools) |
 | **Editor Agent** | **Implemented** | Autonomous editorial decisions: lead evaluation, steering selection, output mode, draft generation |
 | **Content outlines** | **Implemented** | Workspace `content_outlines`; newsletter + Insider specs; `GET`/`POST` seed list; issue generate accepts outline ids |
 | **Draft status lifecycle** | **Implemented** | draft → reviewed → published tracking on `issue_drafts` |
 | **Publisher Agent** | **Not started** | Wraps publish endpoints |
-| **Pipeline Orchestrator** | **Not started** | `/api/pipeline/run` |
-| **Agent run state** | **Not started** | `agent_runs` table |
+| **Pipeline Orchestrator** | **Implemented** | `/api/pipeline/run` executes staged `researcher` → `writer` → `editor` runs |
+| **Agent run state** | **Implemented** | Persisted to `runs` table with `run_type='agent:<id>'` |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
 | Creator onboarding flow | Not started | New |
 | LinkedIn OAuth connection | Not started | New |
@@ -444,13 +448,12 @@ Stretch:
 # 8. Roadmap [REVISED]
 
 ## Phase 1 — Agent Framework + Autonomous Pipeline
-- Build agent abstraction (`lib/agents/framework.ts`): agent definition, tool registry, run loop
-- Implement Researcher Agent with tools: `check_signal_freshness`, `ingest_directive`, `report_summary`
-- Implement Writer Agent with tools: `query_fresh_signals`, `check_existing_leads`, `generate_leads`
-- Build Pipeline Orchestrator (`/api/pipeline/run`)
-- Add `agent_runs` table for run state persistence
-- Research → Leads runs autonomously; human gate at lead approval
-- UI: pipeline status dashboard showing agent run history
+- Completed: agent abstraction (`lib/agents/framework.ts`) with agent definition, tool registry, and run loop
+- Completed: Researcher Agent with tools `check_signal_freshness`, `ingest_directive`, `report_summary`
+- Completed: Writer Agent with tools `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive`
+- Completed: Pipeline Orchestrator (`/api/pipeline/run`)
+- Completed: agent run persistence via `runs` table (`run_type='agent:<id>'`)
+- Remaining: pipeline status dashboard UI for agent-run visibility
 
 ## Phase 2 — Brand Profile Refactor + LinkedIn Foundation
 - Deprecate `POST /api/brand-profiles/seed`
