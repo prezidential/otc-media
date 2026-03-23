@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, BookCheck, Rocket } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, BookCheck, Rocket, Sprout } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
 type BrandProfile = { id: string; name: string; created_at: string };
+type ContentOutline = { id: string; name: string; kind: string; is_default: boolean; created_at: string };
 type DraftSummary = { id: string; content: string; content_json: Record<string, unknown> | null; status?: string; created_at: string };
 type RegeneratableSection = "title" | "hook" | "deep_dive" | "dojo_checklist";
 
@@ -33,6 +34,10 @@ const PRESETS: { name: string; values: SteeringState }[] = [
 export default function IssuesPage() {
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
   const [selectedBrandProfileId, setSelectedBrandProfileId] = useState<string>("");
+  const [contentOutlines, setContentOutlines] = useState<ContentOutline[]>([]);
+  const [selectedNewsletterOutlineId, setSelectedNewsletterOutlineId] = useState<string>("");
+  const [selectedInsiderOutlineId, setSelectedInsiderOutlineId] = useState<string>("");
+  const [insiderFromCurrentDraft, setInsiderFromCurrentDraft] = useState(false);
   const [aggressionLevel, setAggressionLevel] = useState(3);
   const [audienceLevel, setAudienceLevel] = useState<(typeof AUDIENCE_OPTIONS)[number]>("practitioner");
   const [focusArea, setFocusArea] = useState<(typeof FOCUS_OPTIONS)[number]>("architecture");
@@ -62,6 +67,8 @@ export default function IssuesPage() {
   const [showHtmlExport, setShowHtmlExport] = useState(false);
   const [exportedHtml, setExportedHtml] = useState<string>("");
   const [copiedHtml, setCopiedHtml] = useState(false);
+  const [seedingOutlines, setSeedingOutlines] = useState(false);
+  const [outlineSeedMessage, setOutlineSeedMessage] = useState<string | null>(null);
 
   async function loadPublishStatus() {
     const res = await fetch("/api/publish/status");
@@ -97,6 +104,46 @@ export default function IssuesPage() {
         setPublishResult({ ok: false, message: data.error ?? "Publish failed" });
       }
     } finally { setPublishing(false); }
+  }
+
+  async function loadContentOutlines(opts?: { preferDefaultSelection?: boolean }) {
+    const res = await fetch("/api/content-outlines/list");
+    const data = await res.json().catch(() => ({}));
+    const list = (data.contentOutlines ?? []) as ContentOutline[];
+    setContentOutlines(list);
+    const pickDefault = opts?.preferDefaultSelection ?? !selectedNewsletterOutlineId;
+    if (pickDefault) {
+      const defNews = list.find((o) => o.kind === "newsletter_issue" && o.is_default);
+      const defInsider = list.find((o) => o.kind === "insider_access" && o.is_default);
+      if (defNews) setSelectedNewsletterOutlineId(defNews.id);
+      if (defInsider) setSelectedInsiderOutlineId(defInsider.id);
+    }
+  }
+
+  async function seedDefaultContentOutlines() {
+    setSeedingOutlines(true);
+    setOutlineSeedMessage(null);
+    try {
+      const res = await fetch("/api/content-outlines/seed", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (data.error) {
+        setOutlineSeedMessage(data.error);
+        return;
+      }
+      if (data.inserted > 0 && Array.isArray(data.outlines)) {
+        setOutlineSeedMessage(`Seeded ${data.inserted} default outline(s).`);
+        await loadContentOutlines({ preferDefaultSelection: true });
+        const news = data.outlines.find((o: { kind: string }) => o.kind === "newsletter_issue");
+        const ins = data.outlines.find((o: { kind: string }) => o.kind === "insider_access");
+        if (news?.id) setSelectedNewsletterOutlineId(news.id);
+        if (ins?.id) setSelectedInsiderOutlineId(ins.id);
+      } else {
+        setOutlineSeedMessage(typeof data.message === "string" ? data.message : "No new outlines inserted.");
+        await loadContentOutlines();
+      }
+    } finally {
+      setSeedingOutlines(false);
+    }
   }
 
   async function loadBrandProfiles() {
@@ -158,11 +205,29 @@ export default function IssuesPage() {
 
   async function generateDraft() {
     if (!selectedBrandProfileId) { setMessage("Select a brand profile first."); return; }
+    const sourceDraftIdForInsider =
+      outputMode === "insider_access" && insiderFromCurrentDraft && draftId ? draftId : null;
     setGenerating(true); setMessage(null); setDraft(""); setInsiderDraft(""); setDraftId(null); setContentJson(null); setCurationInfo(null);
     try {
+      const genBody: Record<string, unknown> = {
+        brandProfileId: selectedBrandProfileId,
+        leadLimit: leadLimit >= 1 ? leadLimit : 6,
+        aggressionLevel,
+        audienceLevel,
+        focusArea,
+        toneMode,
+        outputMode,
+      };
+      if (selectedNewsletterOutlineId) genBody.contentOutlineId = selectedNewsletterOutlineId;
+      if ((outputMode === "bundle" || outputMode === "insider_access") && selectedInsiderOutlineId) {
+        genBody.insiderContentOutlineId = selectedInsiderOutlineId;
+      }
+      if (sourceDraftIdForInsider) {
+        genBody.sourceDraftId = sourceDraftIdForInsider;
+      }
       const res = await fetch("/api/issues/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandProfileId: selectedBrandProfileId, leadLimit: leadLimit >= 1 ? leadLimit : 6, aggressionLevel, audienceLevel, focusArea, toneMode, outputMode }),
+        body: JSON.stringify(genBody),
       });
       const data = await res.json().catch(() => ({}));
       if (data.ok && data.draft) {
@@ -215,7 +280,7 @@ export default function IssuesPage() {
       p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
-  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); loadPublishStatus(); }, []);
+  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); loadPublishStatus(); loadContentOutlines(); }, []);
 
   const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 
@@ -236,6 +301,43 @@ export default function IssuesPage() {
           <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as (typeof OUTPUT_MODE_OPTIONS)[number])} className={selectClass}>
             {OUTPUT_MODE_OPTIONS.map((o) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}
           </select>
+          {(outputMode === "full_issue" || outputMode === "bundle") && (
+            <select
+              value={selectedNewsletterOutlineId}
+              onChange={(e) => setSelectedNewsletterOutlineId(e.target.value)}
+              className={selectClass}
+              title="Content outline (structure). Use Seed default outlines below if this list is empty."
+            >
+              <option value="">Newsletter outline (built-in default)</option>
+              {contentOutlines.filter((o) => o.kind === "newsletter_issue").map((o) => (
+                <option key={o.id} value={o.id}>{o.name}{o.is_default ? " ★" : ""}</option>
+              ))}
+            </select>
+          )}
+          {(outputMode === "bundle" || outputMode === "insider_access") && (
+            <select
+              value={selectedInsiderOutlineId}
+              onChange={(e) => setSelectedInsiderOutlineId(e.target.value)}
+              className={selectClass}
+              title="Insider Access outline"
+            >
+              <option value="">Insider outline (built-in default)</option>
+              {contentOutlines.filter((o) => o.kind === "insider_access").map((o) => (
+                <option key={o.id} value={o.id}>{o.name}{o.is_default ? " ★" : ""}</option>
+              ))}
+            </select>
+          )}
+          {outputMode === "insider_access" && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={insiderFromCurrentDraft}
+                onChange={(e) => setInsiderFromCurrentDraft(e.target.checked)}
+                className="rounded border-border"
+              />
+              Insider from saved draft
+            </label>
+          )}
           <button onClick={generateDraft} disabled={generating || !selectedBrandProfileId}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
             {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
@@ -251,6 +353,26 @@ export default function IssuesPage() {
             <span className={`text-sm font-mono ${message.includes("generated") || message.includes("regenerated") ? "text-primary" : "text-danger"}`}>
               {message}
             </span>
+          )}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Content outlines</span>
+          <span className="text-xs text-muted-foreground">
+            {contentOutlines.length === 0
+              ? "None in database — app still uses built-in defaults until you seed or add rows."
+              : `${contentOutlines.length} outline row(s) in the database`}
+          </span>
+          <button
+            type="button"
+            onClick={() => void seedDefaultContentOutlines()}
+            disabled={seedingOutlines}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+          >
+            {seedingOutlines ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sprout className="h-3.5 w-3.5" />}
+            {seedingOutlines ? "Seeding…" : "Seed default outlines"}
+          </button>
+          {outlineSeedMessage && (
+            <span className="text-xs font-mono text-muted-foreground">{outlineSeedMessage}</span>
           )}
         </div>
       </div>
