@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { callLLM } from "@/lib/llm/provider";
-import { createDraftContent, DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
+import { DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject } from "@/lib/draft/content";
 import {
   applyDashReplaceMap,
   lintDraft,
   rewriteLintViolations,
   type LintViolation,
 } from "@/lib/draft/lint";
+import { fillTemplate, type InsiderOutlineSpec } from "@/lib/content-outlines/types";
+import { resolveInsiderOutline, resolveNewsletterOutline } from "@/lib/content-outlines/fetch-outline";
 
 function extractSourcesFromContrarianTake(contrarian_take: string): string[] {
   const match = contrarian_take.match(/\n\nSources:\s*\n([\s\S]*?)(?=\n\n|$)/i) || contrarian_take.match(/Sources:\s*\n([\s\S]*?)(?=\n\n|$)/i);
@@ -410,52 +412,84 @@ function parseOutputMode(body: Record<string, unknown>): OutputMode {
   return OUTPUT_MODES.includes(body.outputMode as OutputMode) ? (body.outputMode as OutputMode) : "full_issue";
 }
 
-async function generateInsiderDraft(
-  leadsBlock: string,
-  steering: { aggressionLevel: number; audienceLevel: string; focusArea: string; toneMode: string },
-  primaryThesis: string
-): Promise<string> {
-  const insiderUserPrompt = `You are writing an Insider Access artifact for experienced IAM practitioners. Use only the approved leads and their listed Sources URLs. Do not invent any sources or citations.
-
-Primary Thesis:
-${primaryThesis}
-
-Every section must reinforce this thesis. Avoid recap.
-
-Editorial Steering Inputs:
-- aggressionLevel: ${steering.aggressionLevel} (1-5)
+function formatSteeringBlock(steering: {
+  aggressionLevel: number;
+  audienceLevel: string;
+  focusArea: string;
+  toneMode: string;
+}): string {
+  return `- aggressionLevel: ${steering.aggressionLevel} (1-5)
 - audienceLevel: ${steering.audienceLevel}
 - focusArea: ${steering.focusArea}
-- toneMode: ${steering.toneMode}
+- toneMode: ${steering.toneMode}`;
+}
 
-Approved leads:
-${leadsBlock}
+function formatAngleBlock(angle: EditorialAngle): string {
+  return `EDITORIAL ANGLE (must drive the Deep Dive):
+Title: ${angle.title}
+Hook line: ${angle.hook_line}
+Hook paragraphs:
+${angle.hook_paragraphs.map((p) => `- ${p}`).join("\n")}
+Deep dive thesis (must appear in first 2 paragraphs of Deep Dive): ${angle.deep_dive_thesis}
+Uncomfortable truth (must appear verbatim in Deep Dive): ${angle.uncomfortable_truth}
+Reframe (must appear verbatim in Deep Dive): ${angle.reframe}
+Deep dive outline:
+${angle.deep_dive_outline.map((b) => `- ${b}`).join("\n")}
+From the Dojo checklist (use these ideas, rewrite as needed, exactly 5 bullets):
+${angle.dojo_checklist.map((b) => `- ${b}`).join("\n")}`;
+}
 
-Produce ONLY the Insider Access artifact as plain text with these sections in order. Use clear section labels.
+async function generateInsiderDraft(params: {
+  spec: InsiderOutlineSpec;
+  steering: { aggressionLevel: number; audienceLevel: string; focusArea: string; toneMode: string };
+  primaryThesis: string;
+  leadsBlock: string;
+  allowedUrls: string[];
+  newsletterPayloadJson: string | null;
+}): Promise<string> {
+  const { spec, steering, primaryThesis, leadsBlock, allowedUrls, newsletterPayloadJson } = params;
 
-1) Title (max 8 words, no punctuation)
-2) What Most Teams Miss (2-4 paragraphs)
-3) What I Would Actually Change (2-4 paragraphs)
-4) Vendor Reality Check (direct, opinionated, no brand bashing)
-5) Tactical Architecture Shift (3-5 bullets)
+  const newsletterSection = newsletterPayloadJson
+    ? `STRUCTURED NEWSLETTER (public issue — extend this; do not paste large blocks verbatim):\n${newsletterPayloadJson}`
+    : `No structured newsletter JSON was provided. Rely on the approved leads block only for substance and URLs.`;
 
-Rules:
-- No hook. No invitation lines. No promo. No recap tone.
-- Assume audience is experienced IAM practitioner. Go deeper than public editorial.
-- Reference at most 2 signals by name. Use only URLs from the Sources lists above; do not invent sources.
-- No dashes inside sentences (no hyphen, em dash, or en dash).
-- Maintain Identity Jedi posture but more surgical and less rhetorical.
-- Keep paragraphs to 1-2 sentences.
+  const allowedUrlsText =
+    allowedUrls.length > 0 ? allowedUrls.map((u) => `- ${u}`).join("\n") : "(none — do not cite URLs)";
 
-Output only the artifact text. No meta commentary.`;
+  const userPrompt = fillTemplate(spec.userPromptTemplate, {
+    PRIMARY_THESIS: primaryThesis,
+    STEERING_BLOCK: formatSteeringBlock(steering),
+    NEWSLETTER_SECTION: newsletterSection,
+    ALLOWED_URLS: allowedUrlsText,
+    LEADS_BLOCK: leadsBlock,
+  });
 
-  const insiderSystemPrompt = `You write in Identity Jedi voice: surgical, direct, no fluff. Insider Access is for experienced IAM practitioners. Do not invent sources; cite only URLs provided for each lead. No dashes inside sentences.`;
-
-  const response = await callLLM("drafting", [
-    { role: "system", content: insiderSystemPrompt },
-    { role: "user", content: insiderUserPrompt },
-  ], { max_tokens: 8192 });
+  const response = await callLLM(
+    "drafting",
+    [{ role: "system", content: spec.systemPromptTemplate }, { role: "user", content: userPrompt }],
+    { max_tokens: 8192 }
+  );
   return response.text;
+}
+
+async function loadIssueDraftForInsider(
+  supabase: ReturnType<typeof supabaseAdmin>,
+  workspaceId: string,
+  draftId: string
+): Promise<DraftObject | null> {
+  const { data, error } = await supabase
+    .from("issue_drafts")
+    .select("content_json")
+    .eq("workspace_id", workspaceId)
+    .eq("id", draftId)
+    .maybeSingle();
+  if (error || !data?.content_json) return null;
+  try {
+    validateDraftObject(data.content_json);
+    return data.content_json as DraftObject;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req: Request) {
@@ -481,7 +515,77 @@ export async function POST(req: Request) {
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
   if (!brandProfile) return NextResponse.json({ error: "Brand profile not found" }, { status: 404 });
 
+  const contentOutlineId = typeof body.contentOutlineId === "string" ? body.contentOutlineId.trim() : undefined;
+  const insiderContentOutlineId =
+    typeof body.insiderContentOutlineId === "string" ? body.insiderContentOutlineId.trim() : undefined;
+  const sourceDraftId = typeof body.sourceDraftId === "string" ? body.sourceDraftId.trim() : undefined;
+
   const maxLeads = typeof body.leadLimit === "number" && body.leadLimit >= 1 ? body.leadLimit : 8;
+
+  if (outputMode === "insider_access" && sourceDraftId) {
+    const draftFromStorage = await loadIssueDraftForInsider(supabase, workspaceId, sourceDraftId);
+    if (!draftFromStorage) {
+      return NextResponse.json(
+        { ok: false, error: "Draft not found or issue content is invalid for Insider generation." },
+        { status: 404 }
+      );
+    }
+    const { spec: insiderSpec } = await resolveInsiderOutline(supabase, workspaceId, insiderContentOutlineId);
+    const thesisFromDraft = draftFromStorage.metadata?.thesis ?? FALLBACK_THESIS;
+    const urlsFromDraft =
+      draftFromStorage.sources.length > 0
+        ? draftFromStorage.sources
+        : [...new Set(draftFromStorage.fresh_signals.match(/https?:\/\/[^\s)\]]+/g) ?? [])];
+    const newsletterPayloadJson = JSON.stringify(
+      {
+        title: draftFromStorage.title,
+        hook_paragraphs: draftFromStorage.hook_paragraphs,
+        fresh_signals: draftFromStorage.fresh_signals,
+        deep_dive: draftFromStorage.deep_dive,
+        dojo_checklist: draftFromStorage.dojo_checklist,
+        metadata: draftFromStorage.metadata,
+      },
+      null,
+      2
+    );
+    try {
+      let insiderText = await generateInsiderDraft({
+        spec: insiderSpec,
+        steering,
+        primaryThesis: thesisFromDraft,
+        leadsBlock:
+          "Ground tactical detail in the newsletter JSON. Citations must use URLs from the allowed list only.",
+        allowedUrls: urlsFromDraft,
+        newsletterPayloadJson,
+      });
+      insiderText = applyDashReplaceMap(insiderText);
+      let lintFixed = false;
+      const lintViolations: LintViolation[] = [];
+      const violations = lintDraft(insiderText);
+      if (violations.length > 0) {
+        try {
+          insiderText = await rewriteLintViolations(insiderText, violations);
+          lintFixed = true;
+        } catch {
+          // keep original on rewrite failure
+        }
+        lintViolations.push(...violations);
+      }
+      return NextResponse.json({
+        ok: true,
+        draft: insiderText || "(No content generated)",
+        lintFixed,
+        lintViolations,
+        selectedThesis: thesisFromDraft,
+        theses: [],
+        selectedBy: "editor" as const,
+        sourceDraftId,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    }
+  }
 
   const { data: allApproved, error: leadsError } = await supabase
     .from("editorial_leads")
@@ -596,7 +700,16 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
 
   if (outputMode === "insider_access") {
     try {
-      let insiderText = await generateInsiderDraft(leadsBlock, steering, selectedThesis);
+      const { spec: insiderSpecLeads } = await resolveInsiderOutline(supabase, workspaceId, insiderContentOutlineId);
+      const insiderAllowedFromLeads = [...new Set(curatedLeads.flatMap((l) => l.sources))];
+      let insiderText = await generateInsiderDraft({
+        spec: insiderSpecLeads,
+        steering,
+        primaryThesis: selectedThesis,
+        leadsBlock,
+        allowedUrls: insiderAllowedFromLeads,
+        newsletterPayloadJson: null,
+      });
       insiderText = applyDashReplaceMap(insiderText);
       let lintFixed = false;
       const lintViolations: LintViolation[] = [];
@@ -662,134 +775,19 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     });
 
 
-    const userPrompt = `You are assembling a single newsletter issue draft in Identity Jedi (IDJ) voice.
-    Use only the approved leads and their listed Sources URLs. Do not invent any sources or citations.
+    const { id: newsletterOutlineRowId, spec: newsletterOutlineSpec } = await resolveNewsletterOutline(
+      supabase,
+      workspaceId,
+      contentOutlineId
+    );
 
-Primary Thesis:
-${selectedThesisForFull}
-
-Every section must reinforce this thesis. Avoid recap.
-
-Editorial Steering Inputs (adjust Opening Hook, Deep Dive, and From the Dojo to match these):
-- aggressionLevel: ${steering.aggressionLevel} (1-5)
-- audienceLevel: ${steering.audienceLevel}
-- focusArea: ${steering.focusArea}
-- toneMode: ${steering.toneMode}
-
-    EDITORIAL ANGLE (must drive the Deep Dive):
-    Title: ${angle.title}
-    Hook line: ${angle.hook_line}
-    Hook paragraphs:
-    ${angle.hook_paragraphs.map((p) => `- ${p}`).join("\n")}
-    Deep dive thesis (must appear in first 2 paragraphs of Deep Dive): ${angle.deep_dive_thesis}
-    Uncomfortable truth (must appear verbatim in Deep Dive): ${angle.uncomfortable_truth}
-    Reframe (must appear verbatim in Deep Dive): ${angle.reframe}
-    Deep dive outline:
-    ${angle.deep_dive_outline.map((b) => `- ${b}`).join("\n")}
-    From the Dojo checklist (use these ideas, rewrite as needed, exactly 5 bullets):
-    ${angle.dojo_checklist.map((b) => `- ${b}`).join("\n")}
-    
-    Approved leads (use 3-6 for Fresh Signals):
-    ${leadsBlock}
-    
-    Promo slot text (insert verbatim in the Promo Slot section):
-    ---
-    ${promoText}
-    ---
-
- Before writing the newsletter:
-
-1. Extract the shared pattern across the approved leads.
-2. Express that pattern as a single clear thesis about identity.
-3. The thesis must be declarative, not descriptive.
-4. Use that thesis to craft the Opening Hook.
-
-Opening Hook structure (must follow this template):
-
-Line 1: A shift statement. Use one of these forms:
-- "This week, something shifted."
-- "Something just changed."
-- "We just crossed a line."
-
-Line 2–3: Two short contrast lines that begin with "Not". Example:
-"Not in a hype-cycle way."
-"Not in a vendor-demo way."
-
-Line 4: One escalation line that names the stakes for identity. No article references.
-
-Line 5 (required): One short invitation or directive line:
-"Let’s talk about it."
-or
-"Here’s what matters."
-or
-"Pay attention."
-
-Do not reuse any exact hook lines from earlier drafts.
-Write fresh phrasing each time while keeping the structure.
-
-Rules:
-- 5 lines minimum. 7 lines maximum.
-- Each line is one sentence.
-- Do not summarize the news.
-- Do not mention specific vendors or articles.
-- No dashes inside sentences.
-- Avoid "This isn't", "isn't just", "The real problem isn't".
-    
-    Produce a complete issue draft as plain text with these sections in order. Use clear section labels.
-    
-    1) Title
-- Max 6 words.
-- No punctuation.
-- Must reflect the thesis.
-- No corporate phrasing.
-    2) Opening Hook (use the hook_line as the first line, then 2-3 short paragraphs)
-    3) Fresh Signals (3-6 items from the leads above). For each item: title/angle, 2-3 sentence take, then Sources in this exact format:
-       Sources:
-       - url
-       - url
-       Use only the URLs from that lead's list. Do not invent URLs.
-4) Deep Dive (600–900 words, editorial, IDJ voice)
-
-Structure:
-
-Paragraph 1–2:
-- Expand the thesis immediately.
-- Do not recap articles.
-- Establish authority and posture.
-
-Middle section:
-- Identify the core classification mistake identity teams are making.
-- Explain the consequence of that mistake.
-- Reference at most TWO specific signals from Fresh Signals.
-- Everything else must be framed as pattern, not reporting.
-
-Include:
-- Exactly 3 bold declarative statements spaced throughout.
-- One uncomfortable truth about identity programs.
-- One reframing sentence that changes how the reader should think about the problem.
-
-Tone rules:
-- No advisory consulting tone.
-- No “organizations should consider…”
-- No recap language like “This article shows…”
-- Keep paragraphs 1–2 sentences max.
-- Maintain escalation.
-- End with strategic clarity, not summary.
-    5) From the Dojo (exactly 5 bullets, practical, no fluff)
-    6) Promo Slot (the promo text above, verbatim, no changes)
-    7) Close (short sign-off + CTA: Subscribe)
-    
-    Voice: No dashes inside sentences (no hyphen, em dash, or en dash). Avoid "This isn't", "isn't just", "The real problem isn't". Vary sentence starters. Keep paragraphs to 1-2 sentences.
-
-Output valid JSON only. No markdown code fence. No commentary. Use this exact shape (all strings; hook_paragraphs and dojo_checklist are arrays of strings):
-{
-  "title": "Max 6 words, no punctuation, reflects thesis",
-  "hook_paragraphs": ["First short paragraph.", "Second paragraph.", "Optional third."],
-  "fresh_signals": "**Fresh Signals**\\n\\n**Item 1 Title**\\n\\nTake text...\\n\\nSources:\\n- https://...\\n- https://...\\n\\n**Item 2 Title**\\n\\n...",
-  "deep_dive": "Full Deep Dive prose (600-900 words). Use **bold** for 3 declarative statements.",
-  "dojo_checklist": ["First bullet.", "Second.", "Third.", "Fourth.", "Fifth."]
-}
-Do not include promo_slot or close (they are added separately). Use only URLs from the leads for Sources.`;
+    const userPrompt = fillTemplate(newsletterOutlineSpec.userPromptTemplate, {
+      PRIMARY_THESIS: selectedThesisForFull,
+      STEERING_BLOCK: formatSteeringBlock(steering),
+      ANGLE_BLOCK: formatAngleBlock(angle),
+      LEADS_BLOCK: leadsBlock,
+      PROMO_TEXT: promoText,
+    });
 
     const systemPrompt = `You write in Identity Jedi (IDJ) voice.
 
@@ -832,17 +830,8 @@ Avoid explanatory tone in the first section.
       narrative_preferences_json: brandProfile.narrative_preferences_json,
     }, null, 2)}
     
-    Rules:
-    - No dashes inside sentences (no '-', '—', '–').
-    - Avoid "This isn't", "isn't just", "The real problem isn't".
-    - Vary sentence starters.
-    - Keep paragraphs 1-2 sentences.
-    Fresh Signals: Sources formatted as:
-    Sources:
-    - url
-    - url
-    Do not invent sources.
-    Output strict JSON only. No code fences.`;
+${newsletterOutlineSpec.systemPromptSuffix}`;
+
 
   type ClaudeSections = {
     title?: string;
@@ -945,6 +934,7 @@ Avoid explanatory tone in the first section.
       brand_profile_id: brandProfileId,
       content: draftText,
       content_json: contentJson,
+      ...(newsletterOutlineRowId && { content_outline_id: newsletterOutlineRowId }),
     };
     const { error: insertError } = await supabase.from("issue_drafts").insert(insertPayload);
     if (!insertError) {
@@ -969,7 +959,27 @@ Avoid explanatory tone in the first section.
 
   if (outputMode === "bundle") {
     try {
-      let insiderDraft = await generateInsiderDraft(leadsBlock, steering, selectedThesisInsider!);
+      const { spec: insiderSpecBundle } = await resolveInsiderOutline(supabase, workspaceId, insiderContentOutlineId);
+      const newsletterPayloadForInsider = JSON.stringify(
+        {
+          title: contentJson.title,
+          hook_paragraphs: contentJson.hook_paragraphs,
+          fresh_signals: contentJson.fresh_signals,
+          deep_dive: contentJson.deep_dive,
+          dojo_checklist: contentJson.dojo_checklist,
+          metadata: contentJson.metadata,
+        },
+        null,
+        2
+      );
+      let insiderDraft = await generateInsiderDraft({
+        spec: insiderSpecBundle,
+        steering,
+        primaryThesis: selectedThesisInsider!,
+        leadsBlock,
+        allowedUrls: contentJson.sources,
+        newsletterPayloadJson: newsletterPayloadForInsider,
+      });
       insiderDraft = applyDashReplaceMap(insiderDraft);
       const insiderViolations = lintDraft(insiderDraft);
       if (insiderViolations.length > 0) {
@@ -990,6 +1000,7 @@ Avoid explanatory tone in the first section.
         lintFixed,
         lintViolations,
         curation: { leadsUsed: curatedLeads.length, leadsAvailable: allApproved.length, rationale: curation.rationale },
+        ...(newsletterOutlineRowId && { contentOutlineId: newsletterOutlineRowId }),
         ...bundleThesisPayload(),
       });
     } catch (err) {
@@ -1006,6 +1017,7 @@ Avoid explanatory tone in the first section.
     lintFixed,
     lintViolations,
     curation: { leadsUsed: curatedLeads.length, leadsAvailable: allApproved.length, rationale: curation.rationale },
+    ...(newsletterOutlineRowId && { contentOutlineId: newsletterOutlineRowId }),
     ...thesisPayload(),
   });
 }

@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.1
+## System Specification v2.2
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v2.0 (sections marked **[REVISED]** replace v2.0 equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.1 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -147,6 +147,7 @@ type AgentRunState = {
   - Autonomously selects steering parameters based on lead content (e.g., breach stories → high aggression, governance → analytical)
   - Decides output mode: `full_issue` always; `bundle` (with Insider Access) only when leads contain genuinely premium practitioner-grade content worth paying for
   - Insider Access is a paid offering — the Editor only produces it when the material warrants it
+  - When Insider is produced in `bundle` mode, it is drafted **after** the public issue using the stored `content_json` (plus an allowlisted URL set), not by re-prompting raw leads alone
 
 #### Draft Status Lifecycle
 
@@ -290,8 +291,81 @@ _Unchanged from v2.0._
 
 ---
 
+## 3.10 Content Outlines (structure templates) **[NEW]**
+
+### Purpose
+
+**Content outlines** define *what* the system assembles (section order, Fresh Signals shape, JSON output contract text, Insider Access section labels, etc.). They are **workspace-scoped** and **separate from brand profiles**.
+
+**Brand profiles** define *who is speaking* (voice, character, constraints, emoji policy, narrative preferences). **Outlines** define *the artifact shape* the drafting agent must produce.
+
+This separation allows multiple outlines per workspace (e.g. weekly newsletter vs. digest vs. premium follow-up) without duplicating voice configuration.
+
+### Data model
+
+Table: `content_outlines` (see `lib/supabase/schema-content-outlines.sql`).
+
+| Column | Purpose |
+|--------|---------|
+| `workspace_id` | Scope |
+| `name` | Human label in UI |
+| `kind` | `newsletter_issue` \| `insider_access` |
+| `spec_json` | Versioned outline spec (see below) |
+| `is_default` | At most one default per `(workspace_id, kind)` |
+
+`issue_drafts` may store optional `content_outline_id` for traceability.
+
+### Spec JSON (v1)
+
+**Newsletter (`kind: newsletter_issue`):**
+
+```json
+{
+  "version": 1,
+  "userPromptTemplate": "… placeholders {{PRIMARY_THESIS}}, {{STEERING_BLOCK}}, {{ANGLE_BLOCK}}, {{LEADS_BLOCK}}, {{PROMO_TEXT}} …",
+  "systemPromptSuffix": "… appended after BRAND PROFILE JSON in the drafting system message …"
+}
+```
+
+**Insider Access (`kind: insider_access`):**
+
+```json
+{
+  "version": 1,
+  "userPromptTemplate": "… {{PRIMARY_THESIS}}, {{STEERING_BLOCK}}, {{NEWSLETTER_SECTION}}, {{ALLOWED_URLS}}, {{LEADS_BLOCK}} …",
+  "systemPromptTemplate": "… drafting system message …"
+}
+```
+
+Built-in defaults live in code (`lib/content-outlines/default-specs.ts`). They are written to the database only through the app: `POST /api/content-outlines/seed` (Issues page: **Seed default outlines**) when a workspace has no outline rows yet. **Schema changes use SQL; outline row data is not maintained via checked-in seed SQL or one-off scripts.**
+
+### API and UI
+
+- `GET /api/content-outlines/list` — list outlines for the workspace.
+- `POST /api/content-outlines/seed` — insert default newsletter + Insider rows if none exist (Issues page: **Seed default outlines**).
+- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter), `insiderContentOutlineId` (Insider), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+
+If no DB row matches, the generator uses the **code default** spec (same text as seeded defaults).
+
+### Insider Access vs. public issue **[REVISED]**
+
+Insider Access remains a **separate artifact** from the public newsletter. **Bundle mode** generates the full issue first, then generates Insider using:
+
+1. The **structured newsletter** (`content_json` subset as JSON text) as the primary editorial substrate.
+2. The **allowed URL list** from the issue (and leads for grounding).
+3. The **Insider outline** (`insider_access` kind) for section structure.
+
+Standalone `insider_access` mode may still run from **approved leads only** (`newsletterPayloadJson` absent), or from **`sourceDraftId`** (load `content_json` from `issue_drafts`).
+
+### Editor Agent tools (conceptual)
+
+- `generate_newsletter_draft` loads **brand profile** + **resolved newsletter outline** (by id or workspace default or code fallback), then runs thesis → angle → draft → lint.
+- Insider generation runs **after** the public `DraftObject` exists (bundle) or from a stored draft / leads as above.
+
+---
+
 # 4. Brand Profile Schema
-_Unchanged from v2.0._
+_Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
 ---
 
@@ -344,6 +418,7 @@ Stretch:
 | **Researcher Agent** | **Not started** | First agent — wraps research engine |
 | **Writer Agent** | **Not started** | Wraps leads pipeline |
 | **Editor Agent** | **Implemented** | Autonomous editorial decisions: lead evaluation, steering selection, output mode, draft generation |
+| **Content outlines** | **Implemented** | Workspace `content_outlines`; newsletter + Insider specs; `GET`/`POST` seed list; issue generate accepts outline ids |
 | **Draft status lifecycle** | **Implemented** | draft → reviewed → published tracking on `issue_drafts` |
 | **Publisher Agent** | **Not started** | Wraps publish endpoints |
 | **Pipeline Orchestrator** | **Not started** | `/api/pipeline/run` |
@@ -413,4 +488,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.1
+End of Specification v2.2
