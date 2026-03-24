@@ -7,14 +7,14 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 | Stage | Description |
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
-| **Leads** | Generates editorial leads from signals via Claude, with citation enforcement and human approval workflow |
+| **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
 | **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 
 ## Tech Stack
 
 - **Framework:** Next.js 16 (App Router, TypeScript)
-- **AI:** Anthropic Claude (`claude-sonnet-4-20250514`)
+- **AI:** Pluggable Anthropic/OpenAI via `lib/llm/provider.ts` (default: Claude Sonnet)
 - **Database:** Supabase (hosted PostgreSQL)
 - **UI:** Tailwind CSS v4, Lucide React, JetBrains Mono
 - **Testing:** Vitest (136+ tests)
@@ -25,7 +25,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 
 - Node.js 20+
 - A Supabase project with the required tables (see `lib/supabase/schema-issue_drafts.sql`)
-- An Anthropic API key
+- An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
 
@@ -36,13 +36,27 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
 SUPABASE_SECRET_KEY=your-service-role-key
 ANTHROPIC_API_KEY=your-anthropic-key
+OPENAI_API_KEY=your-openai-key
 WORKSPACE_ID=your-workspace-uuid
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-20250514
+LLM_RESEARCH=anthropic:claude-sonnet-4-20250514
+LLM_LEADS=anthropic:claude-sonnet-4-20250514
+LLM_EDITOR=anthropic:claude-sonnet-4-20250514
+LLM_DRAFTING=anthropic:claude-sonnet-4-20250514
+LLM_REVISION=anthropic:claude-sonnet-4-20250514
+LLM_LINT=anthropic:claude-sonnet-4-20250514
+LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
 BEEHIIV_ENABLED=false
 BEEHIIV_API_KEY=your-beehiiv-api-key
 BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
 ```
 
-Beehiiv variables are optional unless you plan to push drafts directly to Beehiiv.
+Notes:
+
+- Beehiiv variables are optional unless you plan to push drafts directly to Beehiiv.
+- `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
+- Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
 
 ### Install & Run
 
@@ -93,12 +107,13 @@ app/
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
+    ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
 lib/
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── leads/               # Zod schema for lead validation
-├── llm/                 # Claude client factory
+├── llm/                 # Provider abstraction + role-based model selection
 ├── research/            # RSS feed map (8 directives, 13+ sources)
 ├── supabase/            # Server + browser clients
 └── utils.ts             # cn() utility
@@ -110,6 +125,36 @@ docs/                    # System specification v1.1
 ## Architecture
 
 See [`docs/cornerstone-system-spec-v1.md`](docs/cornerstone-system-spec-v1.md) for the full system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Autonomous Pipeline Runbook
+
+The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result.
+
+### Endpoint
+
+`POST /api/pipeline/run`
+
+Request body (all optional):
+
+- `stages`: array of stages to run. Defaults to `["researcher","writer","editor"]`.
+- `triggered_by`: audit label for run provenance. Defaults to `"manual"`.
+
+```bash
+curl -s -X POST http://localhost:3000/api/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"triggered_by":"manual","stages":["researcher","writer","editor"]}'
+```
+
+Response includes:
+
+- `ok`: `true` only when all executed stages succeed.
+- `aborted`: whether execution stopped early after a failed stage.
+- `stages`: per-stage `success`, `summary`, `decisions`, and `data`.
+
+Operational constraints:
+
+- `WORKSPACE_ID` must be configured.
+- `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
 
 ## Publishing Runbook
 
