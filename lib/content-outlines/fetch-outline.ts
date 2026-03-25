@@ -26,6 +26,7 @@ export async function resolveNewsletterOutline(
         .select("id, spec_json, kind")
         .eq("workspace_id", workspaceId)
         .eq("id", contentOutlineId)
+        .is("disabled_at", null)
         .maybeSingle();
 
       if (error) {
@@ -47,6 +48,7 @@ export async function resolveNewsletterOutline(
       .eq("workspace_id", workspaceId)
       .eq("kind", "newsletter_issue")
       .eq("is_default", true)
+      .is("disabled_at", null)
       .limit(1);
 
     if (error) {
@@ -84,6 +86,7 @@ export async function resolveInsiderOutline(
         .select("id, spec_json, kind")
         .eq("workspace_id", workspaceId)
         .eq("id", insiderContentOutlineId)
+        .is("disabled_at", null)
         .maybeSingle();
 
       if (error) {
@@ -105,6 +108,7 @@ export async function resolveInsiderOutline(
       .eq("workspace_id", workspaceId)
       .eq("kind", "insider_access")
       .eq("is_default", true)
+      .is("disabled_at", null)
       .limit(1);
 
     if (error) {

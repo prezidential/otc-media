@@ -10,6 +10,7 @@ import {
 } from "@/lib/draft/lint";
 import { fillTemplate, type InsiderOutlineSpec } from "@/lib/content-outlines/types";
 import { resolveInsiderOutline, resolveNewsletterOutline } from "@/lib/content-outlines/fetch-outline";
+import { assertOutlineUsableForGenerate } from "@/lib/content-outlines/outline-access";
 
 function extractSourcesFromContrarianTake(contrarian_take: string): string[] {
   const match = contrarian_take.match(/\n\nSources:\s*\n([\s\S]*?)(?=\n\n|$)/i) || contrarian_take.match(/Sources:\s*\n([\s\S]*?)(?=\n\n|$)/i);
@@ -519,6 +520,15 @@ export async function POST(req: Request) {
   const insiderContentOutlineId =
     typeof body.insiderContentOutlineId === "string" ? body.insiderContentOutlineId.trim() : undefined;
   const sourceDraftId = typeof body.sourceDraftId === "string" ? body.sourceDraftId.trim() : undefined;
+
+  if (contentOutlineId && (outputMode === "full_issue" || outputMode === "bundle")) {
+    const check = await assertOutlineUsableForGenerate(supabase, workspaceId, contentOutlineId, "newsletter_issue");
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+  }
+  if (insiderContentOutlineId && (outputMode === "bundle" || outputMode === "insider_access")) {
+    const check = await assertOutlineUsableForGenerate(supabase, workspaceId, insiderContentOutlineId, "insider_access");
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+  }
 
   const maxLeads = typeof body.leadLimit === "number" && body.leadLimit >= 1 ? body.leadLimit : 8;
 
