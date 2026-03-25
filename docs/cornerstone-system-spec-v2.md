@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.2
+## System Specification v2.3
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v2.1 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.2 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -295,7 +295,7 @@ _Unchanged from v2.0._
 
 ---
 
-## 3.10 Content Outlines (structure templates) **[NEW]**
+## 3.10 Content Outlines (structure templates) **[NEW]** **[REVISED in v2.3]**
 
 ### Purpose
 
@@ -316,8 +316,11 @@ Table: `content_outlines` (see `lib/supabase/schema-content-outlines.sql`).
 | `kind` | `newsletter_issue` \| `insider_access` |
 | `spec_json` | Versioned outline spec (see below) |
 | `is_default` | At most one default per `(workspace_id, kind)` |
+| `disabled_at` | **Soft disable:** `timestamptz` nullable; `NULL` = active. “Delete” in the app sets this timestamp and clears `is_default`. There is **no re-enable** path in the UI for v1 (restore would be a manual SQL or future API). |
 
-`issue_drafts` may store optional `content_outline_id` for traceability.
+`issue_drafts` may store optional `content_outline_id` for traceability (see `lib/supabase/schema-issue_drafts.sql`; generation writes it when a DB-backed newsletter outline row is used).
+
+**Schema:** apply `lib/supabase/schema-content-outlines.sql` in Supabase (idempotent); existing databases need at least `ALTER TABLE content_outlines ADD COLUMN IF NOT EXISTS disabled_at timestamptz;`.
 
 ### Spec JSON (v1)
 
@@ -343,13 +346,30 @@ Table: `content_outlines` (see `lib/supabase/schema-content-outlines.sql`).
 
 Built-in defaults live in code (`lib/content-outlines/default-specs.ts`). They are written to the database only through the app: `POST /api/content-outlines/seed` (Issues page: **Seed default outlines**) when a workspace has no outline rows yet. **Schema changes use SQL; outline row data is not maintained via checked-in seed SQL or one-off scripts.**
 
-### API and UI
+### REST API and UI **[REVISED]**
 
-- `GET /api/content-outlines/list` — list outlines for the workspace.
-- `POST /api/content-outlines/seed` — insert default newsletter + Insider rows if none exist (Issues page: **Seed default outlines**).
-- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter), `insiderContentOutlineId` (Insider), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+**List / create (collection)**
 
-If no DB row matches, the generator uses the **code default** spec (same text as seeded defaults).
+- `GET /api/content-outlines` — Returns `{ outlines }` (each row includes structured template fields derived from `spec_json`). By default only **active** rows (`disabled_at IS NULL`). Query `?includeDisabled=1` includes soft-disabled rows (e.g. Outlines admin list).
+- `POST /api/content-outlines` — **Create.** Body uses **structured fields** only (no raw `spec_json` from the client): `name`, `kind`, `is_default`, `userPromptTemplate`, and either `systemPromptSuffix` (newsletter) or `insiderSystemPrompt` (Insider). Server validates, serializes to `spec_json`, returns `{ outline, warnings }`. `warnings` are non-blocking (e.g. missing `{{PLACEHOLDER}}` tokens).
+- `POST /api/content-outlines/seed` — Insert default newsletter + Insider rows **if the workspace has no outline rows** (Issues page: **Seed default outlines**). Row data is app-only, not from checked-in SQL seed files.
+
+**Single resource**
+
+- `GET /api/content-outlines/[id]` — `{ outline }` (includes disabled rows for read-only visibility).
+- `PATCH /api/content-outlines/[id]` — **Update** merged fields; **400** if row is disabled. If `is_default` is set true, other defaults for that `(workspace_id, kind)` are cleared first.
+- `DELETE /api/content-outlines/[id]` — **Soft disable:** sets `disabled_at`, clears `is_default`; **400** if already disabled.
+
+**Issue generation**
+
+- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter, when `outputMode` is `full_issue` or `bundle`), `insiderContentOutlineId` (when `bundle` or `insider_access`), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+- When an outline **id is provided**, the server **asserts** the row exists, is **not** disabled, and **`kind`** matches; otherwise **400/404** — no silent fallback to the code default for a bad id.
+- When **no** outline id is sent, resolution uses DB default or **code default** spec (same text as seeded defaults).
+
+**UI**
+
+- **`/outlines`** — Workspace-admin style page: list, create, edit (kind fixed after create), placeholder hints, save warnings, soft disable. Sidebar **Outlines** + **Manage outlines** link from Issues.
+- **Issues** outline dropdowns load **`GET /api/content-outlines`** (active rows only).
 
 ### Insider Access vs. public issue **[REVISED]**
 
@@ -418,15 +438,15 @@ Stretch:
 | Publishing — HTML + Beehiiv | Implemented | HTML export always on; Beehiiv feature-flagged |
 | Publishing — LinkedIn export | Not started | New |
 | **LLM Abstraction Layer** | **Implemented** | Anthropic + OpenAI; per-role config via env vars |
-| **Agent Framework** | **Implemented** | `lib/agents/framework.ts` with tool loop and role-routed LLM calls |
-| **Researcher Agent** | **Implemented** | `lib/agents/researcher.ts` (freshness + ingest tools) |
-| **Writer Agent** | **Implemented** | `lib/agents/writer.ts` (signal query + lead generation tools) |
-| **Editor Agent** | **Implemented** | Autonomous editorial decisions: lead evaluation, steering selection, output mode, draft generation |
-| **Content outlines** | **Implemented** | Workspace `content_outlines`; newsletter + Insider specs; `GET`/`POST` seed list; issue generate accepts outline ids |
+| **Agent Framework** | **Partial** | `lib/agents/framework.ts` — tool loop, agent definitions, role-routed LLM calls; Phase 1 productization (dashboard, autonomy, structured errors) ongoing |
+| **Researcher Agent** | **Partial** | `lib/agents/researcher.ts` — freshness + ingest tools over existing research APIs; extend as needed for scheduled autonomy |
+| **Writer Agent** | **Partial** | `lib/agents/writer.ts` — signal query + lead generation tools; extend as needed |
+| **Editor Agent** | **Implemented** | Issue path: curation + `POST /api/issues/generate` (lead evaluation, steering, output mode, draft generation); `lib/agents/editor.ts` for pipeline orchestration |
+| **Content outlines** | **Implemented** | `content_outlines` with `disabled_at`; REST `/api/content-outlines` + `/api/content-outlines/[id]`; `/outlines` CRUD UI; seed route; generate validates outline ids |
 | **Draft status lifecycle** | **Implemented** | draft → reviewed → published tracking on `issue_drafts` |
 | **Publisher Agent** | **Not started** | Wraps publish endpoints |
-| **Pipeline Orchestrator** | **Implemented** | `/api/pipeline/run` executes staged `researcher` → `writer` → `editor` runs |
-| **Agent run state** | **Implemented** | Persisted to `runs` table with `run_type='agent:<id>'` |
+| **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
+| **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
 | Creator onboarding flow | Not started | New |
 | LinkedIn OAuth connection | Not started | New |
@@ -443,17 +463,21 @@ Stretch:
 | Test suite | Implemented | 171+ tests |
 | UI | Implemented | Dark theme, sidebar nav, full feature access |
 
+**Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
+
 ---
 
 # 8. Roadmap [REVISED]
 
 ## Phase 1 — Agent Framework + Autonomous Pipeline
-- Completed: agent abstraction (`lib/agents/framework.ts`) with agent definition, tool registry, and run loop
-- Completed: Researcher Agent with tools `check_signal_freshness`, `ingest_directive`, `report_summary`
-- Completed: Writer Agent with tools `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive`
-- Completed: Pipeline Orchestrator (`/api/pipeline/run`)
-- Completed: agent run persistence via `runs` table (`run_type='agent:<id>'`)
-- Remaining: pipeline status dashboard UI for agent-run visibility
+- **Landed:** agent abstraction (`lib/agents/framework.ts`) — definition, tool registry, run loop, role-routed LLM calls
+- **Landed:** Researcher Agent — `check_signal_freshness`, `ingest_directive`, `report_summary` (`lib/agents/researcher.ts`)
+- **Landed:** Writer Agent — `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive` (`lib/agents/writer.ts`)
+- **Landed:** Pipeline Orchestrator — `POST /api/pipeline/run` (staged researcher → writer → editor)
+- **Landed:** agent run persistence via **`runs`** (`run_type` prefix `agent:`)
+- **Hardening:** structured errors, clearer stage contracts, optional abort / human gate between stages; formalize `runs` contract in UI filters or migrate to **`agent_runs`** if queries outgrow `runs`
+- **Autonomy:** Research → Leads should run on a schedule or events; **human gate at lead approval** remains non-negotiable
+- **Remaining:** **pipeline status dashboard** (agent run history, failures, last trigger) — beyond the Research console “run pipeline” control
 
 ## Phase 2 — Brand Profile Refactor + LinkedIn Foundation
 - Deprecate `POST /api/brand-profiles/seed`
@@ -491,4 +515,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.2
+End of Specification v2.3

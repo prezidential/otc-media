@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, BookCheck, Rocket, Sprout } from "lucide-react";
+import Link from "next/link";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -107,9 +108,9 @@ export default function IssuesPage() {
   }
 
   async function loadContentOutlines(opts?: { preferDefaultSelection?: boolean }) {
-    const res = await fetch("/api/content-outlines/list");
+    const res = await fetch("/api/content-outlines");
     const data = await res.json().catch(() => ({}));
-    const list = (data.contentOutlines ?? []) as ContentOutline[];
+    const list = (data.outlines ?? []) as ContentOutline[];
     setContentOutlines(list);
     const pickDefault = opts?.preferDefaultSelection ?? !selectedNewsletterOutlineId;
     if (pickDefault) {
@@ -362,6 +363,13 @@ export default function IssuesPage() {
               ? "None in database — app still uses built-in defaults until you seed or add rows."
               : `${contentOutlines.length} outline row(s) in the database`}
           </span>
+          <Link
+            href="/outlines"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+          >
+            <ListTree className="h-3.5 w-3.5" />
+            Manage outlines
+          </Link>
           <button
             type="button"
             onClick={() => void seedDefaultContentOutlines()}

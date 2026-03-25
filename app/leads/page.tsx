@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X, CheckCheck, XCircle } from "lucide-react";
+import Link from "next/link";
+import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X, CheckCheck, XCircle, Newspaper } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,15 @@ export default function LeadsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [promoLoading, setPromoLoading] = useState(false);
   const [promo, setPromo] = useState<{ item: { title: string; type: string }; promoText: string } | null>(null);
+  const [approvedLeadCount, setApprovedLeadCount] = useState(0);
+
+  async function loadApprovedLeadCount() {
+    const res = await fetch("/api/leads/list?status=approved");
+    const text = await res.text();
+    let data: { leads?: Lead[] } = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    setApprovedLeadCount((data.leads ?? []).length);
+  }
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
@@ -66,7 +76,10 @@ export default function LeadsPage() {
 
   async function approve(id: string) {
     const res = await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    if (res.ok) await loadLeads();
+    if (res.ok) {
+      await loadLeads();
+      await loadApprovedLeadCount();
+    }
   }
 
   async function dismiss(id: string) {
@@ -82,6 +95,7 @@ export default function LeadsPage() {
       await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     }
     await loadLeads();
+    await loadApprovedLeadCount();
   }
 
   async function bulkDismiss() {
@@ -93,7 +107,11 @@ export default function LeadsPage() {
     await loadLeads();
   }
 
-  useEffect(() => { loadBrandProfiles(); loadLeads(); }, []);
+  useEffect(() => {
+    void loadBrandProfiles();
+    void loadLeads();
+    void loadApprovedLeadCount();
+  }, []);
 
   const confidenceColor = (score: number) =>
     score >= 0.7 ? "bg-success" : score >= 0.4 ? "bg-warning" : "bg-danger";
@@ -101,6 +119,30 @@ export default function LeadsPage() {
   return (
     <div className="p-6 lg:p-10 max-w-[1100px]">
       <PageHeader title="Editorial Leads" description="Generate, review, and approve editorial leads" />
+
+      {approvedLeadCount >= 3 && (
+        <div className="rounded-xl border border-success/30 bg-success/5 p-4 mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-foreground">
+            <span className="font-semibold">{approvedLeadCount} approved leads</span>
+            <span className="text-muted-foreground"> — enough to generate a newsletter draft (Editor agent or Issues page).</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/issues"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
+            >
+              <Newspaper className="h-3.5 w-3.5" />
+              Open Issues
+            </Link>
+            <Link
+              href="/research"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+            >
+              Run Editor on Research
+            </Link>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card p-5 mb-6">
         <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
