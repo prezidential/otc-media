@@ -106,6 +106,21 @@ function setCommonClaudeResponses(editorialAngleText: string) {
     .mockResolvedValueOnce({ text: JSON.stringify(draftSections), provider: "anthropic", model: "claude-test" });
 }
 
+function makeStoredIssueDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    title: "Stored Issue Title",
+    hook_paragraphs: ["Hook paragraph one.", "Hook paragraph two."],
+    fresh_signals: "**Fresh Signals**\n\nSources:\n- https://example.com/source-a",
+    deep_dive: "Deep dive section body.",
+    dojo_checklist: ["One", "Two", "Three", "Four", "Five"],
+    promo_slot: "Subscribe.",
+    close: "Close line.",
+    sources: ["https://example.com/source-a"],
+    metadata: { model: "claude-test", thesis: "Stored thesis statement." },
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.stubEnv("WORKSPACE_ID", "ws-123");
   vi.clearAllMocks();
@@ -170,5 +185,96 @@ describe("POST /api/issues/generate", () => {
       "Editorial angle generation failed to produce valid JSON"
     );
     expect(mockCallLLM).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns 404 for insider generation when source draft content is invalid", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    mockSupabase._setResult("issue_drafts", {
+      data: { content_json: { title: "Invalid stored draft shape" } },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      sourceDraftId: "draft-1",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain("Draft not found or issue content is invalid for Insider generation.");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("uses URLs parsed from stored fresh_signals when source draft has no sources", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    mockSupabase._setResult("issue_drafts", {
+      data: {
+        content_json: makeStoredIssueDraft({
+          fresh_signals:
+            "**Fresh Signals**\n\nSources:\n- https://example.com/fallback-a\n- https://example.com/fallback-a\n- https://example.com/fallback-b",
+          sources: [],
+        }),
+      },
+      error: null,
+    });
+    mockSupabase._setResult("content_outlines", {
+      data: [],
+      error: null,
+    });
+    mockCallLLM.mockResolvedValueOnce({
+      text: "Insider access draft body with compliant prose.",
+      provider: "anthropic",
+      model: "claude-test",
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      sourceDraftId: "draft-1",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.sourceDraftId).toBe("draft-1");
+    expect(json.selectedThesis).toBe("Stored thesis statement.");
+    expect(mockCallLLM).toHaveBeenCalledTimes(1);
+
+    const insiderMessages = mockCallLLM.mock.calls[0][1] as Array<{ role: string; content: string }>;
+    const insiderUserPrompt = insiderMessages.find((m) => m.role === "user")?.content ?? "";
+    const allowedUrlsSection =
+      insiderUserPrompt.match(/Allowed citation URLs[\s\S]*?:\n([\s\S]*?)\n\nApproved leads/i)?.[1] ?? "";
+
+    expect(allowedUrlsSection).toContain("- https://example.com/fallback-a");
+    expect(allowedUrlsSection).toContain("- https://example.com/fallback-b");
+    expect((allowedUrlsSection.match(/https:\/\/example\.com\/fallback-a/g) ?? []).length).toBe(1);
   });
 });
