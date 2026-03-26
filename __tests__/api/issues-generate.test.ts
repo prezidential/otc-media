@@ -171,4 +171,78 @@ describe("POST /api/issues/generate", () => {
     );
     expect(mockCallLLM).toHaveBeenCalledTimes(3);
   });
+
+  it("returns 400 when newsletter outline is disabled", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-disabled",
+        kind: "newsletter_issue",
+        disabled_at: "2026-03-10T00:00:00Z",
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      contentOutlineId: "outline-disabled",
+      outputMode: "full_issue",
+    });
+
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toContain("outline is disabled");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when insider outline kind mismatches insider generation", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-newsletter",
+        kind: "newsletter_issue",
+        disabled_at: null,
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      insiderContentOutlineId: "outline-newsletter",
+      outputMode: "insider_access",
+    });
+
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toContain("kind does not match");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
 });
