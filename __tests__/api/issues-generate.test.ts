@@ -171,4 +171,44 @@ describe("POST /api/issues/generate", () => {
     );
     expect(mockCallLLM).toHaveBeenCalledTimes(3);
   });
+
+  it("rejects disabled newsletter outline ids before generation", async () => {
+    setCommonDbFixtures();
+    mockSupabase._setResult("content_outlines", {
+      data: { id: "outline-disabled", kind: "newsletter_issue", disabled_at: "2026-03-01T00:00:00Z" },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "full_issue",
+      contentOutlineId: "outline-disabled",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toBe("This outline is disabled. Choose an active outline or use the built-in default.");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("rejects insider outline ids whose kind does not match insider generation", async () => {
+    setCommonDbFixtures();
+    mockSupabase._setResult("content_outlines", {
+      data: { id: "outline-newsletter", kind: "newsletter_issue", disabled_at: null },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      insiderContentOutlineId: "outline-newsletter",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toBe("Outline kind does not match this operation.");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
 });
