@@ -171,4 +171,54 @@ describe("POST /api/issues/generate", () => {
     );
     expect(mockCallLLM).toHaveBeenCalledTimes(3);
   });
+
+  it("returns 400 when provided newsletter outline is disabled", async () => {
+    setCommonDbFixtures();
+    const chain = mockSupabase._setResult("content_outlines", { data: null, error: null });
+    chain.maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: "outline-disabled",
+        kind: "newsletter_issue",
+        disabled_at: "2026-03-01T00:00:00Z",
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      contentOutlineId: "outline-disabled",
+      outputMode: "full_issue",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toContain("disabled");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when insider outline kind does not match mode", async () => {
+    setCommonDbFixtures();
+    const chain = mockSupabase._setResult("content_outlines", { data: null, error: null });
+    chain.maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: "outline-wrong-kind",
+        kind: "newsletter_issue",
+        disabled_at: null,
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      insiderContentOutlineId: "outline-wrong-kind",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toContain("kind does not match");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
 });
