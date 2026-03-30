@@ -17,14 +17,14 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 - **AI:** Pluggable Anthropic/OpenAI via `lib/llm/provider.ts` (default: Claude Sonnet)
 - **Database:** Supabase (hosted PostgreSQL)
 - **UI:** Tailwind CSS v4, Lucide React, JetBrains Mono
-- **Testing:** Vitest (136+ tests)
+- **Testing:** Vitest
 
 ## Getting Started
 
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with the required tables (see `lib/supabase/schema-issue_drafts.sql`)
+- A Supabase project with the required tables (see `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -72,11 +72,12 @@ Open [http://localhost:3000](http://localhost:3000).
 1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
 2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
-4. **Ingest signals:** Go to Research → click "Run All Directives"
-5. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
-6. **Approve leads:** Review and approve leads on the Leads page
-7. **Generate draft:** Go to Issues → configure steering → click "Generate Issue Draft"
-8. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed` (inserts newsletter + Insider defaults only when no outline rows exist for the workspace)
+5. **Ingest signals:** Go to Research → click "Run All Directives"
+6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
+7. **Approve leads:** Review and approve leads on the Leads page
+8. **Generate draft:** Go to Issues → configure steering/output mode/outlines → click "Generate Issue Draft"
+9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
 ## Available Scripts
 
@@ -98,11 +99,13 @@ app/
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
 ├── issues/page.tsx      # Issue draft generation
+├── outlines/page.tsx    # Content outlines CRUD UI
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
+    ├── content-outlines/    # Outline list/create/get/update/disable/seed
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
@@ -112,6 +115,7 @@ app/
 
 lib/
 ├── draft/               # DraftObject type, renderer, lint, parser
+├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
 ├── research/            # RSS feed map (8 directives, 13+ sources)
@@ -124,7 +128,69 @@ docs/                    # System specification v1.1
 
 ## Architecture
 
-See [`docs/cornerstone-system-spec-v1.md`](docs/cornerstone-system-spec-v1.md) for the full system specification including design principles, architecture details, guardrails, and roadmap.
+See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Content Outlines Runbook
+
+`content_outlines` controls structure and prompt templates for issue generation.
+
+- **Brand profile** = voice and writing constraints.
+- **Content outline** = artifact structure and prompt template (`newsletter_issue` or `insider_access`).
+
+### Seed Defaults
+
+`POST /api/content-outlines/seed` inserts one default outline per kind only when the workspace has zero outline rows.
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-outlines/seed
+```
+
+If rows already exist, it returns `inserted: 0` and does not overwrite anything.
+
+### Manage Outlines API
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/content-outlines` | `GET` | List outlines (active only by default) |
+| `/api/content-outlines?includeDisabled=1` | `GET` | Include soft-disabled outlines |
+| `/api/content-outlines` | `POST` | Create outline from structured fields (no raw `spec_json` input) |
+| `/api/content-outlines/[id]` | `GET` | Fetch a single outline (including disabled) |
+| `/api/content-outlines/[id]` | `PATCH` | Update active outline (`kind` immutable) |
+| `/api/content-outlines/[id]` | `DELETE` | Soft-disable outline (`disabled_at` set, `is_default` cleared) |
+
+`POST` and `PATCH` return `{ outline, warnings }`. Warnings are non-blocking checks (for example missing placeholders like `{{PRIMARY_THESIS}}`).
+
+### Issues Generation + Outline Resolution
+
+`POST /api/issues/generate` supports:
+
+- `outputMode`: `full_issue` | `insider_access` | `bundle`
+- `contentOutlineId`: optional newsletter outline id (for `full_issue`/`bundle`)
+- `insiderContentOutlineId`: optional Insider outline id (for `insider_access`/`bundle`)
+- `sourceDraftId`: optional source issue draft id (for `insider_access` mode)
+
+Resolution behavior:
+
+- If outline id is provided, generation enforces: outline exists, is not disabled, and matches expected kind.
+- If no id is provided, generation resolves workspace default outline for that kind; if none exists, it falls back to built-in defaults from `lib/content-outlines/default-specs.ts`.
+
+### Output Mode Behavior
+
+| Mode | Result |
+|------|--------|
+| `full_issue` | Public issue draft only |
+| `insider_access` | Insider artifact only (from approved leads, or from `sourceDraftId` when provided) |
+| `bundle` | Public issue + Insider artifact in one generation run |
+
+### Troubleshooting
+
+- `400 brandProfileId required`: request body omitted `brandProfileId`.
+- `400 No approved leads available...`: approve leads before generating.
+- `404 Outline not found.`: provided outline id is invalid for this workspace.
+- `400 This outline is disabled...`: provided outline is soft-disabled.
+- `400 Outline kind does not match this operation.`: used Insider id where newsletter id is expected (or vice versa).
+- `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
+- Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
 
 ## Autonomous Pipeline Runbook
 
