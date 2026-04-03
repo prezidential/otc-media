@@ -122,6 +122,86 @@ afterEach(() => {
 });
 
 describe("POST /api/issues/generate", () => {
+  it("rejects disabled newsletter outline id before any LLM calls", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    const chain = mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-disabled",
+        kind: "newsletter_issue",
+        disabled_at: "2026-04-01T00:00:00Z",
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "full_issue",
+      contentOutlineId: "outline-disabled",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toBe(
+      "This outline is disabled. Choose an active outline or use the built-in default."
+    );
+    expect(chain.select).toHaveBeenCalledWith("id, kind, disabled_at");
+    expect(chain.eq).toHaveBeenCalledWith("workspace_id", "ws-123");
+    expect(chain.eq).toHaveBeenCalledWith("id", "outline-disabled");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("rejects insider outline id with kind mismatch before any LLM calls", async () => {
+    mockSupabase._setResult("brand_profiles", {
+      data: {
+        id: "bp-1",
+        name: "Identity Jedi",
+        voice_rules_json: {},
+        formatting_rules_json: {},
+        forbidden_patterns_json: [],
+        cta_rules_json: {},
+        emoji_policy_json: {},
+        narrative_preferences_json: {},
+      },
+      error: null,
+    });
+    const chain = mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-wrong-kind",
+        kind: "newsletter_issue",
+        disabled_at: null,
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      insiderContentOutlineId: "outline-wrong-kind",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toBe("Outline kind does not match this operation.");
+    expect(chain.select).toHaveBeenCalledWith("id, kind, disabled_at");
+    expect(chain.eq).toHaveBeenCalledWith("workspace_id", "ws-123");
+    expect(chain.eq).toHaveBeenCalledWith("id", "outline-wrong-kind");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
   it("parses fenced editorial-angle JSON and injects previous titles into prompt", async () => {
     setCommonDbFixtures();
     setCommonClaudeResponses(`\`\`\`json
