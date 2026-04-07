@@ -171,4 +171,70 @@ describe("POST /api/issues/generate", () => {
     );
     expect(mockCallLLM).toHaveBeenCalledTimes(3);
   });
+
+  it("rejects disabled newsletter outline ids before generation", async () => {
+    setCommonDbFixtures();
+    mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-disabled",
+        kind: "newsletter_issue",
+        disabled_at: "2026-04-01T00:00:00Z",
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      contentOutlineId: "outline-disabled",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toContain("outline is disabled");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("rejects newsletter outline ids with wrong kind before generation", async () => {
+    setCommonDbFixtures();
+    mockSupabase._setResult("content_outlines", {
+      data: {
+        id: "outline-insider",
+        kind: "insider_access",
+        disabled_at: null,
+      },
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      contentOutlineId: "outline-insider",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json.error).toBe("Outline kind does not match this operation.");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when insider outline id does not exist", async () => {
+    setCommonDbFixtures();
+    mockSupabase._setResult("content_outlines", {
+      data: null,
+      error: null,
+    });
+
+    const req = makeJsonRequest("http://localhost:3000/api/issues/generate", {
+      brandProfileId: "bp-1",
+      outputMode: "insider_access",
+      insiderContentOutlineId: "outline-missing",
+    });
+    const res = await POST(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(json.error).toBe("Outline not found.");
+    expect(mockCallLLM).not.toHaveBeenCalled();
+  });
 });
