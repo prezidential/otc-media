@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { callLLM } from "@/lib/llm/provider";
 import { DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject } from "@/lib/draft/content";
+import { opsLog } from "@/lib/ops/log";
 import {
   applyDashReplaceMap,
   lintDraft,
@@ -956,15 +957,11 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
         .in("id", usedLeadIds);
     } else {
       storeError = insertError.message;
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("[issue_drafts] insert failed:", insertError.message);
-      }
+      opsLog("issue_drafts.insert_failed", { brand_profile_id: brandProfileId, detail: insertError.message }, "warn");
     }
   } catch (e) {
     storeError = e instanceof Error ? e.message : String(e);
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[issue_drafts] insert threw:", e);
-    }
+    opsLog("issue_drafts.insert_threw", { brand_profile_id: brandProfileId, detail: storeError }, "error");
   }
 
   if (outputMode === "bundle") {

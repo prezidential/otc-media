@@ -113,8 +113,17 @@ Input:
 Output:
 - **Capability status endpoint** — `/api/publish/status` returns `{ beehiiv, export_html }` so the UI can conditionally show publish controls.
 - **HTML export** — `/api/publish/export-html` renders `content_json` into newsletter-ready inline-styled HTML via `renderDraftHtml()`. Also exposed by the "Export HTML" button on Issues page.
-- **Beehiiv integration** — `/api/publish/beehiiv` creates a draft post in Beehiiv via their API. It is enabled only when `BEEHIIV_ENABLED=true` and both `BEEHIIV_API_KEY` and `BEEHIIV_PUBLICATION_ID` are present. When enabled, a "Push to Beehiiv" button appears on the Issues page.
+- **Beehiiv integration** — `/api/publish/beehiiv` creates a draft post in Beehiiv via their API when `BEEHIIV_ENABLED=true` and keys/publication ID are present. Many accounts need enterprise access for API content creation; when disabled or misconfigured, the UI hides or surfaces errors from this route.
 - **Publish constraints** — publish endpoints require `draftId` and a saved `issue_drafts.content_json`; missing draft IDs return `400`, unknown IDs return `404`, and missing structured content returns `400`.
+
+**Phase 2 content products:**
+- `POST /api/content-products/social-snippets` — `{ draftId }` or `{ content_json }` → X / LinkedIn / Threads text
+- `POST /api/content-products/podcast-outline` — same inputs → JSON outline (segments + beats)
+- `POST /api/content-products/sponsorship-alignment` — `{ draftId }` or `{ content_json }` + active `revenue_items` → recommended offer + suggested mention
+
+**Operations:**
+- `GET /api/health` — env readiness (`supabase`, `workspace_id`, optional `anthropic_api_key` check) without exposing secrets
+- Structured `opsLog` events for draft persistence failures (`issue_drafts.insert_failed`, `insert_threw`)
 
 ---
 
@@ -148,7 +157,9 @@ Stretch:
 | Draft history | Implemented | `/api/issues/list` + UI history panel for loading previous drafts |
 | Test suite | Implemented | 143+ Vitest tests covering lib modules and API routes |
 | UI | Implemented | Dark theme, sidebar nav, section regen controls, draft history, approved leads tab, manual injection |
-| Publishing | Implemented | HTML export (always available) + Beehiiv API (feature-flagged with env-based capability checks) |
+| Publishing | Implemented | HTML export + Beehiiv API (env-gated); enterprise limits may block real use |
+| Phase 2 content products | Implemented | social-snippets, podcast-outline, sponsorship-alignment |
+| Health / ops logging | Implemented | `/api/health`, `opsLog` on draft insert failures |
 
 ---
 
