@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.3
+## System Specification v2.4
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v2.2 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.3 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -388,6 +388,71 @@ Standalone `insider_access` mode may still run from **approved leads only** (`ne
 
 ---
 
+## 3.11 Content products (Issues — Phase 2 panel) **[NEW in v2.4]**
+
+### Purpose
+
+**Content products** turn a persisted **newsletter draft** (`issue_drafts.content_json` / `DraftObject`) into derivative assets: social posts, podcast-oriented output, and sponsorship alignment copy. They are invoked from the **Issues** page (“Phase 2 — content products”) and use LLM generation over a **compact text summary** of the draft (see `lib/content-products/promptContext.ts`).
+
+Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server loads `content_json`) or an in-memory `content_json` override for the same shape.
+
+### Social snippets
+
+**Endpoint:** `POST /api/content-products/social-snippets`
+
+**Request body:** `{ draftId?: string, content_json?: object }` — one of the two must supply the draft; `draftId` requires a saved row in `issue_drafts` for the workspace.
+
+**Response (normative):** Structured JSON only — `{ ok: true, snippets: { x_post, linkedin_teaser, threads } }` (strings). The API does not change for presentation concerns.
+
+**Product requirement — UI:** The Issues UI **must not** show this payload as a raw JSON blob. It **must** render **formatted** panels per network (X, LinkedIn, Threads): readable typography, optional character counts against the limits enforced in the prompt (e.g. X ~260 characters, Threads ~500), and **copy-to-clipboard** per field (and optionally a single “copy all” as plain text). A developer-only or secondary “raw JSON” view is optional.
+
+**Voice:** Same Identity Jedi constraints as implemented in the route (direct, practitioner-respecting; no em dashes; avoid lazy contrast patterns).
+
+### Podcast and ElevenLabs audio pipeline
+
+**Current implementation:** `POST /api/content-products/podcast-outline` produces a **talking-point outline** JSON: `working_title`, `hook`, `segments[]` with `beats[]`, `outro_cta`. Prompt context today is **draft text only** (summary from `content_json`), without resolving citation URLs to rows in the **signals** store.
+
+**Target behavior (normative for Phase 2 content products):**
+
+1. **Grounding — signals behind the content:** Build a **Signal grounding** block for the model by collecting URLs from `content_json.sources` and from URLs embedded in `fresh_signals` (and any other draft fields that carry citations). Resolve matching rows in workspace **`signals`** (title, publisher, URL; optional excerpt if available). The model must treat unresolved URLs as generic references only (no invented publication names).
+
+2. **Script output (not beats-only):** The primary artifact becomes a **host-read script** suitable for **text-to-speech**: ordered `script_segments` (or equivalent) where each segment includes **full-sentence `narrator_text`**, not bullet beats. Optional metadata: `working_title`, `estimated_runtime_minutes`, `sources_acknowledged` (URLs or signal ids used explicitly in the script) for audit.
+
+3. **TTS safety:** Prompt and validation must avoid stage directions that would be spoken unless using an explicit convention (e.g. strip markers before TTS). Plain text must be safe for ElevenLabs (or successor) ingestion.
+
+4. **Route evolution:** The spec’s **contract** is the script + grounding behavior above. Implementation may introduce `POST /api/content-products/podcast-script` and deprecate `podcast-outline`, or evolve the existing route with a versioned response shape — migration details are left to implementation notes.
+
+5. **ElevenLabs handoff:** Cornerstone calls ElevenLabs **server-side** using `ELEVENLABS_API_KEY` and workspace- or brand-scoped **voice** / model configuration (env or future brand profile fields). **Human gate before spend:** audio generation is triggered only by an explicit user action (e.g. “Generate audio”) after script preview — not automatically on every draft save unless a future product flag explicitly enables that. Chunking and concatenation follow **current ElevenLabs TTS API** limits and best practices (exact chunk sizes are implementation details).
+
+6. **Persistence:** Store enough state to replay and audit: the **script JSON** and a reference to generated **audio** (URL, object storage path, or provider artifact id). Exact table or `metadata` extension is **TBD**; the requirement is durable script + audio linkage to the source `issue_drafts` row or workspace episode entity.
+
+```mermaid
+flowchart LR
+  subgraph inputs [Inputs]
+    Draft[issue_draft content_json]
+    SigResolve[URL to signals join]
+  end
+  subgraph gen [Generation]
+    LLM[LLM podcast script JSON]
+  end
+  subgraph out [Output]
+    UI[Issues UI preview]
+    EL[ElevenLabs TTS]
+    Store[Stored script plus audio ref]
+  end
+  Draft --> LLM
+  SigResolve --> LLM
+  LLM --> UI
+  UI -->|human approves| EL
+  EL --> Store
+```
+
+### Sponsorship alignment
+
+**Endpoint:** `POST /api/content-products/sponsorship-alignment` — aligns draft context with revenue / sponsorship slots (experimental; same draft loading pattern as other content products).
+
+---
+
 # 4. Brand Profile Schema
 _Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
@@ -462,8 +527,15 @@ Stretch:
 | QoL — draft comparison | Implemented | Side-by-side compare view |
 | Test suite | Implemented | 171+ tests |
 | UI | Implemented | Dark theme, sidebar nav, full feature access |
+| **Content products — Social snippets API** | **Implemented** | `POST /api/content-products/social-snippets`; returns structured `snippets` JSON |
+| **Content products — Social snippets UI** | **Partial** | Issues Phase 2 panel; **must** move from raw JSON display to formatted panels per §3.11 |
+| **Content products — Podcast outline API** | **Implemented** | `POST /api/content-products/podcast-outline`; outline JSON from draft summary only |
+| **Content products — Podcast script + signals + ElevenLabs** | **Not started** | Signal URL resolution, TTS-ready script JSON, ElevenLabs handoff, persistence — §3.11 |
+| **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
 
 **Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
+
+**Note (v2.4):** Phase 2 **content products** are specified in §3.11. Social API is done; **formatted Social UI** and **podcast script + signal grounding + ElevenLabs** are roadmap items aligned with §8 Phase 2B.
 
 ---
 
@@ -479,7 +551,9 @@ Stretch:
 - **Autonomy:** Research → Leads should run on a schedule or events; **human gate at lead approval** remains non-negotiable
 - **Remaining:** **pipeline status dashboard** (agent run history, failures, last trigger) — beyond the Research console “run pipeline” control
 
-## Phase 2 — Brand Profile Refactor + LinkedIn Foundation
+## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products
+
+### Phase 2A — Brand profile refactor + LinkedIn foundation
 - Deprecate `POST /api/brand-profiles/seed`
 - Implement generic `CreatorBrandProfile` schema
 - Build creator onboarding flow (Steps 1–5)
@@ -488,6 +562,12 @@ Stretch:
 - Add `linkedin_connections` and `linkedin_drafts` tables
 - Add LinkedIn-specific lint patterns
 - Migrate existing workspace through onboarding flow
+
+### Phase 2B — Content products (Issues)
+- **Social snippets — UI:** Render `snippets` as formatted X / LinkedIn / Threads panels with character guidance and copy actions; no raw JSON dump (see §3.11).
+- **Podcast — script + grounding:** Enrich prompt context with **Signal grounding** (resolve draft citation URLs to workspace `signals`); replace beats-only outline with **TTS-ready script segments** (`narrator_text` prose) per §3.11.
+- **ElevenLabs:** Server-side TTS using `ELEVENLABS_API_KEY` and configurable voice/model; **human-gated** “Generate audio” after script preview; chunk per provider limits; persist script + audio reference (storage TBD).
+- **API evolution:** Introduce or rename podcast route to match the script contract; deprecate outline-only shape as needed (migration left to implementation).
 
 ## Phase 3 — LinkedIn Draft Engine
 - Build LinkedIn generate / regenerate / list / publish endpoints
@@ -515,4 +595,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.3
+End of Specification v2.4

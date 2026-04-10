@@ -42,6 +42,38 @@ function safeJsonParse<T>(text: string): T | null {
   }
 }
 
+/** Phrases from a legacy prompt template; reinforced at generate time so DB outlines that still echo them are corrected. */
+const BANNED_STOCK_HOOK_PHRASES = [
+  "This week, something shifted.",
+  "Something just changed.",
+  "We just crossed a line.",
+  "Not in a hype-cycle way.",
+  "Not in a vendor-demo way.",
+] as const;
+
+function collectRecentHookFirstLines(rows: Array<{ content_json: unknown }> | null): string[] {
+  const out: string[] = [];
+  for (const row of rows ?? []) {
+    const json = row.content_json as Record<string, unknown> | null;
+    if (!json || !Array.isArray(json.hook_paragraphs) || json.hook_paragraphs.length < 1) continue;
+    const first = json.hook_paragraphs[0];
+    if (typeof first !== "string") continue;
+    const t = first.trim();
+    if (t.length > 0) out.push(t.length > 220 ? `${t.slice(0, 217)}…` : t);
+  }
+  return out;
+}
+
+function formatNewsletterAntiRepetitionSuffix(recentHookFirstLines: string[]): string {
+  const recent = recentHookFirstLines.slice(0, 8);
+  const bannedList = BANNED_STOCK_HOOK_PHRASES.join("\n  • ");
+  const recentBlock =
+    recent.length > 0
+      ? `\nRecent first lines from this workspace (do not imitate or near-duplicate):\n${recent.map((l) => `- ${l}`).join("\n")}\n`
+      : "";
+  return `\n\n---\nAnti-repetition (mandatory for Opening Hook):\n- Never use these exact phrases or obvious close variants:\n  • ${bannedList}${recentBlock}- First sentences must be specific to this thesis and lead cluster — avoid generic "shift / changed / crossed a line" unless the leads justify it.\n- Deliver the editorial angle Hook line's meaning in new wording; do not open by pasting that Hook line verbatim.\n`;
+}
+
 type CurationResult = {
   selectedIndices: number[];
   rationale: string;
@@ -335,7 +367,7 @@ Rules:
 - Do not summarize articles one by one.
 - Find the shared pattern and take a position.
 - Title max 7 words. No colon. No hype.
-- hook_line max 12 words.
+- hook_line max 12 words; must be specific to this lead cluster. Avoid stock openers: "something shifted", "just changed", "crossed a line", hype-vs-vendor contrast demos.
 - Use short sentences.
 - No dashes in sentences (no '-', '—', '–').
 - Avoid "This isn't", "isn't just", "The real problem isn't".
@@ -778,6 +810,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     const previousTitles = (recentDrafts ?? [])
       .map((d) => (d.content_json as Record<string, unknown>)?.title)
       .filter((t): t is string => typeof t === "string" && t.length > 0);
+    const recentHookFirstLines = collectRecentHookFirstLines(recentDrafts ?? []);
 
     const angle = await generateEditorialAngle({
       brandProfile,
@@ -792,13 +825,14 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
       contentOutlineId
     );
 
-    const userPrompt = fillTemplate(newsletterOutlineSpec.userPromptTemplate, {
-      PRIMARY_THESIS: selectedThesisForFull,
-      STEERING_BLOCK: formatSteeringBlock(steering),
-      ANGLE_BLOCK: formatAngleBlock(angle),
-      LEADS_BLOCK: leadsBlock,
-      PROMO_TEXT: promoText,
-    });
+    const userPrompt =
+      fillTemplate(newsletterOutlineSpec.userPromptTemplate, {
+        PRIMARY_THESIS: selectedThesisForFull,
+        STEERING_BLOCK: formatSteeringBlock(steering),
+        ANGLE_BLOCK: formatAngleBlock(angle),
+        LEADS_BLOCK: leadsBlock,
+        PROMO_TEXT: promoText,
+      }) + formatNewsletterAntiRepetitionSuffix(recentHookFirstLines);
 
     const systemPrompt = `You write in Identity Jedi (IDJ) voice.
 
@@ -814,6 +848,7 @@ Editorial Steering (behavior mapping). Change posture based on the steering valu
 - Not sound journalistic.
 - Not summarize news.
 - Use rhythm with short standalone lines.
+- Never use canned "something shifted / hype-cycle / vendor-demo" framing or parallel "Not …" demo lines unless truly earned by the leads.
 
 Deep Dive must:
 - Lead with thesis energy.
@@ -858,7 +893,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
     const draftResponse = await callLLM("drafting", [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
-    ], { max_tokens: 8192 });
+    ], { max_tokens: 8192, temperature: 0.82 });
     draftModelName = draftResponse.model;
     const stripped = draftResponse.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(stripped) as ClaudeSections;
