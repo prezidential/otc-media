@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.3
+## System Specification v2.4
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v2.2 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.3 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -26,6 +26,8 @@ It must:
 
 It is infrastructure, not a chatbot. It is a product, not a single-creator tool. It is a newsroom, not a prompt template.
 
+**Extension (designed, not yet built):** The **Research & Creation Studio** (§3.11) adds a Claude-style **conversational workspace** for ideation and stance formation. It still terminates in **structured artifacts** (a **Creative Brief** and downstream drafts), not raw chat as the system of record. Production from a brief uses **Studio Writer** and **Studio Editor** roles so **brand profiles**, **content outlines** (§3.10) where applicable, and **guardrails** (§5) stay aligned with the rest of the newsroom.
+
 ---
 
 # 2. Design Principles [REVISED]
@@ -42,6 +44,7 @@ It is infrastructure, not a chatbot. It is a product, not a single-creator tool.
 10. Workspace-scoped by default
 11. **Agents over endpoints** — each pipeline stage is an autonomous agent with tools, memory, and judgment — not a dumb prompt call
 12. **Human gates, not human labor** — humans approve, they don't operate
+13. **Crystallize before fabricate** — conversational exploration must **materialize** into a structured handoff (e.g. Creative Brief) before publish-facing generation; no chat-only drafts as source of truth
 
 ---
 
@@ -57,6 +60,8 @@ _Unchanged from v2.0._
 ### Overview
 
 Cornerstone OS operates as a **newsroom staffed by specialized agents**. Each agent has a defined role, a set of tools it can invoke, memory of its previous runs, and the ability to make autonomous decisions within its scope.
+
+The **Research & Creation Studio** (§3.11) introduces **separate** logical roles — **Conversation Agent (Studio)**, **Studio Writer**, **Studio Editor** — for user-led ideation and brief-driven content. They are **not** the same as the **Researcher**, **Writer**, or **Editor** pipeline agents defined in this section; §3.11.1 disambiguates names and orchestration.
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -388,6 +393,116 @@ Standalone `insider_access` mode may still run from **approved leads only** (`ne
 
 ---
 
+## 3.11 Research & Creation Studio **[NEW]**
+
+This section specifies a **future** capability: a **Claude-style** research and brainstorming surface where the user and a model discuss a topic, challenge assumptions, and converge on a **stance**. From that conversation, the user can request **brand- and outline-aligned content** (blog-style longform, LinkedIn posts, infographic **copy briefs**, newsletter slices, etc.). Generation after the handoff uses dedicated **Studio Writer** and **Studio Editor** roles (defined below) so outputs stay consistent with **per-creator brand profiles** (§4), **content outlines** where the artifact shape maps to an outline (§3.10), and **system guardrails** (§5).
+
+### 3.11.1 Naming: pipeline agents vs. Studio roles
+
+§3.1 already defines **Writer Agent** and **Editor Agent** as **autonomous newsroom pipeline** agents: Writer generates **editorial leads** from signals; Editor is **Editor-in-Chief** for **newsletter** drafting from **approved leads**. Those names and `agent_id`s must **not** be overloaded.
+
+| Name in this spec | What it is |
+|-------------------|------------|
+| **Researcher Agent** (§3.1) | Scheduled/event RSS and signal ingest — **not** the Studio chat facilitator. |
+| **Writer Agent** / **Editor Agent** (§3.1) | Leads pipeline and **issue** generation from signals/leads. |
+| **Conversation Agent (Studio)** | Facilitates open-ended dialogue, debate, and synthesis; **no** publish-bound output as sole source of truth. |
+| **Studio Writer** | Generates first-pass **content** from a **Creative Brief** + brand (+ outline/template when applicable). **Logical role** — may map to `LLM_DRAFTING` / dedicated prompts, not to the §3.1 Writer Agent. |
+| **Studio Editor** | Applies voice fidelity, lint, and structural fixes to Studio Writer output. **Logical role** — may map to `LLM_REVISION` / `LLM_LINT` and deterministic checks, not to the §3.1 Editor Agent unless implementation explicitly reuses tooling. |
+
+**Orchestration rule:** Any user-facing “create content from this chat” path is **Conversation (Studio) → (user confirms) Creative Brief → Studio Writer → Studio Editor → persisted artifact**. Skipping **Studio Editor** for publish-bound text is **out of spec** for v1 of this feature.
+
+### 3.11.2 Purpose and boundaries
+
+| Layer | Role |
+|--------|------|
+| **Conversation (Studio) workspace** | Open-ended dialogue: explore, debate, summarize, stress-test arguments. Outputs are **provisional** until the user explicitly **captures** a brief. |
+| **Production pipeline** | Takes a **Creative Brief** (+ workspace brand profile + optional steering + optional outline id). Produces drafts and derivative assets with the same **human approval** posture as issues and LinkedIn (when implemented). |
+
+The product is **not** “another chatbot that writes the newsletter.” Chat is the **front room**; the **back room** remains structured objects, validation, and gates.
+
+### 3.11.3 Creative Brief (handoff contract)
+
+When the user decides the thread has produced a usable stance, the system **materializes** a **Creative Brief** — a structured object (not raw chat logs). Minimum conceptual fields:
+
+- **Topic title** — short label for the session artifact.
+- **Thesis / stance** — one clear position the content will argue or explain.
+- **Audience** — maps to steering / audience level where defined.
+- **Key claims** — bullet list; order may inform outline.
+- **Counterarguments addressed** — optional.
+- **Tone and risk posture** — alignment with aggression, naming, `toneMode`-style controls where present.
+- **Target outputs** — one or more of: longform (blog-shaped markdown), LinkedIn, X/Threads, newsletter section, infographic **brief**, podcast outline, etc.
+- **Constraints** — must-include / must-avoid, length, compliance notes.
+- **Provenance** — session id, message range or checkpoint version; user-editable overrides before generation.
+
+The user may **edit the brief** before invoking Studio Writer. The **brief is the contract** for generation; chat remains for reference only.
+
+### 3.11.4 Studio Writer and Studio Editor (logical behavior)
+
+**Studio Writer**
+
+- **Input:** Creative Brief, brand profile JSON, target format template (and optional `contentOutlineId` or future blog/outline row when the artifact maps to §3.10-style structure), optional editorial steering (same *family* as issue steering: aggression, audience, focus, tone).
+- **Output:** First-pass body copy or structured JSON per product (e.g. `LinkedInDraftObject` when that channel exists, or markdown longform).
+- Reuses **voice and constraint instructions** from the brand profile; does not bypass citation or disclosure rules when those apply.
+
+**Studio Editor**
+
+- **Input:** Studio Writer output + brand profile + §5 guardrails (+ channel-specific lint when LinkedIn and others land).
+- **Behavior:** Enforces forbidden patterns, dash rules, voice fidelity, and structural completeness for the chosen format; may run **targeted rewrites** (analogous to §3.6 Revision Engine) scoped to the new artifact.
+- **Output:** Lint-clean, brand-consistent draft ready for **human review** — same gate philosophy as §3.1 Editor-produced issues.
+
+### 3.11.5 User journey (example)
+
+1. User opens a **Studio session** on e.g. new cybersecurity architecture (including topics **not** tied to RSS).
+2. User and **Conversation Agent (Studio)** discuss tradeoffs and converge on a stance.
+3. User clicks **Capture brief**; the system proposes a Creative Brief; user adjusts thesis and target outputs.
+4. User selects **Create: LinkedIn post** (and/or other formats).
+5. **Studio Writer** then **Studio Editor** run; artifact is persisted with provenance to `brief_version_id` / `source_session_id`.
+6. User reviews and exports or routes to existing publish / content-product flows.
+
+### 3.11.6 Mapping to existing and planned engines
+
+| Studio output | Primary reuse |
+|---------------|----------------|
+| Newsletter-shaped slice | Optional promotion into **leads** or issue workflow, or partial `DraftObject` generation — must persist structured state and respect §3.10 outline selection when used. |
+| LinkedIn | Align with **LinkedIn Draft Engine** (§3.8) and future snippet/product APIs; input = Creative Brief or resolved studio draft id. |
+| Longform blog / thought leadership | New template or outline `kind` in a future schema extension; same lint/render discipline as issues where applicable. |
+| Social snippets / podcast outline | Extend content-product style endpoints to accept `{ creativeBrief }` or studio draft reference (pattern similar to existing `draftId` / `content_json` inputs). |
+| Infographic | **Structured infographic brief** (headlines, stats, section titles, visual metaphors) + **design/export** handoff — not “one-shot” raster from the LLM. Studio Writer/Editor own **copy**; visual production is a separate step or later phase. |
+
+**Relationship to §3.3 Research Engine:** RSS and directives remain the **autonomous** research spine. The Studio adds **user-initiated** threads that can stand alone or **attach** selected signals in a later phase; the **Creative Brief** remains the handoff either way.
+
+**Relationship to §3.4 Leads:** A brief may **spawn** a proposed lead or bypass leads for standalone social/longform — product policy defines defaults; the spec requires **clear provenance** on the artifact.
+
+### 3.11.7 Persistence and UX (conceptual)
+
+- **Session:** id, title, timestamps, `workspace_id`.
+- **Messages:** ordered turns (`user` \| `assistant` \| optional `system`).
+- **Creative Brief:** versioned or immutable snapshot once generation is requested (reproducible reruns).
+- **Generated artifacts:** links to `issue_drafts`, `linkedin_drafts` (when present), or content-product outputs, with `source_session_id` / `brief_version_id`.
+
+**UI:** Conversation panel (Claude-like: one thread, clear **discussion** vs. **deliverables**) plus a **Brief** panel or modal for editing the structured handoff before “Create content.”
+
+### 3.11.8 Non-goals (initial delivery)
+
+- Replacing the **Leads** or **RSS** pipeline as the only path to a newsletter issue.
+- Fully automated infographic design without a defined asset pipeline or human sign-off.
+- Publishing without human approval (same as §6).
+- **Conversation Agent (Studio)** alone emitting publish-bound copy **without** Studio Writer, Studio Editor, and persistence.
+
+### 3.11.9 Phasing suggestion
+
+| Phase | Scope |
+|--------|--------|
+| **A** | Sessions + messages + Creative Brief capture/edit + Studio Writer → Studio Editor → persist one format (e.g. longform markdown or first LinkedIn-shaped artifact). |
+| **B** | Multiple formats; wire to content products + optional “promote to lead”; respect workspace outlines where applicable. |
+| **C** | Attach signals to sessions; infographic copy brief + design-tool export handoff. |
+
+### 3.11.10 Orchestrator note
+
+`POST /api/pipeline/run` (§3.1) remains the **Researcher → Writer → Editor** newsroom pipeline. The Studio is a **separate entry surface** (e.g. future `POST /api/studio/...` or UI-driven runs) so autonomous ingest is never conflated with conversational ideation.
+
+---
+
 # 4. Brand Profile Schema
 _Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
@@ -419,6 +534,7 @@ Stretch:
 13. LinkedIn Marketing API analytics pull
 14. Direct LinkedIn post publishing via API
 15. Scheduled pipeline automation (Vercel cron → Pipeline Orchestrator)
+16. **Research & Creation Studio** (§3.11) — sessions, Creative Brief, Studio Writer → Studio Editor, multi-format outputs
 
 ---
 
@@ -462,8 +578,9 @@ Stretch:
 | QoL — draft comparison | Implemented | Side-by-side compare view |
 | Test suite | Implemented | 171+ tests |
 | UI | Implemented | Dark theme, sidebar nav, full feature access |
+| **Research & Creation Studio** | **Not implemented** | Designed in §3.11; distinct from §3.1 Researcher/Writer/Editor pipeline agents |
 
-**Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
+**Note (spec vs code, v2.4):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
 
 ---
 
@@ -508,6 +625,12 @@ Stretch:
 - Semi-autonomous issue drafting with confidence scoring
 - Additional output channels (Twitter/X, Substack Notes)
 
+## Phase 6 — Research & Creation Studio **[NEW]**
+- Conversation Agent (Studio): Claude-style sessions, workspace-scoped
+- Creative Brief capture, versioning, and user edit before generation
+- Studio Writer → Studio Editor chain with brand profile + §3.10 outlines where applicable + §5 guardrails
+- Persisted artifacts with provenance (`source_session_id`, `brief_version_id`); integration with issue drafts, LinkedIn drafts, and content-product-style outputs per §3.11.9 phasing
+
 ---
 
 # 9. Migration Notes
@@ -515,4 +638,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.3
+End of Specification v2.4
