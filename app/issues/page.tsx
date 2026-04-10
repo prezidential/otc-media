@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2 } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -147,6 +147,12 @@ export default function IssuesPage() {
     }
   }
 
+  const [showContentProducts, setShowContentProducts] = useState(false);
+  const [productBusy, setProductBusy] = useState<string | null>(null);
+  const [snippetsOut, setSnippetsOut] = useState<string>("");
+  const [podcastOut, setPodcastOut] = useState<string>("");
+  const [sponsorOut, setSponsorOut] = useState<string>("");
+
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
     const text = await res.text();
@@ -182,6 +188,41 @@ export default function IssuesPage() {
       body: JSON.stringify({ id, status }),
     });
     await loadDraftHistory();
+  }
+
+  async function runContentProduct(kind: "snippets" | "podcast" | "sponsor") {
+    if (!draftId && !contentJson) return;
+    setProductBusy(kind);
+    setMessage(null);
+    try {
+      const body = draftId ? { draftId } : contentJson ? { content_json: contentJson } : {};
+      const path =
+        kind === "snippets"
+          ? "/api/content-products/social-snippets"
+          : kind === "podcast"
+            ? "/api/content-products/podcast-outline"
+            : "/api/content-products/sponsorship-alignment";
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMessage(data.error ?? `${path} failed`);
+        return;
+      }
+      if (kind === "snippets" && data.snippets) {
+        setSnippetsOut(JSON.stringify(data.snippets, null, 2));
+      } else if (kind === "podcast" && data.outline) {
+        setPodcastOut(JSON.stringify(data.outline, null, 2));
+      } else if (kind === "sponsor" && data.alignment) {
+        setSponsorOut(JSON.stringify(data.alignment, null, 2));
+      }
+      setMessage(`${kind === "snippets" ? "Social" : kind === "podcast" ? "Podcast" : "Sponsorship"} ready`);
+    } finally {
+      setProductBusy(null);
+    }
   }
 
   async function deleteDraft(id: string) {
@@ -496,6 +537,69 @@ export default function IssuesPage() {
           </label>
         </div>
       </div>
+
+      {(draftId || contentJson) && (
+        <div className="rounded-xl border border-border bg-card p-5 mb-4">
+          <button
+            type="button"
+            onClick={() => setShowContentProducts(!showContentProducts)}
+            className="flex w-full items-center justify-between text-left">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+              <Share2 className="h-3.5 w-3.5" />
+              Phase 2 — content products
+            </span>
+            {showContentProducts ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </button>
+          {showContentProducts && (
+            <div className="mt-4 space-y-4 pt-2 border-t border-border">
+              <p className="text-xs text-muted-foreground">
+                Uses the current draft ({draftId ? `id ${draftId.slice(0, 8)}…` : "in-memory JSON"}) plus Claude. Requires saved draft for server-side load unless content_json is present.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={!!productBusy || (!draftId && !contentJson)}
+                  onClick={() => runContentProduct("snippets")}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  {productBusy === "snippets" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Social snippets
+                </button>
+                <button
+                  type="button"
+                  disabled={!!productBusy || (!draftId && !contentJson)}
+                  onClick={() => runContentProduct("podcast")}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  {productBusy === "podcast" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Podcast outline
+                </button>
+                <button
+                  type="button"
+                  disabled={!!productBusy || (!draftId && !contentJson)}
+                  onClick={() => runContentProduct("sponsor")}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  {productBusy === "sponsor" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Sponsorship alignment
+                </button>
+              </div>
+              {snippetsOut && (
+                <div>
+                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Social</div>
+                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-48 overflow-auto">{snippetsOut}</pre>
+                </div>
+              )}
+              {podcastOut && (
+                <div>
+                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Podcast</div>
+                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-56 overflow-auto">{podcastOut}</pre>
+                </div>
+              )}
+              {sponsorOut && (
+                <div>
+                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Sponsorship</div>
+                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-40 overflow-auto">{sponsorOut}</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {curationInfo && (
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 mb-4">
