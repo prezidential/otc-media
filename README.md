@@ -10,6 +10,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
 | **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
+| **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
 ## Tech Stack
 
@@ -24,7 +25,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with the required tables (see `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`)
+- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; see `lib/supabase/` for additional schemas)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -82,11 +83,11 @@ Open [http://localhost:3000](http://localhost:3000).
 1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
 2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
-4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed` (inserts newsletter + Insider defaults only when no outline rows exist for the workspace)
+4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
 5. **Ingest signals:** Go to Research → click "Run All Directives"
 6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
 7. **Approve leads:** Review and approve leads on the Leads page
-8. **Generate draft:** Go to Issues → configure steering/output mode/outlines → click "Generate Issue Draft"
+8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
 9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
 ## Available Scripts
@@ -115,7 +116,7 @@ app/
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
-    ├── content-outlines/    # Outline list/create/get/update/disable/seed
+    ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
@@ -132,8 +133,8 @@ lib/
 ├── supabase/            # Server + browser clients
 └── utils.ts             # cn() utility
 
-__tests__/               # 136+ Vitest tests (unit + API route)
-docs/                    # System specification v1.1
+__tests__/               # Vitest tests (unit + API route)
+docs/                    # System specification (v2.3)
 ```
 
 ## Architecture
@@ -146,6 +147,7 @@ See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) f
 
 - **Brand profile** = voice and writing constraints.
 - **Content outline** = artifact structure and prompt template (`newsletter_issue` or `insider_access`).
+- Disabled outlines are soft-disabled (`disabled_at` set), excluded from default list responses, and cannot be used for generation.
 
 ### Seed Defaults
 
@@ -170,6 +172,22 @@ If rows already exist, it returns `inserted: 0` and does not overwrite anything.
 
 `POST` and `PATCH` return `{ outline, warnings }`. Warnings are non-blocking checks (for example missing placeholders like `{{PRIMARY_THESIS}}`).
 
+### Create Outline (example `curl`)
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-outlines \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"Default newsletter issue",
+    "kind":"newsletter_issue",
+    "is_default":true,
+    "userPromptTemplate":"... {{PRIMARY_THESIS}} ... {{STEERING_BLOCK}} ... {{ANGLE_BLOCK}} ... {{LEADS_BLOCK}} ... {{PROMO_TEXT}} ...",
+    "systemPromptSuffix":"..."
+  }'
+```
+
+For `kind: insider_access`, use `insiderSystemPrompt` instead of `systemPromptSuffix`.
+
 ### Issues Generation + Outline Resolution
 
 `POST /api/issues/generate` supports:
@@ -192,6 +210,11 @@ Resolution behavior:
 | `insider_access` | Insider artifact only (from approved leads, or from `sourceDraftId` when provided) |
 | `bundle` | Public issue + Insider artifact in one generation run |
 
+### Operational Notes
+
+- Issues page dropdowns load active outlines only (`GET /api/content-outlines`).
+- Use `/outlines` to create/edit/disable templates and inspect warnings for missing placeholders.
+
 ### Troubleshooting
 
 - `400 brandProfileId required`: request body omitted `brandProfileId`.
@@ -199,6 +222,7 @@ Resolution behavior:
 - `404 Outline not found.`: provided outline id is invalid for this workspace.
 - `400 This outline is disabled...`: provided outline is soft-disabled.
 - `400 Outline kind does not match this operation.`: used Insider id where newsletter id is expected (or vice versa).
+- `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
 

@@ -63,6 +63,7 @@ describe("loadDraftContentJson", () => {
       ok: true,
       draftId: "draft-1",
       contentJson: { title: "Issue A" },
+      brand_profile_id: null,
     });
     expect(chain.eq).toHaveBeenCalledWith("id", "draft-1");
     expect(chain.eq).toHaveBeenCalledWith("workspace_id", "ws-123");
