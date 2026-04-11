@@ -96,15 +96,23 @@ Use 4-6 segments. Each segment 2-4 beats. Beats are short phrases the host can r
           }))
       : [];
 
-    return NextResponse.json({
-      ok: true,
-      outline: {
-        working_title: typeof parsed.working_title === "string" ? parsed.working_title : "",
-        hook: typeof parsed.hook === "string" ? parsed.hook : "",
-        segments,
-        outro_cta: typeof parsed.outro_cta === "string" ? parsed.outro_cta : "",
+    return NextResponse.json(
+      {
+        ok: true,
+        outline: {
+          working_title: typeof parsed.working_title === "string" ? parsed.working_title : "",
+          hook: typeof parsed.hook === "string" ? parsed.hook : "",
+          segments,
+          outro_cta: typeof parsed.outro_cta === "string" ? parsed.outro_cta : "",
+        },
       },
-    });
+      {
+        headers: {
+          Deprecation: 'true',
+          Link: '</api/content-products/podcast-script>; rel="successor-version"',
+        },
+      }
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

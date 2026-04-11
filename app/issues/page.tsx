@@ -169,11 +169,15 @@ export default function IssuesPage() {
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
     const text = await res.text();
-    let data: { brandProfiles?: BrandProfile[] } = {};
+    let data: { brandProfiles?: BrandProfile[]; defaultBrandProfileId?: string | null } = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
     const list = data.brandProfiles ?? [];
     setBrandProfiles(list);
-    if (list.length > 0 && !selectedBrandProfileId) setSelectedBrandProfileId(list[0].id);
+    if (list.length > 0 && !selectedBrandProfileId) {
+      const def = data.defaultBrandProfileId;
+      const pick = def && list.some((p) => p.id === def) ? def : list[0].id;
+      setSelectedBrandProfileId(pick);
+    }
   }
 
   async function loadDraftHistory() {
@@ -214,6 +218,9 @@ export default function IssuesPage() {
         body.podcastEnergy = podcastEnergy;
         const hint = podcastCustomDirection.trim();
         if (hint) body.customDirection = hint;
+      }
+      if (kind === "snippets" && selectedBrandProfileId.trim()) {
+        body.brandProfileId = selectedBrandProfileId;
       }
       const path =
         kind === "snippets"
