@@ -34,6 +34,18 @@ type EditorialAngle = {
   dojo_checklist: string[]; // exactly 5 bullets (plain text)
 };
 
+/** Matches `brand_profiles` columns selected in POST below. */
+type BrandProfileForGenerate = {
+  id: string;
+  name: string;
+  voice_rules_json: unknown;
+  formatting_rules_json: unknown;
+  forbidden_patterns_json: unknown;
+  cta_rules_json: unknown;
+  emoji_policy_json: unknown;
+  narrative_preferences_json: unknown;
+};
+
 function safeJsonParse<T>(text: string): T | null {
   try {
     return JSON.parse(text) as T;
@@ -347,7 +359,7 @@ ${leadsBlock}`;
 }
 
 async function generateEditorialAngle(params: {
-  brandProfile: any;
+  brandProfile: BrandProfileForGenerate;
   leadsWithSources: Array<{ angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; sources: string[] }>;
   previousTitles?: string[];
 }): Promise<EditorialAngle> {
@@ -663,7 +675,6 @@ export async function POST(req: Request) {
 
   const curation = await curateLeads(allLeadsWithSources, steering, maxLeads);
   const curatedLeads = curation.selectedIndices.map((i) => allLeadsWithSources[i]).filter(Boolean);
-  const approvedLeads = curatedLeads.map((l) => ({ id: l.id, angle: l.angle, why_now: l.why_now, who_it_impacts: l.who_it_impacts, contrarian_take: l.contrarian_take, sources: l.sources }));
 
   const leadsWithSources = curatedLeads.map((l) => ({
     angle: l.angle,

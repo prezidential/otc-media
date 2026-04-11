@@ -7,7 +7,7 @@ import {
   rewriteLintViolations,
   type LintViolation,
 } from "@/lib/draft/lint";
-import { createDraftContent, renderDraftMarkdown, validateDraftObject, type DraftObject, type DraftContentJson } from "@/lib/draft/content";
+import { renderDraftMarkdown, validateDraftObject, type DraftContentJson } from "@/lib/draft/content";
 import {
   getSectionBlocks,
   parseDraftToStructured,
@@ -33,11 +33,7 @@ function getSectionBodyFromContent(content: string, section: RegeneratableSectio
   return block.slice(firstNewline + 1).trim();
 }
 
-function buildSectionOutput(
-  section: RegeneratableSection,
-  newBody: string,
-  json: DraftContentJson
-): Partial<DraftContentJson> {
+function buildSectionOutput(section: RegeneratableSection, newBody: string): Partial<DraftContentJson> {
   if (section === "title") return { title: newBody.trim().split("\n")[0] ?? "" };
   if (section === "hook") {
     const paragraphs = newBody.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
@@ -259,7 +255,7 @@ Return ONLY the new section body. Do not include the section number or title (e.
     );
   }
 
-  const sectionPatch = buildSectionOutput(section, newBody, contentJson);
+  const sectionPatch = buildSectionOutput(section, newBody);
   const updatedJson: DraftContentJson = { ...contentJson, ...sectionPatch };
 
   validateDraftObject(updatedJson);

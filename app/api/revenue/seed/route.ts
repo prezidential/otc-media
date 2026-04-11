@@ -38,19 +38,19 @@ export async function POST() {
   if (existing && existing.length > 0) return NextResponse.json({ inserted: 0 });
 
   const rows = DEFAULT_ITEMS.map((item) => {
-    const row: any = {
+    const row: Record<string, unknown> = {
       workspace_id: workspaceId,
       type: item.type,
       title: item.title,
       priority_score: item.priority_score,
       active: item.active,
     };
-  
+
     if (item.description !== undefined) row.description = item.description;
     if (item.link !== undefined) row.link = item.link;
     if (item.start_date !== undefined) row.start_date = item.start_date;
     if (item.end_date !== undefined) row.end_date = item.end_date;
-  
+
     return row;
   });
 

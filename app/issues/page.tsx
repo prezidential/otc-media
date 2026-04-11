@@ -441,7 +441,15 @@ export default function IssuesPage() {
       p.values.focusArea === currentSteering.focusArea && p.values.toneMode === currentSteering.toneMode && p.values.leadLimit === currentSteering.leadLimit
   );
 
-  useEffect(() => { loadBrandProfiles(); loadLatestDraft(); loadDraftHistory(); loadPublishStatus(); loadContentOutlines(); }, []);
+  useEffect(() => {
+    void loadBrandProfiles();
+    void loadLatestDraft();
+    void loadDraftHistory();
+    void loadPublishStatus();
+    void loadContentOutlines();
+    // Intentional mount-only load; loaders close over latest setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
 

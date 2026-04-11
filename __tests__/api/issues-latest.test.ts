@@ -24,7 +24,7 @@ describe("GET /api/issues/latest", () => {
 
   it("returns 404 when no draft exists", async () => {
     vi.stubEnv("WORKSPACE_ID", "ws-123");
-    const chain = mockSupabase._setResult("issue_drafts", { data: null, error: null });
+    mockSupabase._setResult("issue_drafts", { data: null, error: null });
 
     const res = await GET();
     expect(res.status).toBe(404);

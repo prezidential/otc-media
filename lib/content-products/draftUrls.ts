@@ -8,7 +8,7 @@ export function normalizeUrlForMatch(url: string): string {
   try {
     const u = new URL(url.trim());
     u.hash = "";
-    let path = u.pathname.replace(/\/+$/, "") || "";
+    const path = u.pathname.replace(/\/+$/, "") || "";
     return `${u.origin}${path}${u.search}`.toLowerCase();
   } catch {
     return url.trim().toLowerCase().replace(/\/+$/, "");

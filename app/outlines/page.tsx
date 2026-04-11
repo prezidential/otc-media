@@ -121,16 +121,15 @@ export default function OutlinesPage() {
     }
   }, [outlines, selection]);
 
-  const hintKeys = form ? placeholderKeys(form.kind) : [];
-
   const placeholderStatus = useMemo(() => {
     if (!form) return [];
+    const hintKeys = placeholderKeys(form.kind);
     const t = form.userPromptTemplate;
     return hintKeys.map((key) => ({
       key,
       ok: t.includes(`{{${key}}}`),
     }));
-  }, [form, hintKeys]);
+  }, [form]);
 
   function openNew() {
     setSelection("new");

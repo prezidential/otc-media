@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeJsonRequest } from "./helpers";
 
-let fetchCallCount = 0;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  fetchCallCount = 0;
   vi.clearAllMocks();
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createMockSupabase, makeRequest, makeJsonRequest } from "./helpers";
+import { createMockSupabase } from "./helpers";
 
 const mockSupabase = createMockSupabase();
 vi.mock("@/lib/supabase/server", () => ({

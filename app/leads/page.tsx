@@ -115,6 +115,7 @@ export default function LeadsPage() {
     void loadBrandProfiles();
     void loadLeads();
     void loadApprovedLeadCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
   const confidenceColor = (score: number) =>
