@@ -2,9 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2 } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2, Download } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
+import type { PodcastScript } from "@/lib/content-products/podcastScriptTypes";
+import { PODCAST_DELIVERY, PODCAST_ENERGY, type PodcastDelivery, type PodcastEnergy } from "@/lib/content-products/podcastScriptOptions";
+
+type SocialSnippets = { x_post: string; linkedin_teaser: string; threads: string };
+
+const SNIPPET_LIMITS = { x_hard: 280, x_target: 260, threads: 500 } as const;
 
 type BrandProfile = { id: string; name: string; created_at: string };
 type ContentOutline = { id: string; name: string; kind: string; is_default: boolean; created_at: string };
@@ -149,8 +155,15 @@ export default function IssuesPage() {
 
   const [showContentProducts, setShowContentProducts] = useState(false);
   const [productBusy, setProductBusy] = useState<string | null>(null);
-  const [snippetsOut, setSnippetsOut] = useState<string>("");
-  const [podcastOut, setPodcastOut] = useState<string>("");
+  const [snippetsData, setSnippetsData] = useState<SocialSnippets | null>(null);
+  const [showRawSnippets, setShowRawSnippets] = useState(false);
+  const [copiedSnippetKey, setCopiedSnippetKey] = useState<string | null>(null);
+  const [podcastScript, setPodcastScript] = useState<PodcastScript | null>(null);
+  const [podcastGrounding, setPodcastGrounding] = useState<{ resolvedCount: number; unmatchedCount: number } | null>(null);
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [podcastDelivery, setPodcastDelivery] = useState<PodcastDelivery>("conversational");
+  const [podcastEnergy, setPodcastEnergy] = useState<PodcastEnergy>("medium");
+  const [podcastCustomDirection, setPodcastCustomDirection] = useState("");
   const [sponsorOut, setSponsorOut] = useState<string>("");
 
   async function loadBrandProfiles() {
@@ -195,12 +208,18 @@ export default function IssuesPage() {
     setProductBusy(kind);
     setMessage(null);
     try {
-      const body = draftId ? { draftId } : contentJson ? { content_json: contentJson } : {};
+      const body: Record<string, unknown> = draftId ? { draftId } : contentJson ? { content_json: contentJson } : {};
+      if (kind === "podcast") {
+        body.podcastDelivery = podcastDelivery;
+        body.podcastEnergy = podcastEnergy;
+        const hint = podcastCustomDirection.trim();
+        if (hint) body.customDirection = hint;
+      }
       const path =
         kind === "snippets"
           ? "/api/content-products/social-snippets"
           : kind === "podcast"
-            ? "/api/content-products/podcast-outline"
+            ? "/api/content-products/podcast-script"
             : "/api/content-products/sponsorship-alignment";
       const res = await fetch(path, {
         method: "POST",
@@ -213,16 +232,109 @@ export default function IssuesPage() {
         return;
       }
       if (kind === "snippets" && data.snippets) {
-        setSnippetsOut(JSON.stringify(data.snippets, null, 2));
-      } else if (kind === "podcast" && data.outline) {
-        setPodcastOut(JSON.stringify(data.outline, null, 2));
+        setSnippetsData({
+          x_post: typeof data.snippets.x_post === "string" ? data.snippets.x_post : "",
+          linkedin_teaser: typeof data.snippets.linkedin_teaser === "string" ? data.snippets.linkedin_teaser : "",
+          threads: typeof data.snippets.threads === "string" ? data.snippets.threads : "",
+        });
+        setCopiedSnippetKey(null);
+      } else if (kind === "podcast" && data.script) {
+        setPodcastScript(data.script as PodcastScript);
+        setPodcastGrounding(
+          data.grounding && typeof data.grounding === "object"
+            ? {
+                resolvedCount: Number(data.grounding.resolvedCount) || 0,
+                unmatchedCount: Number(data.grounding.unmatchedCount) || 0,
+              }
+            : null
+        );
       } else if (kind === "sponsor" && data.alignment) {
         setSponsorOut(JSON.stringify(data.alignment, null, 2));
       }
-      setMessage(`${kind === "snippets" ? "Social" : kind === "podcast" ? "Podcast" : "Sponsorship"} ready`);
+      setMessage(`${kind === "snippets" ? "Social" : kind === "podcast" ? "Podcast script" : "Sponsorship"} ready`);
     } finally {
       setProductBusy(null);
     }
+  }
+
+  async function copySnippetToClipboard(label: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSnippetKey(label);
+      setTimeout(() => setCopiedSnippetKey((k) => (k === label ? null : k)), 2000);
+    } catch {
+      setMessage("Copy failed");
+    }
+  }
+
+  function copyAllSnippets() {
+    if (!snippetsData) return;
+    const block = [
+      `X\n${snippetsData.x_post}`,
+      `LinkedIn\n${snippetsData.linkedin_teaser}`,
+      `Threads\n${snippetsData.threads}`,
+    ].join("\n\n---\n\n");
+    void copySnippetToClipboard("all", block);
+  }
+
+  async function downloadPodcastMp3() {
+    if (!podcastScript) return;
+    setTtsBusy(true);
+    setMessage(null);
+    try {
+      const body: Record<string, unknown> = { script: podcastScript };
+      if (draftId) {
+        body.persist = true;
+        body.draftId = draftId;
+        if (podcastGrounding) body.grounding = podcastGrounding;
+      }
+      const res = await fetch("/api/content-products/podcast-tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setMessage(j.error ?? "ElevenLabs TTS failed");
+        return;
+      }
+      const persistStatus = res.headers.get("X-Podcast-Persist-Status");
+      const episodeId = res.headers.get("X-Podcast-Episode-Id");
+      const persistErr = res.headers.get("X-Podcast-Persist-Error");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safe = podcastScript.working_title.replace(/[^\w\s-]+/g, "").trim().slice(0, 48) || "episode";
+      a.download = `${safe.replace(/\s+/g, "-")}.mp3`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (persistStatus === "ok" && episodeId) {
+        setMessage(`MP3 downloaded · saved to library (${episodeId.slice(0, 8)}…)`);
+      } else if (persistStatus === "failed") {
+        setMessage(`MP3 downloaded · library save failed: ${persistErr ?? "unknown"}`);
+      }
+    } finally {
+      setTtsBusy(false);
+    }
+  }
+
+  function updatePodcastWorkingTitle(value: string) {
+    setPodcastScript((prev) => (prev ? { ...prev, working_title: value } : prev));
+  }
+
+  function updatePodcastSegment(id: string, patch: { narrator_text?: string; title?: string }) {
+    setPodcastScript((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        script_segments: prev.script_segments.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+      };
+    });
+  }
+
+  function updatePodcastOutro(value: string) {
+    setPodcastScript((prev) => (prev ? { ...prev, outro_cta: value } : prev));
   }
 
   async function deleteDraft(id: string) {
@@ -555,6 +667,50 @@ export default function IssuesPage() {
               <p className="text-xs text-muted-foreground">
                 Uses the current draft ({draftId ? `id ${draftId.slice(0, 8)}…` : "in-memory JSON"}) plus Claude. Requires saved draft for server-side load unless content_json is present.
               </p>
+              <div className="rounded-lg border border-border bg-muted/25 p-3 space-y-2">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Podcast script — delivery</div>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Tuned for a single TTS voice that should sound like a host, not a narrator reading a doc. Style applies when you click <span className="font-medium text-foreground">Podcast script</span>.
+                </p>
+                <div className="flex flex-wrap gap-3 items-end">
+                  <label className="flex flex-col gap-1 text-[11px]">
+                    <span className="text-muted-foreground font-mono uppercase tracking-wider">Style</span>
+                    <select
+                      value={podcastDelivery}
+                      onChange={(e) => setPodcastDelivery(e.target.value as PodcastDelivery)}
+                      className={selectClass + " py-1.5 text-xs min-w-[160px]"}>
+                      {PODCAST_DELIVERY.map((d) => (
+                        <option key={d} value={d}>
+                          {d === "conversational" ? "Conversational (Notebook-like)" : d === "deep_dive" ? "Deep dive" : "Narrative arc"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px]">
+                    <span className="text-muted-foreground font-mono uppercase tracking-wider">Energy</span>
+                    <select
+                      value={podcastEnergy}
+                      onChange={(e) => setPodcastEnergy(e.target.value as PodcastEnergy)}
+                      className={selectClass + " py-1.5 text-xs min-w-[120px]"}>
+                      {PODCAST_ENERGY.map((e) => (
+                        <option key={e} value={e}>
+                          {e === "relaxed" ? "Relaxed" : e === "medium" ? "Medium" : "High"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="block text-[11px]">
+                  <span className="text-muted-foreground font-mono uppercase tracking-wider block mb-1">Extra direction (optional)</span>
+                  <textarea
+                    value={podcastCustomDirection}
+                    onChange={(e) => setPodcastCustomDirection(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. More humor · tighter on vendor names · assume CISO listener"
+                    className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[52px]"
+                  />
+                </label>
+              </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -568,7 +724,7 @@ export default function IssuesPage() {
                   disabled={!!productBusy || (!draftId && !contentJson)}
                   onClick={() => runContentProduct("podcast")}
                   className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
-                  {productBusy === "podcast" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Podcast outline
+                  {productBusy === "podcast" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Podcast script
                 </button>
                 <button
                   type="button"
@@ -578,16 +734,146 @@ export default function IssuesPage() {
                   {productBusy === "sponsor" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Sponsorship alignment
                 </button>
               </div>
-              {snippetsOut && (
-                <div>
-                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Social</div>
-                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-48 overflow-auto">{snippetsOut}</pre>
+              {snippetsData && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[10px] font-mono uppercase text-muted-foreground">Social snippets</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => copyAllSnippets()}
+                        className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium hover:bg-accent">
+                        {copiedSnippetKey === "all" ? <CheckCheck className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                        Copy all
+                      </button>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+                        <input type="checkbox" checked={showRawSnippets} onChange={(e) => setShowRawSnippets(e.target.checked)} className="rounded border-border" />
+                        Raw JSON
+                      </label>
+                    </div>
+                  </div>
+                  {showRawSnippets && (
+                    <pre className="text-[11px] whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 max-h-40 overflow-auto font-mono">
+                      {JSON.stringify(snippetsData, null, 2)}
+                    </pre>
+                  )}
+                  <div className="grid gap-3 md:grid-cols-1 lg:grid-cols-3">
+                    {(
+                      [
+                        { key: "x", label: "X", sub: `Target ~${SNIPPET_LIMITS.x_target} chars`, text: snippetsData.x_post, limit: SNIPPET_LIMITS.x_hard },
+                        { key: "linkedin", label: "LinkedIn", sub: "2–4 short lines", text: snippetsData.linkedin_teaser, limit: null },
+                        { key: "threads", label: "Threads", sub: `≤ ${SNIPPET_LIMITS.threads} chars`, text: snippetsData.threads, limit: SNIPPET_LIMITS.threads },
+                      ] as const
+                    ).map((row) => {
+                      const n = row.text.length;
+                      const warn = row.limit != null && n > row.limit;
+                      const softWarn = row.key === "x" && n > SNIPPET_LIMITS.x_target && n <= SNIPPET_LIMITS.x_hard;
+                      return (
+                        <div key={row.key} className="rounded-lg border border-border bg-background p-3 flex flex-col min-h-[120px]">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div>
+                              <div className="text-sm font-semibold text-foreground">{row.label}</div>
+                              <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">{row.sub}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void copySnippetToClipboard(row.key, row.text)}
+                              className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-accent"
+                              aria-label={`Copy ${row.label}`}>
+                              {copiedSnippetKey === row.key ? <CheckCheck className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                          {row.limit != null && (
+                            <div className={cn("text-[10px] font-mono mb-1", warn ? "text-danger" : softWarn ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
+                              {n} / {row.limit}
+                              {row.key === "x" && ` (target ${SNIPPET_LIMITS.x_target})`}
+                            </div>
+                          )}
+                          <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed flex-1">{row.text || "—"}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
-              {podcastOut && (
-                <div>
-                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Podcast</div>
-                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-56 overflow-auto">{podcastOut}</pre>
+              {podcastScript && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="text-[10px] font-mono uppercase text-muted-foreground">Podcast script</div>
+                      <label className="block">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Episode title (spoken label / files)</span>
+                        <input
+                          type="text"
+                          value={podcastScript.working_title}
+                          onChange={(e) => updatePodcastWorkingTitle(e.target.value)}
+                          className="w-full max-w-xl rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                        />
+                      </label>
+                      {typeof podcastScript.estimated_runtime_minutes === "number" && (
+                        <p className="text-xs text-muted-foreground">~{podcastScript.estimated_runtime_minutes} min spoken (estimate — unchanged if you edit length)</p>
+                      )}
+                      {podcastGrounding && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Signals resolved: {podcastGrounding.resolvedCount}, unmatched URLs: {podcastGrounding.unmatchedCount}
+                        </p>
+                      )}
+                      <p className="text-[11px] text-muted-foreground leading-snug">
+                        Edit any segment below before <span className="font-medium text-foreground">Download MP3</span> — your changes are what gets sent to ElevenLabs (no extra script API call). Click <span className="font-medium text-foreground">Podcast script</span> again to regenerate from the draft.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={ttsBusy}
+                      onClick={() => void downloadPodcastMp3()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 shrink-0">
+                      {ttsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                      Download MP3 (ElevenLabs)
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Requires <span className="font-mono">ELEVENLABS_API_KEY</span> and <span className="font-mono">ELEVENLABS_VOICE_ID</span>. With a saved draft and{" "}
+                    <span className="font-mono">PODCAST_AUDIO_STORAGE_BUCKET</span>, download also writes <span className="font-mono">podcast_episodes</span> + Storage.
+                  </p>
+                  <ul className="space-y-3 max-h-[min(70vh,520px)] overflow-auto pr-1">
+                    {podcastScript.script_segments.map((seg) => (
+                      <li key={seg.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground shrink-0">Segment</span>
+                          <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded">{seg.id}</code>
+                        </div>
+                        <label className="block">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Section label (optional)</span>
+                          <input
+                            type="text"
+                            value={seg.title ?? ""}
+                            onChange={(e) => updatePodcastSegment(seg.id, { title: e.target.value })}
+                            placeholder={seg.id}
+                            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Script (read aloud)</span>
+                          <textarea
+                            value={seg.narrator_text}
+                            onChange={(e) => updatePodcastSegment(seg.id, { narrator_text: e.target.value })}
+                            rows={8}
+                            className="w-full min-h-[160px] rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground leading-relaxed whitespace-pre-wrap outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y font-sans"
+                          />
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
+                    <div className="text-[10px] font-mono uppercase text-muted-foreground">Outro / CTA</div>
+                    <textarea
+                      value={podcastScript.outro_cta ?? ""}
+                      onChange={(e) => updatePodcastOutro(e.target.value)}
+                      rows={3}
+                      placeholder="Subscribe, next episode tease…"
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[72px]"
+                    />
+                  </div>
                 </div>
               )}
               {sponsorOut && (

@@ -50,11 +50,21 @@ LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
 BEEHIIV_ENABLED=false
 BEEHIIV_API_KEY=your-beehiiv-api-key
 BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
+
+# Optional — Issues → Phase 2 → Podcast script → Download MP3 (ElevenLabs)
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+# ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+
+# Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
+PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
 ```
 
 Notes:
 
 - Beehiiv variables are optional unless you plan to push drafts directly to Beehiiv.
+- ElevenLabs variables are optional; without them, **Download MP3** on the Issues content-products panel returns a configuration error.
+- **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
 
