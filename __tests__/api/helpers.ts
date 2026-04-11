@@ -4,6 +4,7 @@ export type MockSupabaseChain = {
   select: ReturnType<typeof vi.fn>;
   insert: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
   gte: ReturnType<typeof vi.fn>;
@@ -18,7 +19,7 @@ export function createMockSupabaseChain(
   finalResult: { data: unknown; error: unknown } = { data: null, error: null }
 ): MockSupabaseChain {
   const chain: MockSupabaseChain = {} as MockSupabaseChain;
-  const methods = ["select", "insert", "update", "eq", "is", "gte", "in", "order", "limit"] as const;
+  const methods = ["select", "insert", "update", "upsert", "eq", "is", "gte", "in", "order", "limit"] as const;
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain);
   }

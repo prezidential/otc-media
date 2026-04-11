@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { fullNarrationText, type PodcastScript } from "@/lib/content-products/podcastScriptTypes";
 import { persistPodcastEpisodeAfterTts } from "@/lib/content-products/persistPodcastEpisode";
+import { resolveElevenLabsFromDraftBrand } from "@/lib/content-products/resolveElevenLabsVoice";
 import { supabaseAdmin } from "@/lib/supabase/server";
 
 const ELEVEN_BASE = "https://api.elevenlabs.io/v1";
@@ -155,7 +156,7 @@ export async function POST(req: Request) {
   const storageBucket = process.env.PODCAST_AUDIO_STORAGE_BUCKET?.trim();
   const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
   const defaultVoice = process.env.ELEVENLABS_VOICE_ID?.trim();
-  const modelId = process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_turbo_v2_5";
+  const defaultModelId = process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_turbo_v2_5";
 
   if (!apiKey) {
     return NextResponse.json(
@@ -165,10 +166,27 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const voiceId = (typeof body.voiceId === "string" ? body.voiceId : defaultVoice)?.trim();
+  const draftIdForVoice = typeof body.draftId === "string" ? body.draftId.trim() : "";
+
+  let voiceId = typeof body.voiceId === "string" ? body.voiceId.trim() : "";
+  let modelId =
+    typeof body.modelId === "string" && body.modelId.trim() ? body.modelId.trim() : defaultModelId;
+
+  if (!voiceId && workspaceId && draftIdForVoice) {
+    const supabase = supabaseAdmin();
+    const fromBrand = await resolveElevenLabsFromDraftBrand(supabase, workspaceId, draftIdForVoice);
+    if (fromBrand.voiceId) voiceId = fromBrand.voiceId;
+    if (fromBrand.modelId && !body.modelId) modelId = fromBrand.modelId;
+  }
+
+  voiceId = voiceId || defaultVoice || "";
   if (!voiceId) {
     return NextResponse.json(
-      { ok: false, error: "ELEVENLABS_VOICE_ID is not set (env or body.voiceId)" },
+      {
+        ok: false,
+        error:
+          "No ElevenLabs voice: set body.voiceId, ELEVENLABS_VOICE_ID, or brand_profiles.elevenlabs_voice_id for this draft's brand profile",
+      },
       { status: 400 }
     );
   }

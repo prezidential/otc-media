@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radio, Newspaper, Target, FlaskConical, Menu, X, ListTree } from "lucide-react";
+import { Radio, Newspaper, Target, FlaskConical, Menu, X, ListTree, Palette } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/issues", label: "Issues", icon: Newspaper },
   { href: "/outlines", label: "Outlines", icon: ListTree },
   { href: "/leads", label: "Leads", icon: Target },
+  { href: "/brand-profiles", label: "Brand", icon: Palette },
   { href: "/research", label: "Research", icon: FlaskConical },
 ];
 
