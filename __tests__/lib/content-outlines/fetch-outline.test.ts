@@ -30,6 +30,14 @@ describe("resolveNewsletterOutline", () => {
     expect(chain.maybeSingle).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back when explicit newsletter fetch returns db error", async () => {
+    mockSupabase._setResult("content_outlines", { data: null, error: { message: "db error" } });
+
+    const result = await resolveNewsletterOutline(mockSupabase as never, "ws-123", "outline-1");
+
+    expect(result).toEqual({ id: null, spec: DEFAULT_NEWSLETTER_OUTLINE });
+  });
+
   it("falls back when explicit id points to non-newsletter kind", async () => {
     mockSupabase._setResult("content_outlines", {
       data: { id: "outline-2", kind: "insider_access", spec_json: { version: 1 } },
@@ -56,6 +64,29 @@ describe("resolveNewsletterOutline", () => {
     expect(chain.eq).toHaveBeenCalledWith("is_default", true);
     expect(chain.limit).toHaveBeenCalledWith(1);
   });
+
+  it("falls back when default query returns non-array data", async () => {
+    mockSupabase._setResult("content_outlines", {
+      data: { id: "not-an-array" },
+      error: null,
+    });
+
+    const result = await resolveNewsletterOutline(mockSupabase as never, "ws-123");
+
+    expect(result).toEqual({ id: null, spec: DEFAULT_NEWSLETTER_OUTLINE });
+  });
+
+  it("falls back when supabase.from throws", async () => {
+    const originalFrom = mockSupabase.from;
+    mockSupabase.from = vi.fn(() => {
+      throw new Error("from failed");
+    });
+
+    const result = await resolveNewsletterOutline(mockSupabase as never, "ws-123");
+
+    expect(result).toEqual({ id: null, spec: DEFAULT_NEWSLETTER_OUTLINE });
+    mockSupabase.from = originalFrom;
+  });
 });
 
 describe("resolveInsiderOutline", () => {
@@ -71,13 +102,25 @@ describe("resolveInsiderOutline", () => {
     expect(result.spec).toEqual(DEFAULT_INSIDER_OUTLINE);
   });
 
+  it("falls back when explicit insider fetch returns db error", async () => {
+    mockSupabase._setResult("content_outlines", { data: null, error: { message: "db error" } });
+
+    const result = await resolveInsiderOutline(mockSupabase as never, "ws-123", "insider-id");
+
+    expect(result).toEqual({ id: null, spec: DEFAULT_INSIDER_OUTLINE });
+  });
+
   it("uses workspace default insider outline when available", async () => {
     const chain = mockSupabase._setResult("content_outlines", {
       data: [
         {
           id: "default-insider",
           kind: "insider_access",
-          spec_json: { version: 1, systemPromptTemplate: "Custom Insider System Prompt" },
+          spec_json: {
+            version: 1,
+            userPromptTemplate: "Insider user prompt",
+            systemPromptTemplate: "Custom Insider System Prompt",
+          },
         },
       ],
       error: null,
@@ -86,7 +129,7 @@ describe("resolveInsiderOutline", () => {
     const result = await resolveInsiderOutline(mockSupabase as never, "ws-123");
 
     expect(result.id).toBe("default-insider");
-    expect(result.spec.userPromptTemplate).toBe(DEFAULT_INSIDER_OUTLINE.userPromptTemplate);
+    expect(result.spec.userPromptTemplate).toBe("Insider user prompt");
     expect(result.spec.systemPromptTemplate).toBe("Custom Insider System Prompt");
     expect(chain.eq).toHaveBeenCalledWith("kind", "insider_access");
     expect(chain.eq).toHaveBeenCalledWith("is_default", true);
