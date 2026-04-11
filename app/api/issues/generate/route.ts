@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { callLLM } from "@/lib/llm/provider";
 import { DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject } from "@/lib/draft/content";
+import { opsLog } from "@/lib/ops/log";
 import {
   applyDashReplaceMap,
   lintDraft,
@@ -10,6 +11,7 @@ import {
 } from "@/lib/draft/lint";
 import { fillTemplate, type InsiderOutlineSpec } from "@/lib/content-outlines/types";
 import { resolveInsiderOutline, resolveNewsletterOutline } from "@/lib/content-outlines/fetch-outline";
+import { assertOutlineUsableForGenerate } from "@/lib/content-outlines/outline-access";
 
 function extractSourcesFromContrarianTake(contrarian_take: string): string[] {
   const match = contrarian_take.match(/\n\nSources:\s*\n([\s\S]*?)(?=\n\n|$)/i) || contrarian_take.match(/Sources:\s*\n([\s\S]*?)(?=\n\n|$)/i);
@@ -38,6 +40,38 @@ function safeJsonParse<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+/** Phrases from a legacy prompt template; reinforced at generate time so DB outlines that still echo them are corrected. */
+const BANNED_STOCK_HOOK_PHRASES = [
+  "This week, something shifted.",
+  "Something just changed.",
+  "We just crossed a line.",
+  "Not in a hype-cycle way.",
+  "Not in a vendor-demo way.",
+] as const;
+
+function collectRecentHookFirstLines(rows: Array<{ content_json: unknown }> | null): string[] {
+  const out: string[] = [];
+  for (const row of rows ?? []) {
+    const json = row.content_json as Record<string, unknown> | null;
+    if (!json || !Array.isArray(json.hook_paragraphs) || json.hook_paragraphs.length < 1) continue;
+    const first = json.hook_paragraphs[0];
+    if (typeof first !== "string") continue;
+    const t = first.trim();
+    if (t.length > 0) out.push(t.length > 220 ? `${t.slice(0, 217)}…` : t);
+  }
+  return out;
+}
+
+function formatNewsletterAntiRepetitionSuffix(recentHookFirstLines: string[]): string {
+  const recent = recentHookFirstLines.slice(0, 8);
+  const bannedList = BANNED_STOCK_HOOK_PHRASES.join("\n  • ");
+  const recentBlock =
+    recent.length > 0
+      ? `\nRecent first lines from this workspace (do not imitate or near-duplicate):\n${recent.map((l) => `- ${l}`).join("\n")}\n`
+      : "";
+  return `\n\n---\nAnti-repetition (mandatory for Opening Hook):\n- Never use these exact phrases or obvious close variants:\n  • ${bannedList}${recentBlock}- First sentences must be specific to this thesis and lead cluster — avoid generic "shift / changed / crossed a line" unless the leads justify it.\n- Deliver the editorial angle Hook line's meaning in new wording; do not open by pasting that Hook line verbatim.\n`;
 }
 
 type CurationResult = {
@@ -333,7 +367,7 @@ Rules:
 - Do not summarize articles one by one.
 - Find the shared pattern and take a position.
 - Title max 7 words. No colon. No hype.
-- hook_line max 12 words.
+- hook_line max 12 words; must be specific to this lead cluster. Avoid stock openers: "something shifted", "just changed", "crossed a line", hype-vs-vendor contrast demos.
 - Use short sentences.
 - No dashes in sentences (no '-', '—', '–').
 - Avoid "This isn't", "isn't just", "The real problem isn't".
@@ -519,6 +553,15 @@ export async function POST(req: Request) {
   const insiderContentOutlineId =
     typeof body.insiderContentOutlineId === "string" ? body.insiderContentOutlineId.trim() : undefined;
   const sourceDraftId = typeof body.sourceDraftId === "string" ? body.sourceDraftId.trim() : undefined;
+
+  if (contentOutlineId && (outputMode === "full_issue" || outputMode === "bundle")) {
+    const check = await assertOutlineUsableForGenerate(supabase, workspaceId, contentOutlineId, "newsletter_issue");
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+  }
+  if (insiderContentOutlineId && (outputMode === "bundle" || outputMode === "insider_access")) {
+    const check = await assertOutlineUsableForGenerate(supabase, workspaceId, insiderContentOutlineId, "insider_access");
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+  }
 
   const maxLeads = typeof body.leadLimit === "number" && body.leadLimit >= 1 ? body.leadLimit : 8;
 
@@ -767,6 +810,7 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
     const previousTitles = (recentDrafts ?? [])
       .map((d) => (d.content_json as Record<string, unknown>)?.title)
       .filter((t): t is string => typeof t === "string" && t.length > 0);
+    const recentHookFirstLines = collectRecentHookFirstLines(recentDrafts ?? []);
 
     const angle = await generateEditorialAngle({
       brandProfile,
@@ -781,13 +825,14 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
       contentOutlineId
     );
 
-    const userPrompt = fillTemplate(newsletterOutlineSpec.userPromptTemplate, {
-      PRIMARY_THESIS: selectedThesisForFull,
-      STEERING_BLOCK: formatSteeringBlock(steering),
-      ANGLE_BLOCK: formatAngleBlock(angle),
-      LEADS_BLOCK: leadsBlock,
-      PROMO_TEXT: promoText,
-    });
+    const userPrompt =
+      fillTemplate(newsletterOutlineSpec.userPromptTemplate, {
+        PRIMARY_THESIS: selectedThesisForFull,
+        STEERING_BLOCK: formatSteeringBlock(steering),
+        ANGLE_BLOCK: formatAngleBlock(angle),
+        LEADS_BLOCK: leadsBlock,
+        PROMO_TEXT: promoText,
+      }) + formatNewsletterAntiRepetitionSuffix(recentHookFirstLines);
 
     const systemPrompt = `You write in Identity Jedi (IDJ) voice.
 
@@ -803,6 +848,7 @@ Editorial Steering (behavior mapping). Change posture based on the steering valu
 - Not sound journalistic.
 - Not summarize news.
 - Use rhythm with short standalone lines.
+- Never use canned "something shifted / hype-cycle / vendor-demo" framing or parallel "Not …" demo lines unless truly earned by the leads.
 
 Deep Dive must:
 - Lead with thesis energy.
@@ -847,7 +893,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
     const draftResponse = await callLLM("drafting", [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
-    ], { max_tokens: 8192 });
+    ], { max_tokens: 8192, temperature: 0.82 });
     draftModelName = draftResponse.model;
     const stripped = draftResponse.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(stripped) as ClaudeSections;
@@ -946,15 +992,11 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
         .in("id", usedLeadIds);
     } else {
       storeError = insertError.message;
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("[issue_drafts] insert failed:", insertError.message);
-      }
+      opsLog("issue_drafts.insert_failed", { brand_profile_id: brandProfileId, detail: insertError.message }, "warn");
     }
   } catch (e) {
     storeError = e instanceof Error ? e.message : String(e);
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[issue_drafts] insert threw:", e);
-    }
+    opsLog("issue_drafts.insert_threw", { brand_profile_id: brandProfileId, detail: storeError }, "error");
   }
 
   if (outputMode === "bundle") {

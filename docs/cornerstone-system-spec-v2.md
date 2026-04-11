@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.2
+## System Specification v2.7
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module  
 Status: Active Development  
-Supersedes: v2.1 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.6 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -174,6 +174,21 @@ ALTER TABLE issue_drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'
   - `push_beehiiv` — create Beehiiv draft (feature-flagged)
   - `render_linkedin` — format for LinkedIn posting (Phase 2)
 
+#### Brainstormer Agent (Ideation) **[NEW in v2.7]**
+
+- **Role:** Interactive **ideation partner** in the **Brainstorming Hub** (§3.13). Helps the creator explore angles, ground ideas in **workspace `signals`**, pull in **new research** where policy allows, and converge on a **promotable content artifact**—without replacing the Editor pipeline for classic newsletter-from-leads flows.
+- **LLM role:** dedicated role (e.g. `brainstorm` or reuse `editor` with a separate system prompt) — **pluggable** per §3.12.
+- **Trigger:** **Manual** — user opens Hub and sends messages.
+- **Human gate:** **Continuous** — every turn is human-driven; the agent proposes, user steers.
+- **Tools (normative set — implement incrementally):**
+  - **`query_signals`** — list/search **`signals`** for `workspace_id` (filters: date range, directive/source, free-text on title/summary/url; pagination).
+  - **`get_signal`** — fetch one signal by id (scoped to workspace).
+  - **`list_recent_drafts`** (optional) — titles + ids of recent **`issue_drafts`** for “what we already covered” awareness.
+  - **`trigger_signal_ingest`** — invoke existing **Researcher-style** ingest paths (directive-level or workspace-safe bulk) when the conversation warrants fresh RSS pulls; **must** respect the same guardrails as `POST /api/pipeline/run` / manual ingest (no unbounded crawling in v1).
+  - **`propose_manual_signal`** — structured proposal (url, title, notes) for a **human-confirmed** insert via existing manual signal APIs (`/api/signals/create` pattern) when ingest cannot satisfy the ask.
+  - **`save_artifact_draft`** — persist the **current working outline + key claims + cited signal ids/urls** into session state or a draft row for **Promote** flows.
+- **Out of scope for v1:** autonomous web browsing without human URL approval; vendor-hosted assistant threads as system of record (conversation lives in **our** DB per §3.12).
+
 ### Orchestrator
 
 The **Pipeline Orchestrator** coordinates agent handoffs:
@@ -184,8 +199,9 @@ POST /api/pipeline/run
 
 Accepts:
 - `stages`: which agents to run (default: all non-gated)
-- `workspace_id`: scope
-- `options`: per-agent overrides
+- `triggered_by`: run provenance label (default: `manual`)
+
+Workspace scope is taken from `WORKSPACE_ID` environment configuration.
 
 Behavior:
 1. Runs Researcher Agent — checks staleness, ingests stale directives
@@ -196,23 +212,26 @@ Behavior:
 
 The pipeline runs Researcher → Writer → Editor as a single autonomous sequence. The human gate is *after* the Editor, not before it.
 
-Each agent run is logged to the `runs` table with its `AgentRunState`, enabling full audit trail and trend analysis.
+Each agent run is logged to the `runs` table with agent metadata, enabling audit trail and trend analysis.
 
 ### Run State Persistence
 
 ```sql
-CREATE TABLE agent_runs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID NOT NULL,
-  agent_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'running'
-    CHECK (status IN ('running', 'completed', 'failed', 'awaiting_human')),
-  context JSONB DEFAULT '{}',
-  decisions JSONB DEFAULT '[]',
-  output_summary TEXT,
-  started_at TIMESTAMPTZ DEFAULT now(),
-  completed_at TIMESTAMPTZ,
-  triggered_by TEXT                    -- 'schedule', 'event:researcher_completed', 'manual', etc.
+-- Persisted via lib/agents/persistence.ts
+INSERT INTO runs (
+  workspace_id,
+  run_type,
+  status,
+  input_refs_json,
+  output_refs_json,
+  finished_at
+) VALUES (
+  :workspace_id,
+  'agent:' || :agent_id,
+  :status,               -- initiated | completed | failed
+  :input_refs_json,      -- includes agent_id, triggered_by, context
+  :output_refs_json,     -- includes decisions, summary
+  :finished_at
 );
 ```
 
@@ -291,7 +310,7 @@ _Unchanged from v2.0._
 
 ---
 
-## 3.10 Content Outlines (structure templates) **[NEW]**
+## 3.10 Content Outlines (structure templates) **[NEW]** **[REVISED in v2.3]**
 
 ### Purpose
 
@@ -312,8 +331,11 @@ Table: `content_outlines` (see `lib/supabase/schema-content-outlines.sql`).
 | `kind` | `newsletter_issue` \| `insider_access` |
 | `spec_json` | Versioned outline spec (see below) |
 | `is_default` | At most one default per `(workspace_id, kind)` |
+| `disabled_at` | **Soft disable:** `timestamptz` nullable; `NULL` = active. “Delete” in the app sets this timestamp and clears `is_default`. There is **no re-enable** path in the UI for v1 (restore would be a manual SQL or future API). |
 
-`issue_drafts` may store optional `content_outline_id` for traceability.
+`issue_drafts` may store optional `content_outline_id` for traceability (see `lib/supabase/schema-issue_drafts.sql`; generation writes it when a DB-backed newsletter outline row is used).
+
+**Schema:** apply `lib/supabase/schema-content-outlines.sql` in Supabase (idempotent); existing databases need at least `ALTER TABLE content_outlines ADD COLUMN IF NOT EXISTS disabled_at timestamptz;`.
 
 ### Spec JSON (v1)
 
@@ -339,13 +361,30 @@ Table: `content_outlines` (see `lib/supabase/schema-content-outlines.sql`).
 
 Built-in defaults live in code (`lib/content-outlines/default-specs.ts`). They are written to the database only through the app: `POST /api/content-outlines/seed` (Issues page: **Seed default outlines**) when a workspace has no outline rows yet. **Schema changes use SQL; outline row data is not maintained via checked-in seed SQL or one-off scripts.**
 
-### API and UI
+### REST API and UI **[REVISED]**
 
-- `GET /api/content-outlines/list` — list outlines for the workspace.
-- `POST /api/content-outlines/seed` — insert default newsletter + Insider rows if none exist (Issues page: **Seed default outlines**).
-- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter), `insiderContentOutlineId` (Insider), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+**List / create (collection)**
 
-If no DB row matches, the generator uses the **code default** spec (same text as seeded defaults).
+- `GET /api/content-outlines` — Returns `{ outlines }` (each row includes structured template fields derived from `spec_json`). By default only **active** rows (`disabled_at IS NULL`). Query `?includeDisabled=1` includes soft-disabled rows (e.g. Outlines admin list).
+- `POST /api/content-outlines` — **Create.** Body uses **structured fields** only (no raw `spec_json` from the client): `name`, `kind`, `is_default`, `userPromptTemplate`, and either `systemPromptSuffix` (newsletter) or `insiderSystemPrompt` (Insider). Server validates, serializes to `spec_json`, returns `{ outline, warnings }`. `warnings` are non-blocking (e.g. missing `{{PLACEHOLDER}}` tokens).
+- `POST /api/content-outlines/seed` — Insert default newsletter + Insider rows **if the workspace has no outline rows** (Issues page: **Seed default outlines**). Row data is app-only, not from checked-in SQL seed files.
+
+**Single resource**
+
+- `GET /api/content-outlines/[id]` — `{ outline }` (includes disabled rows for read-only visibility).
+- `PATCH /api/content-outlines/[id]` — **Update** merged fields; **400** if row is disabled. If `is_default` is set true, other defaults for that `(workspace_id, kind)` are cleared first.
+- `DELETE /api/content-outlines/[id]` — **Soft disable:** sets `disabled_at`, clears `is_default`; **400** if already disabled.
+
+**Issue generation**
+
+- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter, when `outputMode` is `full_issue` or `bundle`), `insiderContentOutlineId` (when `bundle` or `insider_access`), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+- When an outline **id is provided**, the server **asserts** the row exists, is **not** disabled, and **`kind`** matches; otherwise **400/404** — no silent fallback to the code default for a bad id.
+- When **no** outline id is sent, resolution uses DB default or **code default** spec (same text as seeded defaults).
+
+**UI**
+
+- **`/outlines`** — Workspace-admin style page: list, create, edit (kind fixed after create), placeholder hints, save warnings, soft disable. Sidebar **Outlines** + **Manage outlines** link from Issues.
+- **Issues** outline dropdowns load **`GET /api/content-outlines`** (active rows only).
 
 ### Insider Access vs. public issue **[REVISED]**
 
@@ -361,6 +400,213 @@ Standalone `insider_access` mode may still run from **approved leads only** (`ne
 
 - `generate_newsletter_draft` loads **brand profile** + **resolved newsletter outline** (by id or workspace default or code fallback), then runs thesis → angle → draft → lint.
 - Insider generation runs **after** the public `DraftObject` exists (bundle) or from a stored draft / leads as above.
+
+---
+
+## 3.11 Content products (Issues — Phase 2 panel) **[NEW in v2.4]**
+
+### Purpose
+
+**Content products** turn a persisted **newsletter draft** (`issue_drafts.content_json` / `DraftObject`) into derivative assets: social posts, podcast-oriented output, and sponsorship alignment copy. They are invoked from the **Issues** page (“Phase 2 — content products”) and use LLM generation over a **compact text summary** of the draft (see `lib/content-products/promptContext.ts`).
+
+Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server loads `content_json`) or an in-memory `content_json` override for the same shape.
+
+### Social snippets **[REVISED in v2.6]**
+
+**Endpoint:** `POST /api/content-products/social-snippets`
+
+**Request body:** `{ draftId?: string, content_json?: object, brandProfileId?: string }` — one of `draftId` or `content_json` must supply the draft; `draftId` requires a saved row in `issue_drafts` for the workspace. **Brand profile resolution:** prefer `issue_drafts.brand_profile_id` when loading by `draftId`; otherwise use `brandProfileId` (Issues UI passes the selected profile for in-memory drafts). When a profile loads, the prompt includes the same **brand JSON slice** as newsletter generation (`voice_rules_json`, `formatting_rules_json`, `forbidden_patterns_json`, `cta_rules_json`, `emoji_policy_json`, `narrative_preferences_json`) via `lib/content-products/brandProfileForContentProducts.ts`.
+
+**Response (normative):** Structured JSON only — `{ ok: true, snippets: { x_post, linkedin_teaser, threads } }` (strings). The API does not change for presentation concerns.
+
+**Product requirement — UI:** The Issues UI **must not** show this payload as a raw JSON blob. It **must** render **formatted** panels per network (X, LinkedIn, Threads): readable typography, optional character counts against the limits enforced in the prompt (e.g. X ~260 characters, Threads ~500), and **copy-to-clipboard** per field (and optionally a single “copy all” as plain text). A developer-only or secondary “raw JSON” view is optional.
+
+**Voice:** When no brand profile resolves, the route falls back to Identity Jedi baseline constraints (direct, practitioner-respecting; no em dashes; avoid lazy contrast patterns). **Repeat generations:** the route uses elevated **temperature** and a per-request **rotation hint** so successive clicks on the same draft do not collapse to identical copy.
+
+### Podcast and ElevenLabs audio pipeline **[REVISED in v2.5]**
+
+**Primary (Issues UI):** `POST /api/content-products/podcast-script` — loads the draft, resolves citation URLs to workspace **`signals`** (`lib/content-products/resolveSignals.ts`), builds a **Signal grounding** block plus `draftSummaryForContentProducts`, and returns `{ ok, script, grounding }` where `script` is TTS-oriented JSON: `working_title`, optional `estimated_runtime_minutes`, `script_segments[]` with `id`, optional `title`, **`narrator_text`** (spoken prose), optional `sources_acknowledged`, `outro_cta`. Request body may include **`podcastDelivery`** (`conversational` \| `deep_dive` \| `narrative`), **`podcastEnergy`** (`relaxed` \| `medium` \| `high`), and optional **`customDirection`** (short free-text). The first segment must use id **`intro`** (welcome + roadmap). Issues UI exposes these controls above **Podcast script**.
+
+**Legacy:** `POST /api/content-products/podcast-outline` remains available (beats-style outline, no signal resolution); new work should use **podcast-script**.
+
+**ElevenLabs:** `POST /api/content-products/podcast-tts` — request body `{ script: <PodcastScript> }` or `{ fullText: string }`, optional `voiceId` (defaults to `ELEVENLABS_VOICE_ID`). Server uses `ELEVENLABS_API_KEY`, optional `ELEVENLABS_MODEL_ID` (default `eleven_multilingual_v2`). Returns `audio/mpeg` (chunked synthesis + concatenated MP3). **Human gate:** Issues UI exposes download only on explicit click after script preview.
+
+**Remaining (normative):**
+
+1. **Persistence:** Table **`podcast_episodes`** (`lib/supabase/schema-podcast-episodes.sql`) + env **`PODCAST_AUDIO_STORAGE_BUCKET`**: `POST /api/content-products/podcast-tts` with `persist` + saved `draftId` inserts the row, uploads `{workspace_id}/{episode_id}.mp3`, sets `audio_ready`. In-memory drafts (no `draftId`) still download only.
+
+2. **TTS safety:** Prompts require plain spoken prose; strip or forbid bracketed stage directions before TTS if authors introduce them later.
+
+```mermaid
+flowchart LR
+  subgraph inputs [Inputs]
+    Draft[issue_draft content_json]
+    SigResolve[URL to signals join]
+  end
+  subgraph gen [Generation]
+    LLM[LLM podcast script JSON]
+  end
+  subgraph out [Output]
+    UI[Issues UI preview]
+    EL[ElevenLabs TTS]
+    Store[Stored script plus audio ref]
+  end
+  Draft --> LLM
+  SigResolve --> LLM
+  LLM --> UI
+  UI -->|human approves| EL
+  EL --> Store
+```
+
+### Sponsorship alignment
+
+**Endpoint:** `POST /api/content-products/sponsorship-alignment` — aligns draft context with revenue / sponsorship slots (experimental; same draft loading pattern as other content products).
+
+---
+
+## 3.12 Content hub posture, derivative quality, and LLM architecture **[NEW in v2.6]**
+
+**Product intent:** Cornerstone is the creator’s **content hub**: they generate a **canonical artifact** (e.g. newsletter `DraftObject`), then produce **derivatives** (social, podcast script, sponsorship copy, etc.) **without rewriting from scratch**. Output should be **tailored to the creator** and land **~80% of the way** there; light human edit completes the rest. Multi-tenant **onboarding** (not built yet) will eventually capture preferences; until then, **brand profile** + **draft-linked lineage** are the primary personalization carriers.
+
+**Why “Claude in the app” can outperform a single API call:** The app session typically accumulates **more context** (multi-turn steering, pasted material, implicit corrections) and **more iterations** before the user accepts a result. Cornerstone routes often send a **compact summary** (`draftSummaryForContentProducts`) plus **hard constraints** (JSON shape, lint-adjacent rules, outline contracts). Same model name does not imply the same **effective prompt, token budget, temperature, or iteration count**. The gap is addressed by **richer inputs**, **in-product refinement loops**, and **constraint design**—not by requiring vendor-hosted “assistant” threads as the default.
+
+**Architecture decisions (normative for new work):**
+
+1. **Application state stays in Cornerstone** (`issue_drafts`, `brand_profiles`, `signals`, `runs`, future conversation tables). LLM calls remain **stateless at the HTTP boundary**: each request assembles a full context bundle. **Do not** depend on provider-only thread/assistant stores for core product behavior (lock-in, migration, and testing cost).
+
+2. **“Stateful” UX** (multi-turn “sharper / shorter / more CISO”) is implemented as **our** stored **message history** (or run steps) + trimmed context re-sent to any pluggable model—not as a substitute for persisting drafts and brand rules in Supabase.
+
+3. **Retrieval / RAG:** Prefer **workspace-scoped retrieval we control** (e.g. citation → **`signals`** grounding, future chunks from past issues or brand docs). **Podcast-script** already exemplifies narrow RAG. Expand deliberately; avoid outsourcing core retrieval to a single vendor’s file-assistant product unless there is a clear, bounded experiment.
+
+4. **Derivatives must inherit voice:** Content-product endpoints should load **brand profile** (from draft or explicit id) wherever the main draft pipeline does, and pass **structured sections** when token limits allow—not only the minimal summary.
+
+**Concrete next steps** (prioritized; **roadmap** only—not blockers for unrelated features):
+
+| Priority | Item | Rationale |
+|----------|------|-----------|
+| P1 | **Richer context bundles** for derivatives | Increase caps or pass structured slices (full hook, thesis, deep dive excerpt with higher ceiling) so social/podcast/sponsor prompts match what a multi-turn chat would “know.” |
+| P1 | **Refine-without-restart UX** | After generation, allow a short follow-up instruction (“tighter,” “less vendor-y”); persist turns under `draftId` or `run_id` and send `history + latest draft snapshot` to the model. |
+| P2 | **Brand profile depth** | Onboarding + optional **few-shot** example posts in profile JSON; eval that derivatives track creator voice. |
+| P2 | **Two-phase generation (select flows)** | Optional creative pass (prose) then shape/lint/JSON pass so constraints don’t flatten voice. |
+| P3 | **Quality eval** | Periodic blind compare: app-style transcript vs Cornerstone bundle; tune summary depth, temperature, system prompts. |
+| P3 | **Broader RAG** | Embeddings or search over past `issue_drafts` / brand artifacts for “sounds like us” retrieval—only when P1–P2 are insufficient. |
+
+Track delivery in §8 Phase 2B (and §3.11 implementation bullets) as items ship.
+
+---
+
+## 3.13 Brainstorming Hub (Ideation surface) **[NEW in v2.7]**
+
+### Purpose
+
+The **Brainstorming Hub** is a **live, conversational** workspace where a creator and the **Brainstormer Agent** (§3.1) co-develop **new content ideas** and **near-final copy**. It complements the **Researcher → Writer → Editor** pipeline: the pipeline optimizes for **scheduled breadth**; the Hub optimizes for **intentful depth** and **exploration** on demand.
+
+All data access is **scoped to `workspace_id`** (from environment / tenancy contract). The agent **reads** existing **`signals`** (and optionally recent **`issue_drafts`** metadata). It **may refresh or extend research** only through **approved mechanisms**: existing ingest tooling, human-approved manual signal creation, or future bounded fetch—never silent exfiltration of data outside the workspace.
+
+### UX (normative)
+
+1. **Entry:** New nav destination (e.g. `/brainstorm` or **Brainstorm** in sidebar). Optional: “Start from this signal” deep link from Research/Signals UI.
+2. **Session:** User sees a **chat thread** (markdown-safe rendering). Optional sidebar: **pinned signals**, **cited URLs**, **working thesis**.
+3. **Streaming:** Assistant responses should **stream** to the client where the LLM provider supports it (product expectation; implementation detail).
+4. **Promote / handoff:** When the user accepts a direction, explicit actions:
+   - **Promote to newsletter draft** — creates or updates an **`issue_drafts`** row (or opens Issues with pre-filled `content_json` / generation inputs) so the existing **Issues** flow and **content products** apply.
+   - **Generate socials / podcast** — requires a **`DraftObject`-compatible `content_json`** (or a **promotion step** that maps Hub artifact → that shape). Reuse **`POST /api/content-products/social-snippets`**, **`podcast-script`**, **`podcast-tts`** with `draftId` or `content_json` + `brandProfileId` as today.
+   - **Create blog post (new)** — see **Blog handoff** below.
+
+### Conversation persistence (aligns with §3.12)
+
+- Store **sessions** and **messages** in **Supabase** (names indicative: `brainstorm_sessions`, `brainstorm_messages`). Columns at minimum: `workspace_id`, `session_id`, `user_id` (future), `title`, `created_at`, `updated_at`; messages: `role`, `content`, `tool_calls` / `tool_results` (JSON), `created_at`.
+- Each API request is still **stateless**: load recent message window + session metadata + tool results from DB, then call the LLM. **No** reliance on provider thread IDs for core behavior.
+
+### Tool loop
+
+The Hub uses the same **agent tool-loop** pattern as `lib/agents/framework.ts`: model may emit tool calls → server executes against **workspace-scoped** services → results appended → model continues until a final user-visible message. Tool implementations **must** validate `workspace_id` on every query.
+
+### Research “from conversation”
+
+| Mechanism | Use when | Guardrails |
+|-----------|----------|------------|
+| **Query existing `signals`** | User asks what we know, compare sources, find gaps | Read-only; RLS / server checks |
+| **Trigger RSS / directive ingest** | User wants “what’s new since…” on a covered feed | Same policies as Researcher; log to `runs` |
+| **Propose manual signal** | User pastes a URL or names a source not in DB | User confirms before insert |
+| **Future: allowed URL fetch** | Summarize a user-supplied HTTPS URL | Explicit allowlist, rate limits, no credential sites |
+
+Phrasing for the product: the agent **finds new findings** by **driving ingest and curation the workspace already trusts**, not by replacing the research stack.
+
+### Handoff: canonical shapes downstream
+
+**Newsletter / derivatives today** expect **`DraftObject`** in `issue_drafts.content_json` (`title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `dojo_checklist`, `metadata`, …). The Hub should converge on either:
+
+- **Path A — Promote to issue draft:** A **mapping job** (LLM or deterministic template) turns the Hub **artifact** (outline + prose + citations) into **`DraftObject`**, then save to **`issue_drafts`** with **`brand_profile_id`** set from the Hub session or Issues default.
+- **Path B — Ephemeral `content_json`:** User jumps to Issues Phase 2 with **in-memory** `content_json` only (today’s pattern for social/podcast without save)—acceptable for power users; **Promote** should still encourage Path A for persistence.
+
+### Blog post (new output channel) **[NEW in v2.7]**
+
+**Goal:** Long-form **blog/article** distinct from newsletter **DraftObject** (different sections, SEO, reading length).
+
+**Normative artifact (v1):** `BlogDraftObject` — minimal contract (exact field names are implementation notes):
+
+```typescript
+type BlogDraftObject = {
+  title: string;
+  slug_hint?: string;
+  dek?: string;                    // subtitle / meta description seed
+  body_markdown: string;           // full article in Markdown
+  cited_sources?: { title?: string; url: string }[];
+  metadata?: {
+    thesis?: string;
+    tags?: string[];
+    reading_time_minutes_estimate?: number;
+  };
+};
+```
+
+**API (planned):** `POST /api/content-products/blog-draft` (name TBD) — input: `content_json` **or** `draftId` (if stored as blog-shaped row) **or** `brainstormSessionId` + promote; optional **`brandProfileId`**; output: `{ ok, blog: BlogDraftObject }` or persisted id.
+
+**UI:** Export Markdown/HTML, copy, optional “open in Issues” if we unify surfaces later. **Guardrails:** reuse **brand profile** + lint rules where applicable (extended for longform in a follow-up spec slice).
+
+**Persistence (planned):** Table e.g. **`blog_drafts`** (`workspace_id`, `content_json`, `brand_profile_id`, `source_brainstorm_session_id` nullable, `status`) or store as JSON blob on **`issue_drafts`** with `kind` discriminator — **decision deferred to implementation**; prefer a dedicated table if blog lifecycle diverges from newsletter.
+
+```mermaid
+flowchart LR
+  subgraph hub [Brainstorming Hub]
+    Chat[User + Brainstormer Agent]
+    Tools[Tools: signals ingest propose]
+  end
+  subgraph promote [Promote]
+    DO[DraftObject]
+    BLOG[BlogDraftObject]
+  end
+  subgraph downstream [Existing + new products]
+    Issues[Issues + content products]
+    Soc[Social snippets]
+    Pod[Podcast script + TTS]
+    BlogAPI[Blog draft API + export]
+  end
+  Chat --> Tools
+  Tools --> Chat
+  Chat --> DO
+  Chat --> BLOG
+  DO --> Issues
+  DO --> Soc
+  DO --> Pod
+  BLOG --> BlogAPI
+```
+
+### Security & tenancy
+
+- Every tool and DB query: **`workspace_id` match**.
+- **No** cross-workspace signal or draft leakage in prompts or retrieval.
+- Rate-limit **ingest triggers** per session to avoid abuse.
+
+### Implementation phases (suggested)
+
+| Phase | Scope |
+|-------|--------|
+| **MVP** | Sessions + messages CRUD; chat UI; **`query_signals`** + **`get_signal`** tools; streaming; brand profile in system prompt |
+| **M1** | **`trigger_signal_ingest`** + **`propose_manual_signal`**; **Promote to `DraftObject`** → `issue_drafts` |
+| **M2** | **`BlogDraftObject`** + **`POST /api/content-products/blog-draft`** + minimal blog UI/export |
+| **M3** | Optional **`list_recent_drafts`**; eval hooks; richer search (full-text / embeddings on signals) |
 
 ---
 
@@ -395,6 +641,8 @@ Stretch:
 13. LinkedIn Marketing API analytics pull
 14. Direct LinkedIn post publishing via API
 15. Scheduled pipeline automation (Vercel cron → Pipeline Orchestrator)
+16. **Brainstorming Hub** — conversational ideation with workspace **`signals`**, promote to drafts and derivatives (§3.13)
+17. **Blog / longform** channel — `BlogDraftObject` and export path (§3.13)
 
 ---
 
@@ -402,7 +650,7 @@ Stretch:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Research Engine | Implemented | Unchanged from v1.1; ready for Researcher Agent wrapping |
+| Research Engine | Implemented | Used by Researcher Agent tools for staleness checks + RSS ingest |
 | Leads pipeline | Implemented | Lifecycle: pending → approved → drafted → dismissed; 14-day window; dedup |
 | Thesis + Angle + Draft | Implemented | Editor Agent curation, editorial angle with title uniqueness |
 | Draft persistence | Implemented | `content_json` with `DraftObject` + runtime validation |
@@ -414,15 +662,15 @@ Stretch:
 | Publishing — HTML + Beehiiv | Implemented | HTML export always on; Beehiiv feature-flagged |
 | Publishing — LinkedIn export | Not started | New |
 | **LLM Abstraction Layer** | **Implemented** | Anthropic + OpenAI; per-role config via env vars |
-| **Agent Framework** | **Not started** | Agent definitions, tool registry, orchestrator |
-| **Researcher Agent** | **Not started** | First agent — wraps research engine |
-| **Writer Agent** | **Not started** | Wraps leads pipeline |
-| **Editor Agent** | **Implemented** | Autonomous editorial decisions: lead evaluation, steering selection, output mode, draft generation |
-| **Content outlines** | **Implemented** | Workspace `content_outlines`; newsletter + Insider specs; `GET`/`POST` seed list; issue generate accepts outline ids |
+| **Agent Framework** | **Partial** | `lib/agents/framework.ts` — tool loop, agent definitions, role-routed LLM calls; Phase 1 productization (dashboard, autonomy, structured errors) ongoing |
+| **Researcher Agent** | **Partial** | `lib/agents/researcher.ts` — freshness + ingest tools over existing research APIs; extend as needed for scheduled autonomy |
+| **Writer Agent** | **Partial** | `lib/agents/writer.ts` — signal query + lead generation tools; extend as needed |
+| **Editor Agent** | **Implemented** | Issue path: curation + `POST /api/issues/generate` (lead evaluation, steering, output mode, draft generation); `lib/agents/editor.ts` for pipeline orchestration |
+| **Content outlines** | **Implemented** | `content_outlines` with `disabled_at`; REST `/api/content-outlines` + `/api/content-outlines/[id]`; `/outlines` CRUD UI; seed route; generate validates outline ids |
 | **Draft status lifecycle** | **Implemented** | draft → reviewed → published tracking on `issue_drafts` |
 | **Publisher Agent** | **Not started** | Wraps publish endpoints |
-| **Pipeline Orchestrator** | **Not started** | `/api/pipeline/run` |
-| **Agent run state** | **Not started** | `agent_runs` table |
+| **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
+| **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
 | Creator onboarding flow | Not started | New |
 | LinkedIn OAuth connection | Not started | New |
@@ -438,21 +686,41 @@ Stretch:
 | QoL — draft comparison | Implemented | Side-by-side compare view |
 | Test suite | Implemented | 171+ tests |
 | UI | Implemented | Dark theme, sidebar nav, full feature access |
+| **Content products — Social snippets API** | **Implemented** | `POST /api/content-products/social-snippets`; returns structured `snippets` JSON |
+| **Content products — Social snippets UI** | **Implemented** | Issues Phase 2: formatted X / LinkedIn / Threads panels, counts, copy, optional raw JSON — §3.11 |
+| **Content products — Podcast outline API** | **Implemented** | `POST /api/content-products/podcast-outline` (legacy beats outline) |
+| **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
+| **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
+| **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
+| **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
+| **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
+| **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
+
+**Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
+
+**Note (v2.4–v2.5):** Phase 2 **content products** are specified in §3.11. **v2.5** lands formatted Social UI, **podcast-script** + signal grounding, and **podcast-tts** (download). Persisted script/audio artifacts remain roadmap (§8 Phase 2B).
+
+**Note (v2.6):** §3.11 **Social snippets** documents **brand-profile** injection, **`brandProfileId`**, and **anti-collapse** generation (temperature / rotation). **§3.12** captures **content hub** intent, **Claude app vs API** quality gap, **stateless calls + our DB as source of truth**, **RAG posture**, and the **P1–P3** next-step table.
+
+**Note (v2.7):** **§3.13 Brainstorming Hub** and **Brainstormer Agent** (§3.1) specify conversational ideation, **workspace-scoped** signal access, **ingest/manual-signal** research loops, **promotion** to **`DraftObject`** for Issues + content products, and **new** **`BlogDraftObject`** / blog API. See §8 Phase 2C.
 
 ---
 
 # 8. Roadmap [REVISED]
 
 ## Phase 1 — Agent Framework + Autonomous Pipeline
-- Build agent abstraction (`lib/agents/framework.ts`): agent definition, tool registry, run loop
-- Implement Researcher Agent with tools: `check_signal_freshness`, `ingest_directive`, `report_summary`
-- Implement Writer Agent with tools: `query_fresh_signals`, `check_existing_leads`, `generate_leads`
-- Build Pipeline Orchestrator (`/api/pipeline/run`)
-- Add `agent_runs` table for run state persistence
-- Research → Leads runs autonomously; human gate at lead approval
-- UI: pipeline status dashboard showing agent run history
+- **Landed:** agent abstraction (`lib/agents/framework.ts`) — definition, tool registry, run loop, role-routed LLM calls
+- **Landed:** Researcher Agent — `check_signal_freshness`, `ingest_directive`, `report_summary` (`lib/agents/researcher.ts`)
+- **Landed:** Writer Agent — `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive` (`lib/agents/writer.ts`)
+- **Landed:** Pipeline Orchestrator — `POST /api/pipeline/run` (staged researcher → writer → editor)
+- **Landed:** agent run persistence via **`runs`** (`run_type` prefix `agent:`)
+- **Hardening:** structured errors, clearer stage contracts, optional abort / human gate between stages; formalize `runs` contract in UI filters or migrate to **`agent_runs`** if queries outgrow `runs`
+- **Autonomy:** Research → Leads should run on a schedule or events; **human gate at lead approval** remains non-negotiable
+- **Remaining:** **pipeline status dashboard** (agent run history, failures, last trigger) — beyond the Research console “run pipeline” control
 
-## Phase 2 — Brand Profile Refactor + LinkedIn Foundation
+## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products
+
+### Phase 2A — Brand profile refactor + LinkedIn foundation
 - Deprecate `POST /api/brand-profiles/seed`
 - Implement generic `CreatorBrandProfile` schema
 - Build creator onboarding flow (Steps 1–5)
@@ -461,6 +729,19 @@ Stretch:
 - Add `linkedin_connections` and `linkedin_drafts` tables
 - Add LinkedIn-specific lint patterns
 - Migrate existing workspace through onboarding flow
+
+### Phase 2B — Content products (Issues)
+- **Landed:** Social snippets formatted UI; **podcast-script** + signal URL resolution; **podcast-tts** ElevenLabs MP3 download (human-gated); social snippets **brand profile JSON** + **anti-collapse** generation (temperature / rotation); see §3.11–§3.12.
+- **Remaining:** Persist script JSON + audio references to DB/storage; optional deprecate **podcast-outline** once unused; workspace-scoped voice defaults in brand profile.
+- **Next (derivative quality / hub — §3.12):** Richer prompt context for derivatives; **refine** multi-turn UX with persistence; brand **few-shots** + onboarding; optional two-phase generate; eval loop; broader RAG only if needed.
+
+### Phase 2C — Brainstorming Hub + blog longform **[NEW in v2.7]**
+
+- **Spec:** §3.13 (Hub UX, persistence, tools, security) and **Brainstormer Agent** in §3.1.
+- **MVP:** `brainstorm_sessions` / `brainstorm_messages` (or equivalent); chat UI; tools **`query_signals`**, **`get_signal`**; streaming responses; **brand profile** in system prompt.
+- **M1:** **`trigger_signal_ingest`**, **`propose_manual_signal`**, **`save_artifact_draft`**; **Promote to `DraftObject`** → **`issue_drafts`** so **Social snippets**, **Podcast script**, **TTS**, and Issues flows attach without rework.
+- **M2:** **`BlogDraftObject`** + **`POST /api/content-products/blog-draft`** (name TBD) + Markdown/HTML export UI; persistence table vs `issue_drafts` discriminator — **decision at implementation**.
+- **M3:** Optional **`list_recent_drafts`** tool; full-text / embedding search over signals; eval hooks.
 
 ## Phase 3 — LinkedIn Draft Engine
 - Build LinkedIn generate / regenerate / list / publish endpoints
@@ -488,4 +769,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.2
+End of Specification v2.7

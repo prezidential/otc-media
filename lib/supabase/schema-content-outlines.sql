@@ -8,9 +8,12 @@ CREATE TABLE IF NOT EXISTS content_outlines (
   kind text NOT NULL CHECK (kind IN ('newsletter_issue', 'insider_access')),
   spec_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   is_default boolean NOT NULL DEFAULT false,
+  disabled_at timestamptz,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE content_outlines ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_content_outlines_workspace_kind
   ON content_outlines (workspace_id, kind);

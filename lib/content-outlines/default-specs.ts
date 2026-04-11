@@ -31,34 +31,22 @@ Before writing the newsletter:
 3. The thesis must be declarative, not descriptive.
 4. Use that thesis to craft the Opening Hook.
 
-Opening Hook structure (must follow this template):
+Opening Hook — structure without fixed wording (vary every issue):
 
-Line 1: A shift statement. Use one of these forms:
-- "This week, something shifted."
-- "Something just changed."
-- "We just crossed a line."
+- Total: 5–7 short sentences across 2–3 tight paragraphs, OR the same sentence count as standalone one-sentence lines — keep the opening under ~130 words.
+- First beat: Lead with a concrete claim, tension, or question grounded in the thesis and approved leads. Avoid meta framing about "the week" or a vague "something shifting" unless the lead copy clearly justifies it.
+- Middle: Include contrast or correction (reader assumptions vs reality). Do **not** default to two sentences that both start with "Not ..." — that pattern became a cliché. Vary the rhetorical move (question, parallelism, one sharp negation, a pair of short fragments, etc.).
+- Then: One line on stakes for identity programs (no publication names, vendor names, or URLs).
+- Close the hook: one short invitation or directive.
 
-Line 2–3: Two short contrast lines that begin with "Not". Example:
-"Not in a hype-cycle way."
-"Not in a vendor-demo way."
-
-Line 4: One escalation line that names the stakes for identity. No article references.
-
-Line 5 (required): One short invitation or directive line:
-"Let's talk about it."
-or
-"Here's what matters."
-or
-"Pay attention."
-
-Do not reuse any exact hook lines from earlier drafts.
-Write fresh phrasing each time while keeping the structure.
+Banned stock phrases — never use these or tight paraphrases (same rhythm, same demo/contrast pairing):
+- "This week, something shifted." / "Something just changed." / "We just crossed a line."
+- "Not in a hype-cycle way." / "Not in a vendor-demo way."
 
 Rules:
-- 5 lines minimum. 7 lines maximum.
-- Each line is one sentence.
+- Each sentence stands alone; keep rhythm but do not reuse a rigid 5-line stencil.
 - Do not summarize the news.
-- Do not mention specific vendors or articles.
+- Do not mention specific vendors or articles in the hook.
 - No dashes inside sentences.
 - Avoid "This isn't", "isn't just", "The real problem isn't".
 - Vary sentence starters. Keep paragraphs to 1-2 sentences.
@@ -70,7 +58,7 @@ Produce a complete issue draft as plain text with these sections in order. Use c
 - No punctuation.
 - Must reflect the thesis.
 - No corporate phrasing.
-2) Opening Hook (use the hook_line as the first line, then 2-3 short paragraphs)
+2) Opening Hook (hook_paragraphs must realize the editorial angle's hook_line in fresh words — same intent, new phrasing; do not paste the Hook line string verbatim as the opening sentence)
 3) Fresh Signals (use 3-6 leads from above). Structure the Fresh Signals section in TWO parts inside the same markdown section:
 
 Part A — Synoptic opener (before listing individual items):

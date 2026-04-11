@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Play, Loader2, CheckCircle2, XCircle, Clock, Bot, ChevronDown, ChevronUp } from "lucide-react";
+import Link from "next/link";
+import { Play, Loader2, CheckCircle2, XCircle, Clock, Bot, ChevronDown, ChevronUp, Newspaper, ListChecks } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +16,10 @@ type PipelineStageResult = {
   data: Record<string, unknown>;
 };
 
+type PipelineStage = "researcher" | "writer" | "editor";
+
+type NextStepHint = null | "approve_leads" | "need_approvals" | "draft_ready";
+
 export default function ResearchPage() {
   const [directives, setDirectives] = useState<Directive[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -24,6 +29,7 @@ export default function ResearchPage() {
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [pipelineResult, setPipelineResult] = useState<Record<string, PipelineStageResult> | null>(null);
   const [showPipelineDetails, setShowPipelineDetails] = useState(true);
+  const [nextStepHint, setNextStepHint] = useState<NextStepHint>(null);
 
   async function loadDirectives() {
     const res = await fetch("/api/research/list-directives");
@@ -54,20 +60,32 @@ export default function ResearchPage() {
     } finally { setRunning(null); }
   }
 
-  async function runPipeline() {
+  async function runPipelineStages(stages: PipelineStage[]) {
     setPipelineRunning(true);
     setPipelineResult(null);
+    setNextStepHint(null);
     setShowPipelineDetails(true);
     try {
       const res = await fetch("/api/pipeline/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stages: ["researcher", "writer", "editor"], triggered_by: "manual" }),
+        body: JSON.stringify({ stages, triggered_by: "manual" }),
       });
       const data = await res.json().catch(() => ({}));
       setPipelineResult(data.stages ?? null);
       await loadRuns();
-    } finally { setPipelineRunning(false); }
+
+      const st = data.stages as Record<string, PipelineStageResult> | undefined;
+      if (stages.includes("editor")) {
+        const ed = st?.editor;
+        if (ed?.success) setNextStepHint("draft_ready");
+        else setNextStepHint("need_approvals");
+      } else if (stages.includes("writer") && st?.writer?.success) {
+        setNextStepHint("approve_leads");
+      }
+    } finally {
+      setPipelineRunning(false);
+    }
   }
 
   useEffect(() => { loadDirectives(); loadRuns(); }, []);
@@ -88,22 +106,77 @@ export default function ResearchPage() {
           Agent Pipeline
         </div>
         <div className="text-sm text-foreground/80 mb-4">
-          Runs the full newsroom pipeline: <strong>Researcher</strong> (ingests fresh signals) → <strong>Writer</strong> (generates editorial leads) → <strong>Editor</strong> (curates leads, picks steering, generates the newsletter draft). The finished draft appears on the Issues page for your final review.
+          <strong>Researcher</strong> ingests RSS signals. <strong>Writer</strong> creates leads in <span className="font-mono text-xs">pending_review</span> (human gate).
+          Approve leads on the <Link href="/leads" className="text-primary underline-offset-2 hover:underline">Leads</Link> page, then run{" "}
+          <strong>Generate newsletter draft</strong> so the <strong>Editor</strong> can call issue generation. Or run all three in one go if you already have enough approved leads.
         </div>
-        <div className="flex gap-3 items-center flex-wrap">
-          <button onClick={runPipeline} disabled={pipelineRunning}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <button
+            type="button"
+            onClick={() => void runPipelineStages(["researcher", "writer"])}
+            disabled={pipelineRunning}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {pipelineRunning ? "Running…" : "Research + write leads"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void runPipelineStages(["editor"])}
+            disabled={pipelineRunning}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+          >
+            {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Newspaper className="h-4 w-4" />}
+            {pipelineRunning ? "Running…" : "Generate newsletter draft"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void runPipelineStages(["researcher", "writer", "editor"])}
+            disabled={pipelineRunning}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/15 disabled:opacity-50 transition-colors"
+          >
             {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
-            {pipelineRunning ? "Pipeline Running..." : "Run Agent Pipeline"}
+            {pipelineRunning ? "Running…" : "Run full pipeline"}
           </button>
           {pipelineResult && (
-            <button onClick={() => setShowPipelineDetails(!showPipelineDetails)}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-              Agent Decisions
+            <button
+              type="button"
+              onClick={() => setShowPipelineDetails(!showPipelineDetails)}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Agent decisions
               {showPipelineDetails ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
           )}
         </div>
+
+        {nextStepHint === "approve_leads" && (
+          <div className="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-foreground">
+            <span className="font-medium">Next step:</span> Review and approve at least three leads on the{" "}
+            <Link href="/leads" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+              <ListChecks className="h-3.5 w-3.5" /> Leads
+            </Link>{" "}
+            page, then return here and click <strong>Generate newsletter draft</strong>.
+          </div>
+        )}
+        {nextStepHint === "need_approvals" && (
+          <div className="mt-4 rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-foreground">
+            <span className="font-medium">Editor did not produce a draft.</span> The agent needs at least three <strong>approved</strong> leads.{" "}
+            <Link href="/leads" className="text-primary underline-offset-2 hover:underline">
+              Open Leads to approve
+            </Link>
+            , then run <strong>Generate newsletter draft</strong> again.
+          </div>
+        )}
+        {nextStepHint === "draft_ready" && (
+          <div className="mt-4 rounded-lg border border-success/30 bg-success/5 px-4 py-3 text-sm text-foreground">
+            <span className="font-medium">Draft generated.</span> Open{" "}
+            <Link href="/issues" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+              <Newspaper className="h-3.5 w-3.5" /> Issues
+            </Link>{" "}
+            to review, regenerate sections, export HTML, or publish.
+          </div>
+        )}
 
         {pipelineResult && showPipelineDetails && (
           <div className="mt-4 space-y-3">

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Rss, ExternalLink, Loader2, Plus, PenLine, Clock, Activity } from "lucide-react";
+import Link from "next/link";
+import { Rss, ExternalLink, Loader2, Plus, PenLine, Clock, Activity, ChevronRight } from "lucide-react";
 import { PageHeader } from "./components/page-header";
 import { cn } from "@/lib/utils";
 
@@ -134,6 +135,30 @@ export default function Home() {
   return (
     <div className="p-6 lg:p-10 max-w-[1100px]">
       <PageHeader title="Signals" description="Ingest RSS feeds and browse captured signals" />
+
+      <div className="rounded-xl border border-border bg-card px-4 py-3 mb-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">End-to-end flow</div>
+        <nav className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm text-foreground">
+          <Link href="/research" className="font-medium text-primary hover:underline">
+            Research
+          </Link>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <Link href="/leads" className="font-medium text-primary hover:underline">
+            Leads
+          </Link>
+          <span className="text-muted-foreground hidden sm:inline">(approve)</span>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <Link href="/issues" className="font-medium text-primary hover:underline">
+            Issues
+          </Link>
+          <span className="text-muted-foreground hidden sm:inline">(draft)</span>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <Link href="/outlines" className="font-medium text-primary hover:underline">
+            Outlines
+          </Link>
+          <span className="text-muted-foreground text-xs sm:ml-1">— optional structure templates</span>
+        </nav>
+      </div>
 
       <div className="rounded-xl border border-border bg-card p-4 mb-4">
         <div className="flex items-center gap-4 flex-wrap">
