@@ -429,7 +429,7 @@ Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server load
 
 **Legacy:** `POST /api/content-products/podcast-outline` remains available (beats-style outline, no signal resolution); new work should use **podcast-script**.
 
-**ElevenLabs:** `POST /api/content-products/podcast-tts` — request body `{ script: <PodcastScript> }` or `{ fullText: string }`, optional `voiceId` (defaults to `ELEVENLABS_VOICE_ID`). Server uses `ELEVENLABS_API_KEY`, optional `ELEVENLABS_MODEL_ID` (default `eleven_multilingual_v2`). Returns `audio/mpeg` (chunked synthesis + concatenated MP3). **Human gate:** Issues UI exposes download only on explicit click after script preview.
+**ElevenLabs:** `POST /api/content-products/podcast-tts` — request body `{ script: <PodcastScript> }` or `{ fullText: string }`, optional `voiceId` (defaults to `ELEVENLABS_VOICE_ID`). Server uses `ELEVENLABS_API_KEY`, optional `ELEVENLABS_MODEL_ID` (default `eleven_turbo_v2_5`). Returns `audio/mpeg` (chunked synthesis + concatenated MP3). **Human gate:** Issues UI exposes download only on explicit click after script preview.
 
 **Remaining (normative):**
 
