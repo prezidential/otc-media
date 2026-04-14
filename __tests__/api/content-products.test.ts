@@ -4,6 +4,8 @@ import { createMockSupabase, makeJsonRequest } from "./helpers";
 const mockClaudeCreate = vi.fn();
 const mockLoadDraftContentJson = vi.fn();
 const mockDraftSummaryForContentProducts = vi.fn();
+const mockResolveSignalsForDraft = vi.fn();
+const mockFormatSignalGroundingForPrompt = vi.fn();
 const mockSupabase = createMockSupabase();
 
 vi.mock("@/lib/llm/claude", () => ({
@@ -23,11 +25,18 @@ vi.mock("@/lib/content-products/promptContext", () => ({
     mockDraftSummaryForContentProducts(...args),
 }));
 
+vi.mock("@/lib/content-products/resolveSignals", () => ({
+  resolveSignalsForDraft: (...args: unknown[]) => mockResolveSignalsForDraft(...args),
+  formatSignalGroundingForPrompt: (...args: unknown[]) =>
+    mockFormatSignalGroundingForPrompt(...args),
+}));
+
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
 }));
 
 import { POST as postPodcastOutline } from "@/app/api/content-products/podcast-outline/route";
+import { POST as postPodcastScript } from "@/app/api/content-products/podcast-script/route";
 import { POST as postSocialSnippets } from "@/app/api/content-products/social-snippets/route";
 import { POST as postSponsorshipAlignment } from "@/app/api/content-products/sponsorship-alignment/route";
 
@@ -40,6 +49,8 @@ beforeEach(() => {
     contentJson: { title: "Draft title" },
   });
   mockDraftSummaryForContentProducts.mockReturnValue("Summarized draft context");
+  mockResolveSignalsForDraft.mockResolvedValue({ grounded: [], unmatchedUrls: [] });
+  mockFormatSignalGroundingForPrompt.mockReturnValue("Grounding block");
 });
 
 describe("content-products routes", () => {
@@ -160,6 +171,92 @@ describe("content-products routes", () => {
       ],
       outro_cta: "Subscribe",
     });
+  });
+
+  it("returns 502 when podcast script has no usable narrator segments", async () => {
+    mockClaudeCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            working_title: "Episode title",
+            script_segments: [{ id: "intro", narrator_text: "   " }],
+          }),
+        },
+      ],
+    });
+
+    const req = makeJsonRequest(
+      "http://localhost:3000/api/content-products/podcast-script",
+      { content_json: { title: "Override title" } }
+    );
+    const res = await postPodcastScript(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(json.error).toBe("Model returned no script segments");
+  });
+
+  it("normalizes podcast script fields and places intro first", async () => {
+    mockResolveSignalsForDraft.mockResolvedValueOnce({
+      grounded: [
+        {
+          id: "sig-1",
+          url: "https://example.com/a",
+          title: "Resolved signal",
+          publisher: "Example",
+          excerpt: "excerpt",
+        },
+      ],
+      unmatchedUrls: ["https://example.com/missing"],
+    });
+    mockClaudeCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: `\`\`\`json
+{
+  "working_title": "  Episode title  ",
+  "estimated_runtime_minutes": 14.4,
+  "script_segments": [
+    { "id": "seg_2", "title": " Segment two ", "narrator_text": " Body segment " },
+    { "id": "intro", "title": " Intro ", "narrator_text": " Welcome in " },
+    { "title": " Segment three ", "narrator_text": " Third segment " },
+    { "id": "bad", "narrator_text": "" }
+  ],
+  "sources_acknowledged": ["https://example.com/a", 123, "https://example.com/b"],
+  "outro_cta": "  Thanks for listening  "
+}
+\`\`\``,
+        },
+      ],
+    });
+
+    const req = makeJsonRequest(
+      "http://localhost:3000/api/content-products/podcast-script",
+      { content_json: { title: "Override title", links: ["https://example.com/a"] } }
+    );
+    const res = await postPodcastScript(req);
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.script).toEqual({
+      working_title: "Episode title",
+      estimated_runtime_minutes: 14,
+      script_segments: [
+        { id: "intro", title: "Intro", narrator_text: "Welcome in" },
+        { id: "seg_2", title: "Segment two", narrator_text: "Body segment" },
+        { id: "seg_3", title: "Segment three", narrator_text: "Third segment" },
+      ],
+      sources_acknowledged: ["https://example.com/a", "https://example.com/b"],
+      outro_cta: "Thanks for listening",
+    });
+    expect(json.grounding).toEqual({
+      resolvedCount: 1,
+      unmatchedCount: 1,
+    });
+    expect(mockLoadDraftContentJson).not.toHaveBeenCalled();
   });
 
   it("returns 404 when there are no active revenue items", async () => {
