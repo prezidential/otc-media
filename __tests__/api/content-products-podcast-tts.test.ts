@@ -35,11 +35,13 @@ beforeEach(() => {
     episodeId: "ep-1",
     storagePath: "ws-123/ep-1.mp3",
   });
-  mockFetch.mockResolvedValue(
-    new Response(Uint8Array.from([1, 2, 3]), {
-      status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    })
+  mockFetch.mockImplementation(() =>
+    Promise.resolve(
+      new Response(Uint8Array.from([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg" },
+      })
+    )
   );
 });
 
@@ -87,11 +89,13 @@ describe("POST /api/content-products/podcast-tts", () => {
       voiceId: "brand-voice",
       modelId: "brand-model",
     });
-    mockFetch.mockResolvedValue(
-      new Response(Uint8Array.from([7, 8]), {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg" },
-      })
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(Uint8Array.from([7, 8]), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        })
+      )
     );
     const longText = Array.from({ length: 420 }, () => "token").join(" ");
 
