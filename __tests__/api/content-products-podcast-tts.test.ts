@@ -69,11 +69,13 @@ describe("POST /api/content-products/podcast-tts", () => {
       modelId: "brand-model",
     });
 
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(Uint8Array.from([1, 2, 3]), {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg" },
-      })
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(Uint8Array.from([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        })
+      )
     );
     globalThis.fetch = fetchMock as typeof fetch;
 
@@ -113,11 +115,13 @@ describe("POST /api/content-products/podcast-tts", () => {
       episodeId: "episode-9",
     });
 
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(Uint8Array.from([9, 9]), {
-        status: 200,
-        headers: { "Content-Type": "audio/mpeg" },
-      })
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(Uint8Array.from([9, 9]), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        })
+      )
     );
     globalThis.fetch = fetchMock as typeof fetch;
 
