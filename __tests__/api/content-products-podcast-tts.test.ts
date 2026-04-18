@@ -63,9 +63,9 @@ beforeEach(() => {
 
 describe("POST /api/content-products/podcast-tts", () => {
   it("chunks long narration and merges returned audio in order", async () => {
-    const paraA = "A".repeat(380);
-    const paraB = "B".repeat(380);
-    const paraC = "C".repeat(380);
+    const paraA = "A".repeat(370);
+    const paraB = "B".repeat(370);
+    const paraC = "C".repeat(370);
     const fullText = `${paraA}\n\n${paraB}\n\n${paraC}`;
 
     const fetchMock = mockAudioFetch([
