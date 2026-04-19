@@ -113,7 +113,7 @@ describe("persistPodcastEpisodeAfterTts", () => {
   });
 
   it("saves script, uploads audio, and marks episode audio_ready", async () => {
-    const { supabase, issueDraftsChain, insertChain, updateCalls, upload } = createSupabaseMock({
+    const { supabase, issueDraftsChain, podcastEpisodesChain, updateCalls, upload } = createSupabaseMock({
       draftQuery: {
         data: { id: "draft-1", brand_profile_id: "bp-7" },
         error: null,
@@ -143,7 +143,7 @@ describe("persistPodcastEpisodeAfterTts", () => {
       storagePath: "ws-1/episode-9.mp3",
     });
     expect(issueDraftsChain.eq).toHaveBeenCalledWith("id", "draft-1");
-    expect(insertChain.insert).toHaveBeenCalledWith(
+    expect(podcastEpisodesChain.insert).toHaveBeenCalledWith(
       expect.objectContaining({
         workspace_id: "ws-1",
         issue_draft_id: "draft-1",
