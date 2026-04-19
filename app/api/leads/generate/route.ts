@@ -52,9 +52,11 @@ export async function POST(req: Request) {
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
   if (!brandProfile) return NextResponse.json({ error: "Brand profile not found" }, { status: 404 });
 
-  const { id: _id, name: profileName, ...rest } = brandProfile;
+  const profileName = brandProfile.name;
   const jsonFields: Record<string, unknown> = Object.fromEntries(
-    Object.entries(rest).filter(([, v]) => v !== null && v !== undefined)
+    Object.entries(brandProfile).filter(
+      ([k, v]) => k !== "id" && k !== "name" && v !== null && v !== undefined
+    )
   );
   const systemPrompt = buildBrandSystemPrompt(profileName ?? "Default", jsonFields);
 

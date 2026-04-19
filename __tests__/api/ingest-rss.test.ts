@@ -50,7 +50,7 @@ describe("POST /api/ingest/rss", () => {
   });
 
   it("ingests RSS feed and returns counts", async () => {
-    const chain = mockSupabase._setResult("sources", { data: { id: "src-1" }, error: null });
+    mockSupabase._setResult("sources", { data: { id: "src-1" }, error: null });
     const signalsChain = mockSupabase._setResult("signals", { data: null, error: null });
     // Make insert on signals succeed (no error)
     signalsChain.insert = vi.fn().mockResolvedValue({ error: null });

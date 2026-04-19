@@ -1,7 +1,13 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { type AgentDefinition, type AgentTool } from "./framework";
+import type { BalanceSummary } from "@/lib/ace/lane-balance";
 
-function createEditorTools(workspaceId: string): AgentTool[] {
+export type EditorAgentOptions = {
+  laneBalanceContext?: BalanceSummary;
+};
+
+function createEditorTools(workspaceId: string, opts: EditorAgentOptions = {}): AgentTool[] {
+  const laneBalanceContext = opts.laneBalanceContext;
   return [
     {
       name: "get_approved_leads",
@@ -10,7 +16,7 @@ function createEditorTools(workspaceId: string): AgentTool[] {
         const supabase = supabaseAdmin();
         const { data: leads } = await supabase
           .from("editorial_leads")
-          .select("id, angle, why_now, who_it_impacts, contrarian_take, confidence_score, created_at")
+          .select("id, angle, why_now, who_it_impacts, contrarian_take, confidence_score, created_at, content_lane_id")
           .eq("workspace_id", workspaceId)
           .eq("status", "approved")
           .order("created_at", { ascending: false })
@@ -24,6 +30,7 @@ function createEditorTools(workspaceId: string): AgentTool[] {
           why_now: l.why_now,
           who_it_impacts: l.who_it_impacts,
           confidence: l.confidence_score,
+          content_lane_id: l.content_lane_id ?? null,
         }));
 
         return { count: leads.length, leads: summaries, sufficient: leads.length >= 3 };
@@ -63,12 +70,18 @@ function createEditorTools(workspaceId: string): AgentTool[] {
     },
     {
       name: "generate_newsletter_draft",
-      description: "Generate the full newsletter draft using the selected steering parameters and output mode. Provide brandProfileId, aggressionLevel, audienceLevel, focusArea, toneMode, outputMode (full_issue or bundle), and leadLimit (max leads to use).",
+      description:
+        "Generate the full newsletter draft using the selected steering parameters and output mode. Provide brandProfileId, aggressionLevel, audienceLevel, focusArea, toneMode, outputMode (full_issue or bundle), and leadLimit (max leads to use). Optional: contentLaneId (UUID of the primary content lane for this issue, from workspace lane list) when lane balance context calls for prioritizing a lane.",
       execute: async (params) => {
         let origin = "http://localhost:3000";
         try {
           if (process.env.VERCEL_URL) origin = `https://${process.env.VERCEL_URL}`;
         } catch { /* keep default */ }
+
+        const contentLaneId =
+          typeof params.contentLaneId === "string" && params.contentLaneId.trim().length > 0
+            ? params.contentLaneId.trim()
+            : undefined;
 
         const res = await fetch(`${origin}/api/issues/generate`, {
           method: "POST",
@@ -81,6 +94,8 @@ function createEditorTools(workspaceId: string): AgentTool[] {
             toneMode: params.toneMode ?? "strategic",
             outputMode: params.outputMode ?? "full_issue",
             leadLimit: params.leadLimit ?? 8,
+            ...(contentLaneId && { contentLaneId }),
+            ...(laneBalanceContext && { laneBalanceContext }),
           }),
         });
 
@@ -93,6 +108,7 @@ function createEditorTools(workspaceId: string): AgentTool[] {
         return {
           success: true,
           stored: data.stored ?? false,
+          draft_id: typeof data.draftId === "string" ? data.draftId : undefined,
           title: data.draft?.match(/\*\*(.+?)\*\*/)?.[1] ?? "Unknown",
           draft_length: data.draft?.length ?? 0,
           has_insider: !!data.insiderDraft,
@@ -134,7 +150,7 @@ function createEditorTools(workspaceId: string): AgentTool[] {
   ];
 }
 
-export function createEditorAgent(workspaceId: string): AgentDefinition {
+export function createEditorAgent(workspaceId: string, opts: EditorAgentOptions = {}): AgentDefinition {
   return {
     id: "editor",
     name: "Editor Agent",
@@ -153,7 +169,7 @@ Your workflow:
    - audience: match who the leads impact most
    - focus: match the dominant theme (vendor analysis → strategic, how-to → tactical, system design → architecture)
    - tone: match the editorial posture (challenging claims → confrontational, explaining trends → analytical)
-5. Call generate_newsletter_draft with your steering choices and the brand profile ID from the leads data.
+5. Call generate_newsletter_draft with your steering choices and the brand profile ID from the leads data. If lane balance context is present in the run context and innerRingFloorMet is false, pass contentLaneId for an inner-ring lane that appears in the approved leads list when you select one as the thematic anchor.
 6. Signal done with a summary of what you produced and why.
 
 Editorial principles:
@@ -161,7 +177,7 @@ Editorial principles:
 - The newsletter title must be specific and provocative, never generic.
 - Insider Access is premium. Don't produce it just because you can — produce it when the material deserves it.
 - Every editorial choice should have a reason.`,
-    tools: createEditorTools(workspaceId),
+    tools: createEditorTools(workspaceId, opts),
     maxIterations: 10,
   };
 }

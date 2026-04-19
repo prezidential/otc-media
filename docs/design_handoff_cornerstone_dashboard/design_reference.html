@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Cornerstone OS — Dashboard Directions</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Bricolage+Grotesque:opsz,wght@12..96,400..900&family=Geist:wght@300..700&family=JetBrains+Mono:wght@400;500;600&family=Archivo:wght@400..900&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; overflow: hidden; font-family: 'Geist', system-ui, sans-serif; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="components/SharedData.jsx"></script>
+<script type="text/babel" src="components/DirStudio.jsx"></script>
+<script type="text/babel" src="components/DirAtelier.jsx"></script>
+<script type="text/babel" src="components/DirWorkshop.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+/*EDITMODE-BEGIN*/
+const TWEAKS_DEFAULTS = {
+  "dark_studio": false,
+  "dark_atelier": true,
+  "dark_workshop": false
+};
+/*EDITMODE-END*/
+
+function App() {
+  const [tweakOn, setTweakOn] = React.useState(false);
+  const [state, setState] = React.useState(TWEAKS_DEFAULTS);
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const d = e.data || {};
+      if (d.type === '__activate_edit_mode') setTweakOn(true);
+      if (d.type === '__deactivate_edit_mode') setTweakOn(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const setKey = (k, v) => {
+    setState(s => {
+      const next = { ...s, [k]: v };
+      window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [k]: v } }, '*');
+      return next;
+    });
+  };
+
+  // Artboard dims — hi-fi dashboard canvas
+  const W = 1380, H = 880;
+
+  return (
+    <>
+      <DesignCanvas>
+        <div style={{ padding: '30px 60px 12px', maxWidth: 1100 }}>
+          <div style={{
+            fontFamily: "'Instrument Serif', Georgia, serif",
+            fontSize: 46, lineHeight: 1, letterSpacing: -1,
+            color: '#1f1a14', marginBottom: 10,
+          }}>
+            Cornerstone OS — <span style={{ fontStyle: 'italic' }}>three dashboard directions.</span>
+          </div>
+          <div style={{
+            fontSize: 14, color: 'rgba(60,50,40,0.72)', maxWidth: 780, lineHeight: 1.55,
+            fontFamily: "'Geist', system-ui, sans-serif",
+          }}>
+            Brief: a calm, creative, SaaS-ready home for the creator's workflow (Research → Leads → Issues → Outlines).
+            All three share the same warm-earth palette family — cream, espresso, saffron, sage — but differ in temperature,
+            density, and voice. Each is built as a working dashboard: ingest a feed, run a research directive, approve a lead,
+            filter signals, hover for a promote shortcut. Toggle <b>Tweaks</b> (top-right) to flip each board light/dark.
+          </div>
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'rgba(60,50,40,0.55)',
+            letterSpacing: 1.5, textTransform: 'uppercase', marginTop: 14,
+          }}>
+            Type: Instrument Serif · Bricolage Grotesque · Geist · JetBrains Mono
+          </div>
+        </div>
+
+        <DCSection
+          title="Direction 1 — Studio"
+          subtitle="Warm editorial cream. Instrument Serif display, calm rhythm, whitespace-forward. For the writer's studio."
+        >
+          <DCArtboard label="Dashboard · Studio" width={W} height={H}>
+            <Studio dark={state.dark_studio} />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection
+          title="Direction 2 — Atelier"
+          subtitle="Dark-warm by default. Espresso + amber, live status indicators, streaming research console. For late-night work."
+        >
+          <DCArtboard label="Dashboard · Atelier" width={W} height={H}>
+            <Atelier dark={state.dark_atelier} />
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection
+          title="Direction 3 — Workshop"
+          subtitle="Indie-press zine energy. Bold Fraser/Archivo display, saffron sidebar, printed-block pipeline. For the editorial workbench."
+        >
+          <DCArtboard label="Dashboard · Workshop" width={W} height={H}>
+            <Workshop dark={state.dark_workshop} />
+          </DCArtboard>
+        </DCSection>
+
+        <DCPostIt top={40} left={1460} rotate={3} width={210}>
+          Each direction is fully interactive: click Ingest feed, hit Run now on the research directive, filter by topic, hover a signal to promote.
+        </DCPostIt>
+        <DCPostIt top={960} left={1460} rotate={-2} width={200}>
+          Atelier default: dark. Studio + Workshop default: light. Try Tweaks to flip any of them.
+        </DCPostIt>
+      </DesignCanvas>
+
+      {tweakOn && (
+        <div style={{
+          position: 'fixed', bottom: 20, right: 20, width: 260,
+          background: '#1F1A14', color: '#F5EFE4', borderRadius: 12,
+          padding: '16px 18px', fontFamily: "'Geist', system-ui, sans-serif",
+          boxShadow: '0 20px 50px rgba(0,0,0,0.35)', zIndex: 100,
+        }}>
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+            letterSpacing: 2, textTransform: 'uppercase', opacity: 0.6, marginBottom: 10,
+          }}>Tweaks</div>
+          {[
+            ['dark_studio', 'Studio'],
+            ['dark_atelier', 'Atelier'],
+            ['dark_workshop', 'Workshop'],
+          ].map(([k, label]) => (
+            <label key={k} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '8px 0', fontSize: 13, cursor: 'pointer',
+              borderBottom: '1px solid rgba(245,239,228,0.08)',
+            }}>
+              <span>{label} — dark mode</span>
+              <div onClick={() => setKey(k, !state[k])} style={{
+                width: 34, height: 20, borderRadius: 999,
+                background: state[k] ? '#E8A24A' : 'rgba(245,239,228,0.15)',
+                position: 'relative', transition: 'background 150ms',
+              }}>
+                <div style={{
+                  position: 'absolute', top: 2, left: state[k] ? 16 : 2,
+                  width: 16, height: 16, borderRadius: 999,
+                  background: '#FBF7EE', transition: 'left 150ms',
+                }} />
+              </div>
+            </label>
+          ))}
+          <div style={{ fontSize: 11, opacity: 0.55, marginTop: 10, lineHeight: 1.5 }}>
+            Flip each direction between light and dark to compare.
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

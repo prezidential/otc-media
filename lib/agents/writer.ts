@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { callLLM } from "@/lib/llm/provider";
-import { LeadsOutputSchema, type LeadItem } from "@/lib/leads/leadSchema";
+import { LeadsOutputSchema } from "@/lib/leads/leadSchema";
 import { type AgentDefinition, type AgentTool } from "./framework";
 
 function createWriterTools(workspaceId: string, brandProfileId: string): AgentTool[] {

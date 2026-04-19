@@ -5,6 +5,7 @@ import { createResearcherAgent } from "@/lib/agents/researcher";
 import { createWriterAgent } from "@/lib/agents/writer";
 import { createEditorAgent } from "@/lib/agents/editor";
 import { saveAgentRun } from "@/lib/agents/persistence";
+import type { BalanceSummary } from "@/lib/ace/lane-balance";
 
 type PipelineStage = "researcher" | "writer" | "editor";
 
@@ -12,6 +13,8 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const stages = (body.stages as PipelineStage[] | undefined) ?? ["researcher", "writer", "editor"];
   const triggeredBy = (body.triggered_by as string) ?? "manual";
+  const returnDraftId = Boolean(body.returnDraftId);
+  const laneBalanceContext = body.laneBalanceContext as BalanceSummary | undefined;
 
   const workspaceId = process.env.WORKSPACE_ID!;
   const supabase = supabaseAdmin();
@@ -27,6 +30,7 @@ export async function POST(req: Request) {
 
   const results: Record<string, { success: boolean; summary: string; decisions: string[]; data: Record<string, unknown> }> = {};
   let aborted = false;
+  let draftId: string | undefined;
 
   for (const stage of stages) {
     if (aborted) break;
@@ -47,7 +51,7 @@ export async function POST(req: Request) {
         results[stage] = { success: false, summary: "No brand profile found", decisions: [], data: {} };
         continue;
       }
-      agent = createEditorAgent(workspaceId);
+      agent = createEditorAgent(workspaceId, { laneBalanceContext });
     } else {
       continue;
     }
@@ -57,6 +61,9 @@ export async function POST(req: Request) {
       triggered_by: triggeredBy,
       brand_profile_id: brandProfileId,
     };
+    if (stage === "editor" && laneBalanceContext) {
+      context.laneBalanceContext = laneBalanceContext;
+    }
 
     const result = await runAgent(agent, context);
 
@@ -85,6 +92,13 @@ export async function POST(req: Request) {
     if (!result.success) {
       aborted = true;
     }
+
+    if (returnDraftId && stage === "editor") {
+      const gen = result.data?.generate_newsletter_draft as { draft_id?: string } | undefined;
+      if (typeof gen?.draft_id === "string") {
+        draftId = gen.draft_id;
+      }
+    }
   }
 
   const allSuccess = Object.values(results).every((r) => r.success);
@@ -93,5 +107,6 @@ export async function POST(req: Request) {
     ok: allSuccess,
     stages: results,
     aborted,
+    ...(returnDraftId ? { draftId: draftId ?? null } : {}),
   });
 }

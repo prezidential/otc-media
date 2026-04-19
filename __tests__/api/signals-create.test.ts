@@ -23,7 +23,7 @@ describe("POST /api/signals/create", () => {
   });
 
   it("creates a manual signal with just a title", async () => {
-    const chain = mockSupabase._setResult("signals", {
+    mockSupabase._setResult("signals", {
       data: { title: "Manual topic", publisher: "Manual Entry", url: "manual://abc" },
       error: null,
     });

@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.7
+## System Specification v2.8
 
 Owner: OnTheCorner Media  
-Module: Newsroom Engine + LinkedIn Module  
+Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.6 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
+Supersedes: v2.7 (sections marked **[REVISED]** replace prior equivalents; sections marked **[NEW]** are additive)
 
 ---
 
@@ -23,6 +23,7 @@ It must:
 - Prepare publish-ready drafts across multiple output channels
 - Support multiple creators via workspace-scoped configuration
 - **Operate as a team of specialized agents, not a sequence of button clicks**
+- **Optional autonomous loop (ACE)** — scheduled Research → Leads → Draft with **human approval outside the app** (e.g. Telegram) before publish — §3.14
 
 It is infrastructure, not a chatbot. It is a product, not a single-creator tool. It is a newsroom, not a prompt template.
 
@@ -610,6 +611,80 @@ flowchart LR
 
 ---
 
+## 3.14 Autonomous Content Engine (ACE) **[NEW in v2.8]**
+
+**Product intent:** Extend Cornerstone with a **minimal-touch publishing loop**: Research → Leads → Draft → **external approval** → Publish, so the creator is not required to operate the app for every run. **Phase 1 (ACE):** newsletter pipeline + **Telegram** as the first approval surface; **LinkedIn distribution** is deferred to ACE Phase 2.
+
+**Human gate:** One tap in Telegram (**Approve** / **Reject**) on a rendered draft preview before Beehiiv (or equivalent) publish proceeds.
+
+**Architecture — notifications (normative):**
+
+1. All outbound/inbound notification behavior goes through a pluggable **`NotificationProvider`** interface (`lib/notifications/provider.ts`). **No Telegram-specific logic** outside `lib/notifications/providers/telegram.ts` (and the webhook route’s provider dispatch).
+2. Inbound webhooks use a single pattern: **`POST /api/notifications/webhook/[provider]`** (e.g. `telegram` today; `slack` / others later).
+3. **`notification_approvals`** stores approval rows in a **provider-agnostic** shape (`provider`, `entity_type`, `entity_id`, `provider_message_ref`, `status`, `preview_text`, timestamps, `expires_at`).
+
+**Persistence (normative SQL artifacts — apply in Supabase):**
+
+| Artifact | Purpose |
+|----------|---------|
+| `lib/supabase/schema-notification-approvals.sql` | `notification_approvals` — pending/approved/rejected/expired lifecycle |
+| `lib/supabase/schema-content-lanes.sql` | `content_lanes` (workspace lanes: ring, cadence, topics) + **`issue_drafts.content_lane_id`**, **`editorial_leads.content_lane_id`** |
+| `lib/supabase/schema-ace-runs.sql` | `ace_runs` — per-run status, linkage to `issue_drafts`, `notification_approvals`, optional `pipeline_run_id` |
+
+**ACE orchestration:**
+
+- **`lib/ace/orchestrator.ts`** — `runAce({ workspaceId, trigger, stages?, forceRerun? })` wraps **`POST /api/pipeline/run`**, applies pre-flight guards (ACE enabled, no duplicate pending approval, staleness window unless `forceRerun`), creates `ace_runs`, sends approval via provider when a draft is produced.
+- **`lib/ace/lane-balance.ts`** — `getLaneBalance`, `enforceInnerRingFloor` (50% **inner ring** floor over trailing window); summary passed to the pipeline as **`laneBalanceContext`** so the Editor can bias lane selection.
+- **Cron:** `POST /api/ace/cron` — Bearer **`CRON_SECRET`**; safe to return 200 with `skipped` when disabled.
+- **Manual:** `POST /api/ace/run` — dashboard or ops trigger.
+- **Dashboard:** `app/ace/page.tsx` (nav: **ACE**) — last run, approval queue, lane balance, “Run ACE now”, recent `ace_runs`.
+
+**Pipeline contract extensions (additive, non-breaking):**
+
+- **`POST /api/pipeline/run`** accepts optional **`returnDraftId`** (response includes generated **`draftId`** when true) and optional **`laneBalanceContext`** (forwarded into Editor context).
+- **`lib/agents/editor.ts`** uses `laneBalanceContext` when present (inner-ring floor, highest-priority lane), and persists **`content_lane_id`** on `issue_drafts` when resolved.
+- **Publish path:** after successful **`/api/publish/beehiiv`**, resolve related **`ace_runs`** / approval rows and send provider **status** updates as specified in the ACE checklist.
+
+**Content lanes seed:** `POST /api/content-lanes/seed` — idempotent default lanes for the workspace (see ACE doc for default lane set; no hardcoded workspace id).
+
+**Configuration (env):** `ACE_ENABLED`, `NOTIFICATION_PROVIDER`, Telegram vars (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`), **`CRON_SECRET`**, Railway cron + webhook registration — detailed in **`docs/Cornerstone-OS-ACE.md`**.
+
+**Execution checklist:** Step-by-step implementation order, TypeScript type sketches, Telegram message formats, webhook behavior, and **required test file list** are maintained in **`docs/Cornerstone-OS-ACE.md`** §14–§16 so this system spec stays the **single narrative** while the ACE doc remains the **agent execution appendix**.
+
+**Out of scope (ACE Phase 1):** LinkedIn draft ACE path; multi-tenant per-workspace provider config (Phase 2); Slack/email/SMS providers; performance-driven lane weighting.
+
+---
+
+## 3.15 Dashboard home — Studio UX contract **[NEW in v2.8]**
+
+**Design package:** `docs/design_handoff_cornerstone_dashboard/` — `README.md` (normative component + token spec), `design_reference.html` (interactive canvas; **three directions**), `DirStudio.jsx` / `SharedData.jsx` (reference prototypes only, not production code).
+
+**Normative direction:** **Direction 1 — Studio** is the **default product contract** for the **creator home dashboard**: warm cream palette, **Instrument Serif** display + **Geist** UI + **JetBrains Mono** metadata, 230px sidebar + fluid main, high-fidelity spacing and radii per the handoff README.
+
+**Information architecture (Studio):**
+
+| Region | Responsibility |
+|--------|------------------|
+| **Sidebar** | Logo lockup, **7 nav destinations** (Dashboard, Signals, Leads, Issues, Outlines, Brand, Research), optional count badges, **daily summary** strip (signals ingested / leads to approve / issues drafting) |
+| **Header** | Time-of-day greeting + dynamic motivational line; **⌘K Search**; **+ New issue** CTA |
+| **Pipeline rail** | Four-step **Research → Leads → Issues → Outlines** counts + sub-labels; **“NEEDS YOU”** emphasis on the stage blocking the creator |
+| **2-col grid** | **Ingest feed** card (URL input, progress, recent feed chips) + **“The Cornerstone”** nudge card (priority action, Review / Snooze) |
+| **Signals list** | Topic filters, heat bars, row hover → **Promote to lead** |
+
+**Backend expectations:**
+
+- **`GET /api/dashboard/stats`** — pipeline counts, sidebar summary, nudge payload (implemented).
+- **`GET /api/search?q=`** — workspace-scoped command palette: matches **navigation**, **signals** (title/publisher), **editorial leads** (angle), **issue drafts** (`content` text), **content outlines** (name).
+- **Signals API** exposes optional **`heat`** (recency-derived) for dashboard signal rows.
+- **Greeting / nudge copy** is **server-computed** from pending work (`lib/dashboard/stats`).
+- **Snooze** (24h) for the nudge card: **client `localStorage`** per browser (`studio_nudge_snooze_until`); server persistence remains optional polish.
+
+**Routing / chrome (normative):** **`/` redirects to `/dashboard`**. **Studio shell** (`StudioAppShell` — cream tokens, 230px sidebar, Instrument Serif + Geist Mono, daily summary, **⌘K / Ctrl+K** command palette) wraps **all** primary app routes. Full-page **Signals** tools live at **`/signals`** under the same shell. Legacy dark-only sidebar layout is **removed** in favor of Studio as the default UX.
+
+**Non-normative directions:** **Atelier** and **Workshop** in `design_reference.html` are exploratory; they do not block shipping Studio.
+
+---
+
 # 4. Brand Profile Schema
 _Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
@@ -685,7 +760,7 @@ Stretch:
 | QoL — bulk lead actions | Implemented | Approve All / Dismiss All |
 | QoL — draft comparison | Implemented | Side-by-side compare view |
 | Test suite | Implemented | 171+ tests |
-| UI | Implemented | Dark theme, sidebar nav, full feature access |
+| UI | Implemented | **Studio** default shell (§3.15): cream chrome, sidebar + command search; feature pages retain shadcn/dark semantic surfaces inside the main column until token unification |
 | **Content products — Social snippets API** | **Implemented** | `POST /api/content-products/social-snippets`; returns structured `snippets` JSON |
 | **Content products — Social snippets UI** | **Implemented** | Issues Phase 2: formatted X / LinkedIn / Threads panels, counts, copy, optional raw JSON — §3.11 |
 | **Content products — Podcast outline API** | **Implemented** | `POST /api/content-products/podcast-outline` (legacy beats outline) |
@@ -695,6 +770,9 @@ Stretch:
 | **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
 | **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
 | **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
+| **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
+| **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
+| **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
 
 **Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
 
@@ -703,6 +781,8 @@ Stretch:
 **Note (v2.6):** §3.11 **Social snippets** documents **brand-profile** injection, **`brandProfileId`**, and **anti-collapse** generation (temperature / rotation). **§3.12** captures **content hub** intent, **Claude app vs API** quality gap, **stateless calls + our DB as source of truth**, **RAG posture**, and the **P1–P3** next-step table.
 
 **Note (v2.7):** **§3.13 Brainstorming Hub** and **Brainstormer Agent** (§3.1) specify conversational ideation, **workspace-scoped** signal access, **ingest/manual-signal** research loops, **promotion** to **`DraftObject`** for Issues + content products, and **new** **`BlogDraftObject`** / blog API. See §8 Phase 2C.
+
+**Note (v2.8):** **§3.14 ACE** (Telegram approval gate, content lanes, `ace_runs`, cron/manual triggers) and **§3.15 Dashboard Studio UX** (home dashboard design contract) are additive. ACE step-by-step build order lives in **`docs/Cornerstone-OS-ACE.md`**. Studio visual reference: **`docs/design_handoff_cornerstone_dashboard/README.md`**. **Studio shell is the default app chrome** (sidebar + **`GET /api/search`** command palette **⌘K / Ctrl+K**); **`/`** redirects to **`/dashboard`**.
 
 ---
 
@@ -716,7 +796,19 @@ Stretch:
 - **Landed:** agent run persistence via **`runs`** (`run_type` prefix `agent:`)
 - **Hardening:** structured errors, clearer stage contracts, optional abort / human gate between stages; formalize `runs` contract in UI filters or migrate to **`agent_runs`** if queries outgrow `runs`
 - **Autonomy:** Research → Leads should run on a schedule or events; **human gate at lead approval** remains non-negotiable
-- **Remaining:** **pipeline status dashboard** (agent run history, failures, last trigger) — beyond the Research console “run pipeline” control
+- **Remaining:** **pipeline status dashboard** (agent run history, failures, last trigger) — beyond the Research console “run pipeline” control; may partially overlap **ACE dashboard** (§3.14) — unify or separate at implementation.
+
+### Phase 1B — Autonomous Content Engine (ACE) **[NEW in v2.8]**
+
+- **Spec:** §3.14; **checklist:** `docs/Cornerstone-OS-ACE.md`
+- **MVP:** `notification_approvals`, `content_lanes`, `ace_runs` schemas; `NotificationProvider` + Telegram provider; webhook route; `runAce` orchestrator; lane balance + pipeline `returnDraftId` / `laneBalanceContext`; `/api/ace/cron`, `/api/ace/run`; `/ace` dashboard; Beehiiv publish hooks + Telegram status messages; Railway cron + env wiring.
+- **Later (ACE Phase 2):** LinkedIn via ACE; additional providers; per-workspace provider config; performance-informed lane weighting.
+
+### Phase 1C — Dashboard home (Studio) **[NEW in v2.8]**
+
+- **Spec:** §3.15; **reference:** `docs/design_handoff_cornerstone_dashboard/`
+- **Landed (MVP):** Studio shell app-wide; `/` → `/dashboard`; dashboard page + `/signals`; **`GET /api/dashboard/stats`**; **`GET /api/search`**; command palette (**⌘K / Ctrl+K**); promote-to-lead with inline success on dashboard.
+- **Polish:** Per-user snooze persistence; optional **Studio token pass** on inner pages (Issues, Leads, etc.) so main column matches handoff cream panels end-to-end; dark mode (`cornerstone_dark`) if product requires theme toggle.
 
 ## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products
 
@@ -769,4 +861,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.7
+End of Specification v2.8
