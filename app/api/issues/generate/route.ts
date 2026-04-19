@@ -12,6 +12,10 @@ import {
 import { fillTemplate, type InsiderOutlineSpec } from "@/lib/content-outlines/types";
 import { resolveInsiderOutline, resolveNewsletterOutline } from "@/lib/content-outlines/fetch-outline";
 import { assertOutlineUsableForGenerate } from "@/lib/content-outlines/outline-access";
+import {
+  sortApprovedLeadsForLaneContext,
+  type BalanceSummary,
+} from "@/lib/ace/lane-balance";
 
 function extractSourcesFromContrarianTake(contrarian_take: string): string[] {
   const match = contrarian_take.match(/\n\nSources:\s*\n([\s\S]*?)(?=\n\n|$)/i) || contrarian_take.match(/Sources:\s*\n([\s\S]*?)(?=\n\n|$)/i);
@@ -52,6 +56,18 @@ function safeJsonParse<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+function parseLaneBalanceContext(raw: unknown): BalanceSummary | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.innerRingFloorMet !== "boolean") return undefined;
+  if (!Array.isArray(o.lanes)) return undefined;
+  const hp = o.highestPriorityLane;
+  if (!hp || typeof hp !== "object") return undefined;
+  const h = hp as Record<string, unknown>;
+  if (typeof h.laneId !== "string" || typeof h.slug !== "string" || typeof h.laneName !== "string") return undefined;
+  return o as BalanceSummary;
 }
 
 /** Phrases from a legacy prompt template; reinforced at generate time so DB outlines that still echo them are corrected. */
@@ -551,6 +567,12 @@ export async function POST(req: Request) {
   const workspaceId = process.env.WORKSPACE_ID!;
   const supabase = supabaseAdmin();
 
+  const contentLaneId =
+    typeof body.contentLaneId === "string" && body.contentLaneId.trim().length > 0
+      ? body.contentLaneId.trim()
+      : undefined;
+  const laneBalanceContext = parseLaneBalanceContext(body.laneBalanceContext);
+
   const { data: brandProfile, error: profileError } = await supabase
     .from("brand_profiles")
     .select("id,name,voice_rules_json,formatting_rules_json,forbidden_patterns_json,cta_rules_json,emoji_policy_json,narrative_preferences_json")
@@ -642,9 +664,9 @@ export async function POST(req: Request) {
     }
   }
 
-  const { data: allApproved, error: leadsError } = await supabase
+  const { data: allApprovedRaw, error: leadsError } = await supabase
     .from("editorial_leads")
-    .select("id,angle,why_now,who_it_impacts,contrarian_take,created_at")
+    .select("id,angle,why_now,who_it_impacts,contrarian_take,created_at,content_lane_id")
     .eq("workspace_id", workspaceId)
     .eq("status", "approved")
     .order("created_at", { ascending: false })
@@ -652,11 +674,27 @@ export async function POST(req: Request) {
 
   if (leadsError) return NextResponse.json({ error: leadsError.message }, { status: 500 });
 
-  if (!allApproved || allApproved.length === 0) {
+  if (!allApprovedRaw || allApprovedRaw.length === 0) {
     return NextResponse.json(
       { ok: false, error: "No approved leads available. Approve some leads first." },
       { status: 400 }
     );
+  }
+
+  let allApproved = allApprovedRaw;
+  if (laneBalanceContext) {
+    const { data: laneRows } = await supabase
+      .from("content_lanes")
+      .select("id, ring")
+      .eq("workspace_id", workspaceId);
+    const ringById = new Map<string, "inner" | "middle" | "outer">();
+    for (const row of laneRows ?? []) {
+      const r = row.ring;
+      if (r === "inner" || r === "middle" || r === "outer") {
+        ringById.set(row.id as string, r);
+      }
+    }
+    allApproved = sortApprovedLeadsForLaneContext(allApprovedRaw, ringById, laneBalanceContext);
   }
 
   const allLeadsWithSources = allApproved.map((lead, idx) => {
@@ -982,6 +1020,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
 
   let stored = false;
   let storeError: string | undefined;
+  let draftId: string | undefined;
   try {
     (contentJson as Record<string, unknown>).lead_ids = usedLeadIds;
     (contentJson as Record<string, unknown>).curation_rationale = curation.rationale;
@@ -992,18 +1031,26 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
       content: draftText,
       content_json: contentJson,
       ...(newsletterOutlineRowId && { content_outline_id: newsletterOutlineRowId }),
+      ...(contentLaneId && { content_lane_id: contentLaneId }),
     };
-    const { error: insertError } = await supabase.from("issue_drafts").insert(insertPayload);
-    if (!insertError) {
+    const { data: insertedDraft, error: insertError } = await supabase
+      .from("issue_drafts")
+      .insert(insertPayload)
+      .select("id")
+      .maybeSingle();
+    if (!insertError && insertedDraft?.id) {
       stored = true;
+      draftId = insertedDraft.id as string;
       await supabase
         .from("editorial_leads")
         .update({ status: "drafted" })
         .eq("workspace_id", workspaceId)
         .in("id", usedLeadIds);
     } else {
-      storeError = insertError.message;
-      opsLog("issue_drafts.insert_failed", { brand_profile_id: brandProfileId, detail: insertError.message }, "warn");
+      storeError = insertError?.message;
+      if (insertError) {
+        opsLog("issue_drafts.insert_failed", { brand_profile_id: brandProfileId, detail: insertError.message }, "warn");
+      }
     }
   } catch (e) {
     storeError = e instanceof Error ? e.message : String(e);
@@ -1049,6 +1096,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
         draft: draftText,
         insiderDraft: insiderDraft || "(No content generated)",
         stored,
+        ...(draftId && { draftId }),
         ...(storeError && { storeError }),
         lintFixed,
         lintViolations,
@@ -1066,6 +1114,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
     ok: true,
     draft: draftText,
     stored,
+    ...(draftId && { draftId }),
     ...(storeError && { storeError }),
     lintFixed,
     lintViolations,

@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { isBeehiivEnabled, createBeehiivDraft } from "@/lib/publish/beehiiv";
 import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import type { DraftContentJson } from "@/lib/draft/content";
+import { getProviderFromEnv } from "@/lib/notifications/factory";
 
 export async function POST(req: Request) {
   if (!isBeehiivEnabled()) {
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
       htmlContent,
     });
 
-    return NextResponse.json({
+    const json = {
       ok: true,
       beehiiv: {
         id: result.id,
@@ -56,7 +57,48 @@ export async function POST(req: Request) {
         status: result.status,
         web_url: result.web_url,
       },
-    });
+    };
+
+    const { data: approvalRow } = await supabase
+      .from("notification_approvals")
+      .select("id")
+      .eq("entity_id", draftId)
+      .eq("entity_type", "newsletter_draft")
+      .eq("status", "approved")
+      .maybeSingle();
+
+    if (approvalRow?.id) {
+      const { data: aceRun } = await supabase
+        .from("ace_runs")
+        .select("id")
+        .eq("approval_id", approvalRow.id)
+        .maybeSingle();
+
+      if (aceRun?.id) {
+        await supabase
+          .from("ace_runs")
+          .update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+            summary: `Published to Beehiiv: ${result.title}`,
+          })
+          .eq("id", aceRun.id as string);
+
+        try {
+          const provider = getProviderFromEnv();
+          await provider.sendStatusUpdate({
+            level: "success",
+            title: "Published",
+            body: result.title,
+            url: result.web_url || undefined,
+          });
+        } catch {
+          /* notifications optional */
+        }
+      }
+    }
+
+    return NextResponse.json(json);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

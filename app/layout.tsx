@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import { AppSidebar } from "./components/app-sidebar";
+import { AppShell } from "./components/app-shell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,12 +34,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased`}
       >
-        <div className="flex min-h-screen">
-          <AppSidebar />
-          <main className="flex-1 lg:ml-60 min-h-screen">
-            {children}
-          </main>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
