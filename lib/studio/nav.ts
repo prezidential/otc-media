@@ -7,5 +7,6 @@ export const STUDIO_NAV = [
   { href: "/outlines", label: "Outlines", keywords: "templates" },
   { href: "/brand-profiles", label: "Brand", keywords: "voice profile" },
   { href: "/research", label: "Research", keywords: "directives pipeline" },
+  { href: "/brainstorm", label: "Brainstorm", keywords: "ideation chat signals hub" },
   { href: "/ace", label: "ACE", keywords: "autonomous telegram" },
 ] as const;

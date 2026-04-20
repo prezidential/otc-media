@@ -26,7 +26,8 @@ export type AgentRole =
   | "drafting"
   | "revision"
   | "lint"
-  | "linkedin";
+  | "linkedin"
+  | "brainstorm";
 
 type RoleConfig = {
   provider: LLMProvider;
@@ -130,6 +131,92 @@ export async function callLLM(
   }
 
   return { text, provider: config.provider, model: config.model };
+}
+
+async function* streamAnthropic(
+  model: string,
+  messages: LLMMessage[],
+  opts: LLMRequestOptions
+): AsyncGenerator<string> {
+  const client = getAnthropic();
+  const systemMsg = messages.find((m) => m.role === "system");
+  const nonSystem = messages.filter((m) => m.role !== "system");
+  const messageStream = client.messages.stream({
+    model,
+    max_tokens: opts.max_tokens ?? 4096,
+    ...(opts.temperature !== undefined && { temperature: opts.temperature }),
+    ...(systemMsg && { system: systemMsg.content }),
+    messages: nonSystem.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+  });
+
+  const queue: string[] = [];
+  let notify: (() => void) | null = null;
+  const waitChunk = () =>
+    new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+
+  messageStream.on("text", (delta: string) => {
+    queue.push(delta);
+    const n = notify;
+    notify = null;
+    n?.();
+  });
+
+  const settled = messageStream.finalText().then(
+    () => ({ ok: true as const }),
+    (err: unknown) => ({ ok: false as const, err })
+  );
+
+  for (;;) {
+    if (queue.length > 0) {
+      yield queue.shift()!;
+      continue;
+    }
+    const winner = await Promise.race([
+      waitChunk().then(() => "chunk" as const),
+      settled,
+    ]);
+    if (winner !== "chunk") {
+      if (!winner.ok) throw winner.err instanceof Error ? winner.err : new Error(String(winner.err));
+      while (queue.length > 0) yield queue.shift()!;
+      break;
+    }
+  }
+}
+
+async function* streamOpenAI(
+  model: string,
+  messages: LLMMessage[],
+  opts: LLMRequestOptions
+): AsyncGenerator<string> {
+  const client = getOpenAI();
+  const stream = await client.chat.completions.create({
+    model,
+    max_tokens: opts.max_tokens ?? 4096,
+    ...(opts.temperature !== undefined && { temperature: opts.temperature }),
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    stream: true,
+  });
+
+  for await (const chunk of stream) {
+    const t = chunk.choices[0]?.delta?.content;
+    if (t) yield t;
+  }
+}
+
+/** Token deltas for a single completion (same routing as `callLLM`). */
+export async function* streamLLM(
+  role: AgentRole,
+  messages: LLMMessage[],
+  opts: LLMRequestOptions = {}
+): AsyncGenerator<string> {
+  const config = getRoleConfig(role);
+  if (config.provider === "openai") {
+    yield* streamOpenAI(config.model, messages, opts);
+  } else {
+    yield* streamAnthropic(config.model, messages, opts);
+  }
 }
 
 export function getModelForRole(role: AgentRole): { provider: LLMProvider; model: string } {

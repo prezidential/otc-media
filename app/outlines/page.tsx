@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
+import { studioInner } from "@/lib/studio/inner-classes";
 import type { ContentOutlineApiRow } from "@/lib/content-outlines/api-serialize";
 import { DEFAULT_INSIDER_OUTLINE, DEFAULT_NEWSLETTER_OUTLINE } from "@/lib/content-outlines/default-specs";
 import {
@@ -247,60 +248,56 @@ export default function OutlinesPage() {
     }
   }
 
-  const inputClass =
-    "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed";
-  const selectClass =
-    "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors disabled:opacity-60";
+  const inputClass = cn(studioInner.input, "disabled:opacity-60 disabled:cursor-not-allowed");
+  const selectClass = cn(studioInner.select, "disabled:opacity-60");
 
   return (
-    <div className="p-6 lg:p-10 max-w-[1200px]">
+    <div className={studioInner.pageRootWide}>
       <PageHeader
+        variant="studio"
         title="Content outlines"
         description="Structured prompts for newsletter and Insider Access generation. Disabled outlines are kept for history but cannot be edited or re-enabled from the UI."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Link
-          href="/issues"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Link href="/issues" className={cn(studioInner.link, "inline-flex items-center gap-1 text-xs font-medium")}>
           <ChevronRight className="h-3.5 w-3.5 rotate-180" />
           Back to Issues
         </Link>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_1fr]">
-        <div className="rounded-xl border border-border bg-card p-4">
+      <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+        <div className={cn(studioInner.card, "!p-4")}>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Library</span>
+            <span className={studioInner.sectionLabel}>Library</span>
             <button
               type="button"
               onClick={() => openNew()}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
+              className={studioInner.btnPrimary + " !px-3 !py-1.5 !text-xs"}
             >
               <Plus className="h-3.5 w-3.5" />
               New outline
             </button>
           </div>
 
-          <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground select-none">
+          <label className={cn(studioInner.body, "mb-3 flex cursor-pointer items-center gap-2 text-xs select-none")}>
             <input
               type="checkbox"
               checked={includeDisabled}
               onChange={(e) => setIncludeDisabled(e.target.checked)}
-              className="rounded border-border"
+              className="rounded border-[#E4D9C2]"
             />
             Show disabled
           </label>
 
           {loadingList ? (
-            <div className="flex items-center justify-center py-12 text-muted-foreground">
+            <div className="flex items-center justify-center py-12 text-[#6B5F4E]">
               <Loader2 className="h-6 w-6 animate-spin" />
             </div>
           ) : listError ? (
             <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{listError}</div>
           ) : outlines.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">No outlines yet. Create one or seed from Issues.</div>
+            <div className="py-8 text-center text-sm text-[#6B5F4E]">No outlines yet. Create one or seed from Issues.</div>
           ) : (
             <ul className="space-y-1 max-h-[min(60vh,520px)] overflow-auto pr-1">
               {outlines.map((o) => {
@@ -312,21 +309,23 @@ export default function OutlinesPage() {
                       type="button"
                       onClick={() => openRow(o)}
                       className={cn(
-                        "w-full rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
-                        active ? "border-primary/50 bg-primary/5" : "border-transparent hover:bg-accent",
+                        "w-full border-l-[3px] py-3 pl-[18px] pr-[18px] text-left text-sm transition-colors",
+                        active
+                          ? "border-l-[#C8571E] bg-[#EBDFC5] text-[#1F1A14]"
+                          : "border-l-transparent hover:bg-[#EBDFC5]/50",
                         disabled && "opacity-70"
                       )}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <span className="font-medium text-foreground line-clamp-2">{o.name}</span>
+                        <span className="font-medium text-[#1F1A14] line-clamp-2">{o.name}</span>
                         {o.is_default && <span className="flex-shrink-0 font-mono text-[10px] text-primary">★</span>}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <span className="font-[family-name:var(--font-geist-mono)] text-[9px] uppercase tracking-[0.15em] text-[#6B5F4E]">
                           {kindLabel(o.kind)}
                         </span>
                         {disabled && (
-                          <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+                          <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">
                             Disabled
                           </span>
                         )}
@@ -339,29 +338,33 @@ export default function OutlinesPage() {
           )}
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-5 min-h-[320px]">
+        <div className={cn(studioInner.card, "min-h-[320px]")}>
           {!form ? (
-            <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground px-6">
-              <Newspaper className="h-10 w-10 opacity-30" />
-              <p>Select an outline or create a new one.</p>
+            <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-2 px-6 text-center">
+              <Newspaper className="h-10 w-10 text-[#C8571E]/25" />
+              <p className="font-[family-name:var(--font-instrument-serif)] text-lg italic text-[#6B5F4E]">
+                Select an outline from the library
+              </p>
+              <p className={studioInner.body}>Or create a new structured prompt template.</p>
             </div>
           ) : (
             <>
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold text-foreground">{isNew ? "New outline" : "Edit outline"}</h2>
+                  <h2 className="font-[family-name:var(--font-instrument-serif)] text-[22px] font-normal italic leading-tight text-[#1F1A14]">
+                    {isNew ? "New outline" : form.name || "Edit outline"}
+                  </h2>
+                  <p className="mt-1 font-[family-name:var(--font-geist-mono)] text-[10px] uppercase tracking-[0.16em] text-[#6B5F4E]">
+                    {kindLabel(form.kind)} · {isNew ? "unsaved" : "saved"}
+                  </p>
                   {isReadOnly && (
-                    <p className="mt-1 text-xs text-muted-foreground">
+                    <p className="mt-1 text-xs text-[#6B5F4E]">
                       This outline is disabled and cannot be edited. There is no restore action in this version.
                     </p>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={closePanel}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                  >
+                  <button type="button" onClick={closePanel} className={studioInner.btnSecondary + " !px-3 !py-2 !text-xs"}>
                     <X className="h-3.5 w-3.5" />
                     Close
                   </button>
@@ -371,7 +374,7 @@ export default function OutlinesPage() {
                         type="button"
                         onClick={() => void saveOutline()}
                         disabled={saving}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity"
+                        className={studioInner.btnPrimary + " !px-4 !py-2 !text-xs"}
                       >
                         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                         Save
@@ -381,7 +384,7 @@ export default function OutlinesPage() {
                           type="button"
                           onClick={() => void disableOutline()}
                           disabled={disabling}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50 transition-colors"
+                          className="inline-flex items-center gap-1.5 rounded-full border border-[#C0442A]/40 bg-[#C0442A]/08 px-3 py-2 text-xs font-medium text-[#C0442A] hover:bg-[#C0442A]/12 disabled:opacity-50"
                         >
                           {disabling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
                           Disable
@@ -413,7 +416,7 @@ export default function OutlinesPage() {
               <div className="grid gap-5 lg:grid-cols-[1fr_220px]">
                 <div className="space-y-4">
                   <label className="block">
-                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Name</span>
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-[#6B5F4E]">Name</span>
                     <input
                       type="text"
                       value={form.name}
@@ -425,7 +428,7 @@ export default function OutlinesPage() {
                   </label>
 
                   <label className="block">
-                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Kind</span>
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-[#6B5F4E]">Kind</span>
                     <select
                       value={form.kind}
                       disabled={isReadOnly || !isNew}
@@ -448,7 +451,7 @@ export default function OutlinesPage() {
                     </select>
                   </label>
 
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground select-none">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1F1A14] select-none">
                     <input
                       type="checkbox"
                       checked={form.is_default}
@@ -460,7 +463,7 @@ export default function OutlinesPage() {
                   </label>
 
                   <label className="block">
-                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-[#6B5F4E]">
                       User prompt template
                     </span>
                     <textarea
@@ -474,7 +477,7 @@ export default function OutlinesPage() {
 
                   {form.kind === "newsletter_issue" ? (
                     <label className="block">
-                      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-[#6B5F4E]">
                         System prompt suffix
                       </span>
                       <textarea
@@ -487,7 +490,7 @@ export default function OutlinesPage() {
                     </label>
                   ) : (
                     <label className="block">
-                      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-[#6B5F4E]">
                         Insider system prompt
                       </span>
                       <textarea
@@ -502,8 +505,8 @@ export default function OutlinesPage() {
                 </div>
 
                 <div className="rounded-lg border border-border bg-background/50 p-3 h-fit lg:sticky lg:top-6">
-                  <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Placeholders</div>
-                  <p className="mb-3 text-[11px] leading-snug text-muted-foreground">
+                  <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[#6B5F4E]">Placeholders</div>
+                  <p className="mb-3 text-[11px] leading-snug text-[#6B5F4E]">
                     Tokens must appear in the user prompt as <code className="font-mono text-[10px]">{"{{NAME}}"}</code>. Status updates as you type.
                   </p>
                   <ul className="space-y-2">
@@ -521,7 +524,7 @@ export default function OutlinesPage() {
                           <button
                             type="button"
                             onClick={() => insertPlaceholder(key)}
-                            className="flex-shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                            className="flex-shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E] hover:bg-accent hover:text-[#1F1A14] transition-colors"
                           >
                             Add
                           </button>

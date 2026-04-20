@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2, Download } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
+import { studioInner } from "@/lib/studio/inner-classes";
 import type { PodcastScript } from "@/lib/content-products/podcastScriptTypes";
 import { PODCAST_DELIVERY, PODCAST_ENERGY, type PodcastDelivery, type PodcastEnergy } from "@/lib/content-products/podcastScriptOptions";
 
@@ -154,6 +155,7 @@ export default function IssuesPage() {
   }
 
   const [showContentProducts, setShowContentProducts] = useState(false);
+  const [showSteering, setShowSteering] = useState(false);
   const [productBusy, setProductBusy] = useState<string | null>(null);
   const [snippetsData, setSnippetsData] = useState<SocialSnippets | null>(null);
   const [showRawSnippets, setShowRawSnippets] = useState(false);
@@ -451,14 +453,18 @@ export default function IssuesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  const selectClass = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
+  const selectClass = cn(studioInner.select, "transition-colors");
 
   return (
-    <div className="p-6 lg:p-10 max-w-[1100px]">
-      <PageHeader title="Issue Draft" description="Generate newsletter issue drafts from approved leads" />
+    <div className={studioInner.pageRoot}>
+      <PageHeader
+        variant="studio"
+        title="Issue draft"
+        description="Generate newsletter issue drafts from approved leads, with steering and content products."
+      />
 
-      <div className="rounded-xl border border-border bg-card p-5 mb-4">
-        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+      <div className={cn(studioInner.card, "mb-4")}>
+        <div className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E] mb-4 flex items-center gap-2">
           <FileText className="h-3.5 w-3.5" />
           Generation
         </div>
@@ -497,23 +503,23 @@ export default function IssuesPage() {
             </select>
           )}
           {outputMode === "insider_access" && (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+            <label className="flex items-center gap-2 text-xs text-[#6B5F4E] cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={insiderFromCurrentDraft}
                 onChange={(e) => setInsiderFromCurrentDraft(e.target.checked)}
-                className="rounded border-border"
+                className="rounded border border-[#E4D9C2]"
               />
               Insider from saved draft
             </label>
           )}
           <button onClick={generateDraft} disabled={generating || !selectedBrandProfileId}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+            className={studioInner.btnPrimary}>
             {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
             {generating ? "Generating..." : "Generate Issue Draft"}
           </button>
           <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) loadDraftHistory(); }}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent transition-colors">
+            className={studioInner.btnSecondary}>
             <History className="h-4 w-4" />
             History
             {showHistory ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
@@ -524,16 +530,16 @@ export default function IssuesPage() {
             </span>
           )}
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Content outlines</span>
-          <span className="text-xs text-muted-foreground">
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-[#E4D9C2] pt-4">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-[#6B5F4E]">Content outlines</span>
+          <span className="text-xs text-[#6B5F4E]">
             {contentOutlines.length === 0
               ? "None in database — app still uses built-in defaults until you seed or add rows."
               : `${contentOutlines.length} outline row(s) in the database`}
           </span>
           <Link
             href="/outlines"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80 transition-colors"
           >
             <ListTree className="h-3.5 w-3.5" />
             Manage outlines
@@ -542,32 +548,32 @@ export default function IssuesPage() {
             type="button"
             onClick={() => void seedDefaultContentOutlines()}
             disabled={seedingOutlines}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80 disabled:opacity-50 transition-colors"
           >
             {seedingOutlines ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sprout className="h-3.5 w-3.5" />}
             {seedingOutlines ? "Seeding…" : "Seed default outlines"}
           </button>
           {outlineSeedMessage && (
-            <span className="text-xs font-mono text-muted-foreground">{outlineSeedMessage}</span>
+            <span className="text-xs font-mono text-[#6B5F4E]">{outlineSeedMessage}</span>
           )}
         </div>
       </div>
 
       {showHistory && (
-        <div className="rounded-xl border border-border bg-card p-5 mb-4">
-          <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+        <div className={cn(studioInner.card, "mb-4")}>
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E] mb-3 flex items-center gap-2">
             <History className="h-3.5 w-3.5" />
             Draft History
           </div>
           {draftHistory.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-4 text-center">No drafts yet</div>
+            <div className="text-sm text-[#6B5F4E] py-4 text-center">No drafts yet</div>
           ) : (
             <div className="space-y-2">
               {draftHistory.map((d) => (
                 <div key={d.id}
                   className={cn(
                     "flex items-center rounded-lg border px-4 py-3 text-sm transition-colors",
-                    d.id === draftId ? "border-primary/50 bg-primary/5" : "border-border hover:bg-accent"
+                    d.id === draftId ? "border-primary/50 bg-primary/5" : "border-[#E4D9C2] hover:bg-[#EBDFC5]/80"
                   )}>
                   <button onClick={() => loadDraftFromHistory(d)} className="flex-1 text-left min-w-0">
                     <div className="flex items-center justify-between">
@@ -583,14 +589,14 @@ export default function IssuesPage() {
                           </span>
                         )}
                       </div>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      <span className="text-xs text-[#6B5F4E] whitespace-nowrap">
                         {new Date(d.created_at).toLocaleString()}
                       </span>
                     </div>
                   </button>
                   {d.status !== "published" && (
                     <button onClick={() => updateDraftStatus(d.id, "published")}
-                      className="ml-2 p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors flex-shrink-0"
+                      className="ml-2 p-1.5 rounded-md text-[#6B5F4E] hover:text-primary hover:bg-primary/10 transition-colors flex-shrink-0"
                       title="Mark as published">
                       <Rocket className="h-3.5 w-3.5" />
                     </button>
@@ -598,14 +604,14 @@ export default function IssuesPage() {
                   {draft && d.id !== draftId && (
                     <button onClick={() => setCompareDraft(compareDraft?.id === d.id ? null : d)}
                       className={cn("ml-2 p-1.5 rounded-md transition-colors flex-shrink-0",
-                        compareDraft?.id === d.id ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+                        compareDraft?.id === d.id ? "text-primary bg-primary/10" : "text-[#6B5F4E] hover:text-primary hover:bg-primary/10"
                       )}
                       title="Compare with current draft">
                       <Columns2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                   <button onClick={() => deleteDraft(d.id)}
-                    className="ml-1 p-1.5 rounded-md text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors flex-shrink-0"
+                    className="ml-1 p-1.5 rounded-md text-[#6B5F4E] hover:text-danger hover:bg-danger/10 transition-colors flex-shrink-0"
                     title="Delete draft">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -616,19 +622,28 @@ export default function IssuesPage() {
         </div>
       )}
 
-      <div className="rounded-xl border border-border bg-card p-5 mb-6">
-        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
-          <Settings2 className="h-3.5 w-3.5" />
-          Editorial Steering
-        </div>
+      <div className={cn(studioInner.card, "mb-6")}>
+        <button
+          type="button"
+          onClick={() => setShowSteering(!showSteering)}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <div className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E] mb-0 flex items-center gap-2">
+            <Settings2 className="h-3.5 w-3.5" />
+            Editorial steering
+          </div>
+          {showSteering ? <ChevronUp className="h-4 w-4 text-[#6B5F4E]" /> : <ChevronDown className="h-4 w-4 text-[#6B5F4E]" />}
+        </button>
+        {showSteering && (
+        <div className="mt-4 transition-opacity duration-200">
         <div className="flex gap-2 flex-wrap mb-4">
           {PRESETS.map((preset, idx) => (
             <button key={preset.name} onClick={() => applyPreset(preset)}
               className={cn(
-                "rounded-full px-4 py-1.5 text-xs font-medium transition-colors",
+                "rounded-full border px-4 py-1.5 text-xs font-medium transition-colors",
                 activePresetIndex === idx
-                  ? "bg-primary/15 text-primary border border-primary/30"
-                  : "bg-muted/50 text-muted-foreground border border-transparent hover:bg-accent hover:text-foreground"
+                  ? "border-[#1F1A14] bg-[#1F1A14] text-[#F5EFE4]"
+                  : "border-transparent bg-[#EBDFC5]/60 text-[#6B5F4E] hover:bg-[#EBDFC5] hover:text-[#1F1A14]"
               )}>
               {preset.name}
             </button>
@@ -636,64 +651,66 @@ export default function IssuesPage() {
         </div>
         <div className="flex flex-wrap gap-5 items-center">
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Aggression</span>
-            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))} className="w-20 accent-[oklch(0.72_0.19_155)]" />
+            <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Aggression</span>
+            <input type="range" min={1} max={5} value={aggressionLevel} onChange={(e) => setAggressionLevel(Number(e.target.value))} className="h-2 w-28 accent-[#C8571E]" />
             <span className="font-mono font-bold w-4 text-center text-primary">{aggressionLevel}</span>
           </label>
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Audience</span>
-            <select value={audienceLevel} onChange={(e) => setAudienceLevel(e.target.value as (typeof AUDIENCE_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
+            <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Audience</span>
+            <select value={audienceLevel} onChange={(e) => setAudienceLevel(e.target.value as (typeof AUDIENCE_OPTIONS)[number])} className={cn(selectClass, "py-1.5 text-xs")}>
               {AUDIENCE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Focus</span>
-            <select value={focusArea} onChange={(e) => setFocusArea(e.target.value as (typeof FOCUS_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
+            <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Focus</span>
+            <select value={focusArea} onChange={(e) => setFocusArea(e.target.value as (typeof FOCUS_OPTIONS)[number])} className={cn(selectClass, "py-1.5 text-xs")}>
               {FOCUS_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Tone</span>
-            <select value={toneMode} onChange={(e) => setToneMode(e.target.value as (typeof TONE_OPTIONS)[number])} className={selectClass + " py-1.5 text-xs"}>
+            <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Tone</span>
+            <select value={toneMode} onChange={(e) => setToneMode(e.target.value as (typeof TONE_OPTIONS)[number])} className={cn(selectClass, "py-1.5 text-xs")}>
               {TONE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground font-mono uppercase tracking-wider">Max Leads</span>
-            <input type="number" min={3} max={20} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 8)} className={selectClass + " py-1.5 text-xs w-14"} />
+            <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Max Leads</span>
+            <input type="number" min={3} max={20} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value) || 8)} className={cn(selectClass, "py-1.5 text-xs w-14")} />
           </label>
         </div>
+        </div>
+        )}
       </div>
 
       {(draftId || contentJson) && (
-        <div className="rounded-xl border border-border bg-card p-5 mb-4">
+        <div className={cn(studioInner.card, "mb-4")}>
           <button
             type="button"
             onClick={() => setShowContentProducts(!showContentProducts)}
             className="flex w-full items-center justify-between text-left">
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E] flex items-center gap-2">
               <Share2 className="h-3.5 w-3.5" />
               Phase 2 — content products
             </span>
-            {showContentProducts ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            {showContentProducts ? <ChevronUp className="h-4 w-4 text-[#6B5F4E]" /> : <ChevronDown className="h-4 w-4 text-[#6B5F4E]" />}
           </button>
           {showContentProducts && (
-            <div className="mt-4 space-y-4 pt-2 border-t border-border">
-              <p className="text-xs text-muted-foreground">
+            <div className="mt-4 space-y-4 pt-2 border-t border-[#E4D9C2]">
+              <p className="text-xs text-[#6B5F4E]">
                 Uses the current draft ({draftId ? `id ${draftId.slice(0, 8)}…` : "in-memory JSON"}) plus Claude. Requires saved draft for server-side load unless content_json is present.
               </p>
-              <div className="rounded-lg border border-border bg-muted/25 p-3 space-y-2">
-                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Podcast script — delivery</div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  Tuned for a single TTS voice that should sound like a host, not a narrator reading a doc. Style applies when you click <span className="font-medium text-foreground">Podcast script</span>.
+              <div className="rounded-lg border border-[#E4D9C2] bg-[#EBDFC5]/35 p-3 space-y-2">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E]">Podcast script — delivery</div>
+                <p className="text-[11px] text-[#6B5F4E] leading-snug">
+                  Tuned for a single TTS voice that should sound like a host, not a narrator reading a doc. Style applies when you click <span className="font-medium text-[#1F1A14]">Podcast script</span>.
                 </p>
                 <div className="flex flex-wrap gap-3 items-end">
                   <label className="flex flex-col gap-1 text-[11px]">
-                    <span className="text-muted-foreground font-mono uppercase tracking-wider">Style</span>
+                    <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Style</span>
                     <select
                       value={podcastDelivery}
                       onChange={(e) => setPodcastDelivery(e.target.value as PodcastDelivery)}
-                      className={selectClass + " py-1.5 text-xs min-w-[160px]"}>
+                      className={cn(selectClass, "py-1.5 text-xs min-w-[160px]")}>
                       {PODCAST_DELIVERY.map((d) => (
                         <option key={d} value={d}>
                           {d === "conversational" ? "Conversational (Notebook-like)" : d === "deep_dive" ? "Deep dive" : "Narrative arc"}
@@ -702,11 +719,11 @@ export default function IssuesPage() {
                     </select>
                   </label>
                   <label className="flex flex-col gap-1 text-[11px]">
-                    <span className="text-muted-foreground font-mono uppercase tracking-wider">Energy</span>
+                    <span className="text-[#6B5F4E] font-mono uppercase tracking-wider">Energy</span>
                     <select
                       value={podcastEnergy}
                       onChange={(e) => setPodcastEnergy(e.target.value as PodcastEnergy)}
-                      className={selectClass + " py-1.5 text-xs min-w-[120px]"}>
+                      className={cn(selectClass, "py-1.5 text-xs min-w-[120px]")}>
                       {PODCAST_ENERGY.map((e) => (
                         <option key={e} value={e}>
                           {e === "relaxed" ? "Relaxed" : e === "medium" ? "Medium" : "High"}
@@ -716,13 +733,13 @@ export default function IssuesPage() {
                   </label>
                 </div>
                 <label className="block text-[11px]">
-                  <span className="text-muted-foreground font-mono uppercase tracking-wider block mb-1">Extra direction (optional)</span>
+                  <span className="text-[#6B5F4E] font-mono uppercase tracking-wider block mb-1">Extra direction (optional)</span>
                   <textarea
                     value={podcastCustomDirection}
                     onChange={(e) => setPodcastCustomDirection(e.target.value)}
                     rows={2}
                     placeholder="e.g. More humor · tighter on vendor names · assume CISO listener"
-                    className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[52px]"
+                    className="w-full rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-2 py-1.5 text-xs text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[52px]"
                   />
                 </label>
               </div>
@@ -731,44 +748,44 @@ export default function IssuesPage() {
                   type="button"
                   disabled={!!productBusy || (!draftId && !contentJson)}
                   onClick={() => runContentProduct("snippets")}
-                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-xs font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80 disabled:opacity-50">
                   {productBusy === "snippets" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Social snippets
                 </button>
                 <button
                   type="button"
                   disabled={!!productBusy || (!draftId && !contentJson)}
                   onClick={() => runContentProduct("podcast")}
-                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-xs font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80 disabled:opacity-50">
                   {productBusy === "podcast" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Podcast script
                 </button>
                 <button
                   type="button"
                   disabled={!!productBusy || (!draftId && !contentJson)}
                   onClick={() => runContentProduct("sponsor")}
-                  className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium hover:bg-accent disabled:opacity-50">
+                  className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-xs font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80 disabled:opacity-50">
                   {productBusy === "sponsor" ? <Loader2 className="h-3.5 w-3.5 inline animate-spin" /> : null} Sponsorship alignment
                 </button>
               </div>
               {snippetsData && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[10px] font-mono uppercase text-muted-foreground">Social snippets</div>
+                    <div className="text-[10px] font-mono uppercase text-[#6B5F4E]">Social snippets</div>
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={() => copyAllSnippets()}
-                        className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium hover:bg-accent">
+                        className="inline-flex items-center gap-1 rounded-md border border-[#E4D9C2] bg-[#F5EFE4] px-2 py-1 text-[11px] font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80">
                         {copiedSnippetKey === "all" ? <CheckCheck className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                         Copy all
                       </button>
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
-                        <input type="checkbox" checked={showRawSnippets} onChange={(e) => setShowRawSnippets(e.target.checked)} className="rounded border-border" />
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-[#6B5F4E] select-none">
+                        <input type="checkbox" checked={showRawSnippets} onChange={(e) => setShowRawSnippets(e.target.checked)} className="rounded border border-[#E4D9C2]" />
                         Raw JSON
                       </label>
                     </div>
                   </div>
                   {showRawSnippets && (
-                    <pre className="text-[11px] whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 max-h-40 overflow-auto font-mono">
+                    <pre className="text-[11px] whitespace-pre-wrap rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3 max-h-40 overflow-auto font-mono text-[#1F1A14]">
                       {JSON.stringify(snippetsData, null, 2)}
                     </pre>
                   )}
@@ -784,27 +801,27 @@ export default function IssuesPage() {
                       const warn = row.limit != null && n > row.limit;
                       const softWarn = row.key === "x" && n > SNIPPET_LIMITS.x_target && n <= SNIPPET_LIMITS.x_hard;
                       return (
-                        <div key={row.key} className="rounded-lg border border-border bg-background p-3 flex flex-col min-h-[120px]">
+                        <div key={row.key} className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3 flex flex-col min-h-[120px]">
                           <div className="flex items-start justify-between gap-2 mb-2">
                             <div>
-                              <div className="text-sm font-semibold text-foreground">{row.label}</div>
-                              <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">{row.sub}</div>
+                              <div className="text-sm font-semibold text-[#1F1A14]">{row.label}</div>
+                              <div className="text-[10px] text-[#6B5F4E] font-mono uppercase tracking-wider">{row.sub}</div>
                             </div>
                             <button
                               type="button"
                               onClick={() => void copySnippetToClipboard(row.key, row.text)}
-                              className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-accent"
+                              className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[#E4D9C2] bg-[#F5EFE4] px-2 py-1 text-[11px] font-medium text-[#1F1A14] hover:bg-[#EBDFC5]/80"
                               aria-label={`Copy ${row.label}`}>
                               {copiedSnippetKey === row.key ? <CheckCheck className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
                             </button>
                           </div>
                           {row.limit != null && (
-                            <div className={cn("text-[10px] font-mono mb-1", warn ? "text-danger" : softWarn ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
+                            <div className={cn("text-[10px] font-mono mb-1", warn ? "text-danger" : softWarn ? "text-amber-600 dark:text-amber-400" : "text-[#6B5F4E]")}>
                               {n} / {row.limit}
                               {row.key === "x" && ` (target ${SNIPPET_LIMITS.x_target})`}
                             </div>
                           )}
-                          <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed flex-1">{row.text || "—"}</p>
+                          <p className="text-sm text-[#1F1A14] whitespace-pre-wrap leading-relaxed flex-1">{row.text || "—"}</p>
                         </div>
                       );
                     })}
@@ -815,26 +832,26 @@ export default function IssuesPage() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1 space-y-2">
-                      <div className="text-[10px] font-mono uppercase text-muted-foreground">Podcast script</div>
+                      <div className="text-[10px] font-mono uppercase text-[#6B5F4E]">Podcast script</div>
                       <label className="block">
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Episode title (spoken label / files)</span>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Episode title (spoken label / files)</span>
                         <input
                           type="text"
                           value={podcastScript.working_title}
                           onChange={(e) => updatePodcastWorkingTitle(e.target.value)}
-                          className="w-full max-w-xl rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                          className="w-full max-w-xl rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-sm font-semibold text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                         />
                       </label>
                       {typeof podcastScript.estimated_runtime_minutes === "number" && (
-                        <p className="text-xs text-muted-foreground">~{podcastScript.estimated_runtime_minutes} min spoken (estimate — unchanged if you edit length)</p>
+                        <p className="text-xs text-[#6B5F4E]">~{podcastScript.estimated_runtime_minutes} min spoken (estimate — unchanged if you edit length)</p>
                       )}
                       {podcastGrounding && (
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-[11px] text-[#6B5F4E]">
                           Signals resolved: {podcastGrounding.resolvedCount}, unmatched URLs: {podcastGrounding.unmatchedCount}
                         </p>
                       )}
-                      <p className="text-[11px] text-muted-foreground leading-snug">
-                        Edit any segment below before <span className="font-medium text-foreground">Download MP3</span> — your changes are what gets sent to ElevenLabs (no extra script API call). Click <span className="font-medium text-foreground">Podcast script</span> again to regenerate from the draft.
+                      <p className="text-[11px] text-[#6B5F4E] leading-snug">
+                        Edit any segment below before <span className="font-medium text-[#1F1A14]">Download MP3</span> — your changes are what gets sent to ElevenLabs (no extra script API call). Click <span className="font-medium text-[#1F1A14]">Podcast script</span> again to regenerate from the draft.
                       </p>
                     </div>
                     <button
@@ -846,55 +863,62 @@ export default function IssuesPage() {
                       Download MP3 (ElevenLabs)
                     </button>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] text-[#6B5F4E]">
                     Requires <span className="font-mono">ELEVENLABS_API_KEY</span> and <span className="font-mono">ELEVENLABS_VOICE_ID</span>. With a saved draft and{" "}
                     <span className="font-mono">PODCAST_AUDIO_STORAGE_BUCKET</span>, download also writes <span className="font-mono">podcast_episodes</span> + Storage.
                   </p>
                   <ul className="space-y-3 max-h-[min(70vh,520px)] overflow-auto pr-1">
                     {podcastScript.script_segments.map((seg) => (
-                      <li key={seg.id} className="rounded-lg border border-border bg-background p-3 space-y-2">
+                      <li key={seg.id} className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground shrink-0">Segment</span>
-                          <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded">{seg.id}</code>
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] shrink-0">Segment</span>
+                          <code className="text-[10px] bg-[#EBDFC5] px-1.5 py-0.5 rounded text-[#1F1A14]">{seg.id}</code>
                         </div>
                         <label className="block">
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Section label (optional)</span>
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Section label (optional)</span>
                           <input
                             type="text"
                             value={seg.title ?? ""}
                             onChange={(e) => updatePodcastSegment(seg.id, { title: e.target.value })}
                             placeholder={seg.id}
-                            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                            className="w-full rounded-md border border-[#E4D9C2] bg-[#F5EFE4] px-2 py-1.5 text-xs text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                           />
                         </label>
                         <label className="block">
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1 block">Script (read aloud)</span>
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Script (read aloud)</span>
                           <textarea
                             value={seg.narrator_text}
                             onChange={(e) => updatePodcastSegment(seg.id, { narrator_text: e.target.value })}
                             rows={8}
-                            className="w-full min-h-[160px] rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground leading-relaxed whitespace-pre-wrap outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y font-sans"
+                            className="w-full min-h-[160px] rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-sm text-[#1F1A14] leading-relaxed whitespace-pre-wrap outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y font-sans"
                           />
                         </label>
                       </li>
                     ))}
                   </ul>
                   <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
-                    <div className="text-[10px] font-mono uppercase text-muted-foreground">Outro / CTA</div>
+                    <div className="text-[10px] font-mono uppercase text-[#6B5F4E]">Outro / CTA</div>
                     <textarea
                       value={podcastScript.outro_cta ?? ""}
                       onChange={(e) => updatePodcastOutro(e.target.value)}
                       rows={3}
                       placeholder="Subscribe, next episode tease…"
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[72px]"
+                      className="w-full rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-sm text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-y min-h-[72px]"
                     />
                   </div>
                 </div>
               )}
               {sponsorOut && (
                 <div>
-                  <div className="text-[10px] font-mono uppercase text-muted-foreground mb-1">Sponsorship</div>
-                  <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-background p-3 max-h-40 overflow-auto">{sponsorOut}</pre>
+                  <div className="text-[10px] font-mono uppercase text-[#6B5F4E] mb-1">Sponsorship</div>
+                  <pre
+                    className={cn(
+                      studioInner.draftBodyPreSm,
+                      "max-h-40 overflow-auto rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3"
+                    )}
+                  >
+                    {sponsorOut}
+                  </pre>
                 </div>
               )}
             </div>
@@ -903,41 +927,50 @@ export default function IssuesPage() {
       )}
 
       {curationInfo && (
-        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 mb-4">
+        <div className={cn(studioInner.card, "mb-4 border-[#C8571E]/25 bg-[#C8571E]/06")}>
           <div className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2 flex items-center gap-2">
             <Brain className="h-3.5 w-3.5" />
             Editor Agent Curation
           </div>
-          <div className="text-sm text-foreground/80">{curationInfo.rationale}</div>
-          <div className="mt-2 font-mono text-xs text-muted-foreground">
+          <div className="text-sm text-[#3D362C]">{curationInfo.rationale}</div>
+          <div className="mt-2 font-mono text-xs text-[#6B5F4E]">
             Selected {curationInfo.leadsUsed} of {curationInfo.leadsAvailable} approved leads
           </div>
         </div>
       )}
 
       {draft && (
-        <div className="rounded-xl border border-border bg-card p-5 mb-4">
+        <div className={cn(studioInner.card, "relative mb-4 min-w-0")}>
+          {generating && (
+            <div
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[12px] border border-[#E4D9C2]/80 bg-[#FBF7EE]/95 backdrop-blur-[2px]"
+              aria-busy
+            >
+              <Loader2 className="h-8 w-8 animate-spin text-[#C8571E]" />
+              <p className="font-[family-name:var(--font-instrument-serif)] text-lg italic text-[#6B5F4E]">Generating draft…</p>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4">
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Draft Preview</span>
+            <span className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E]">Draft Preview</span>
             <div className="flex items-center gap-2">
               {draftId && (
                 <div className="relative">
                   <button
                     onClick={() => setRegenSection(regenSection ? null : "title")}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
                     <RefreshCw className="h-3.5 w-3.5" />
                     Regenerate Section
                   </button>
                 </div>
               )}
               <button onClick={() => copyText(draft, setCopied)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
                 {copied ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? "Copied!" : "Copy"}
               </button>
               {draftId && (
                 <button onClick={exportHtml}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
                   <Code2 className="h-3.5 w-3.5" />
                   Export HTML
                 </button>
@@ -955,12 +988,12 @@ export default function IssuesPage() {
           {regenSection && draftId && (
             <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
               <div className="flex items-center gap-3 mb-3 flex-wrap">
-                <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground">Section:</span>
+                <span className="text-xs font-mono uppercase tracking-wider text-[#6B5F4E]">Section:</span>
                 {(Object.keys(SECTION_LABELS) as RegeneratableSection[]).map((s) => (
                   <button key={s} onClick={() => setRegenSection(s)}
                     className={cn(
                       "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                      regenSection === s ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground hover:bg-accent"
+                      regenSection === s ? "bg-primary text-primary-foreground" : "bg-[#EBDFC5]/90 text-[#1F1A14] hover:bg-[#EBDFC5]"
                     )}>
                     {SECTION_LABELS[s]}
                   </button>
@@ -971,7 +1004,7 @@ export default function IssuesPage() {
                   value={regenInstruction}
                   onChange={(e) => setRegenInstruction(e.target.value)}
                   placeholder="Optional instruction (e.g. 'Make it more aggressive')"
-                  className="flex-1 rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+                  className="flex-1 min-w-0 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-4 py-2 text-sm text-[#1F1A14] placeholder:text-[#9C8E78] outline-none focus:border-primary"
                 />
                 <button onClick={regenerateSection} disabled={regenerating}
                   className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
@@ -997,59 +1030,69 @@ export default function IssuesPage() {
           )}
 
           {showHtmlExport && exportedHtml && (
-            <div className="mb-4 rounded-lg border border-border bg-background p-4">
+            <div className="mb-4 min-w-0 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Newsletter HTML</span>
+                <span className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E]">Newsletter HTML</span>
                 <div className="flex items-center gap-2">
                   <button onClick={() => copyText(exportedHtml, setCopiedHtml)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
                     {copiedHtml ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
                     {copiedHtml ? "Copied!" : "Copy HTML"}
                   </button>
                   <button onClick={() => setShowHtmlExport(false)}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    className="text-xs text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
                     Close
                   </button>
                 </div>
               </div>
-              <pre className="whitespace-pre-wrap font-mono text-xs leading-5 max-h-[300px] overflow-auto text-muted-foreground">
+              <pre className={cn(studioInner.draftBodyPreMono, "max-h-[300px] overflow-auto")}>
                 {exportedHtml}
               </pre>
             </div>
           )}
 
-          <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
+          <pre className={cn(studioInner.draftBodyPre, "max-h-[500px] overflow-auto")}>
             {draft}
           </pre>
         </div>
       )}
 
       {compareDraft && draft && (
-        <div className="rounded-xl border border-primary/20 bg-card p-5 mb-4">
+        <div className={cn(studioInner.card, "mb-4 min-w-0 border-[#C8571E]/25")}>
           <div className="flex items-center justify-between mb-4">
             <div className="font-mono text-[11px] uppercase tracking-widest text-primary flex items-center gap-2">
               <Columns2 className="h-3.5 w-3.5" />
               Draft Comparison
             </div>
             <button onClick={() => setCompareDraft(null)}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              className="text-xs text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
               Close
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+          <div className="grid min-w-0 grid-cols-2 gap-4">
+            <div className="min-w-0">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-[#6B5F4E] mb-2">
                 Current — {(contentJson as Record<string, unknown>)?.title as string || "Current Draft"}
               </div>
-              <pre className="whitespace-pre-wrap font-sans text-xs leading-6 max-h-[400px] overflow-auto text-foreground/80 rounded-lg border border-border bg-background p-3">
+              <pre
+                className={cn(
+                  studioInner.draftBodyPreSm,
+                  "max-h-[400px] overflow-auto rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3"
+                )}
+              >
                 {draft}
               </pre>
             </div>
-            <div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+            <div className="min-w-0">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-[#6B5F4E] mb-2">
                 Comparing — {(compareDraft.content_json as Record<string, unknown>)?.title as string || new Date(compareDraft.created_at).toLocaleDateString()}
               </div>
-              <pre className="whitespace-pre-wrap font-sans text-xs leading-6 max-h-[400px] overflow-auto text-foreground/80 rounded-lg border border-border bg-background p-3">
+              <pre
+                className={cn(
+                  studioInner.draftBodyPreSm,
+                  "max-h-[400px] overflow-auto rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-3"
+                )}
+              >
                 {compareDraft.content}
               </pre>
             </div>
@@ -1058,16 +1101,16 @@ export default function IssuesPage() {
       )}
 
       {insiderDraft && (
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className={cn(studioInner.card, "min-w-0")}>
           <div className="flex items-center justify-between mb-4">
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Insider Access</span>
+            <span className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E]">Insider Access</span>
             <button onClick={() => copyText(insiderDraft, setCopiedInsider)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors">
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
               {copiedInsider ? <CheckCheck className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
               {copiedInsider ? "Copied!" : "Copy"}
             </button>
           </div>
-          <pre className="whitespace-pre-wrap font-sans text-sm leading-7 max-h-[500px] overflow-auto text-foreground/90">
+          <pre className={cn(studioInner.draftBodyPre, "max-h-[500px] overflow-auto")}>
             {insiderDraft}
           </pre>
         </div>

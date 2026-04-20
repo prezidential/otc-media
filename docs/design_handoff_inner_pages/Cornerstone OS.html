@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Cornerstone OS — Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; overflow: hidden; height: 100%; }
+  input, textarea, select, button { font-family: inherit; }
+  textarea { font-family: 'JetBrains Mono', monospace; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(107,95,78,0.25); border-radius: 3px; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Load in order: theme → shared layout → pages -->
+<script type="text/babel" src="cornerstone/Theme.jsx"></script>
+<script type="text/babel" src="cornerstone/SharedLayout.jsx"></script>
+<script type="text/babel" src="components/SharedData.jsx"></script>
+<script type="text/babel" src="cornerstone/PageSignals.jsx"></script>
+<script type="text/babel" src="cornerstone/PageLeads.jsx"></script>
+<script type="text/babel" src="cornerstone/PageIssues.jsx"></script>
+<script type="text/babel" src="cornerstone/PageOutlines.jsx"></script>
+<script type="text/babel" src="cornerstone/PageBrand.jsx"></script>
+<script type="text/babel" src="cornerstone/PageResearch.jsx"></script>
+<script type="text/babel" src="cornerstone/PageACE.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+// ── Dashboard page (inline, uses Studio tokens) ──────────────────────────
+function PageDashboard({ setPage }) {
+  const t = window.T;
+  const [feedUrl, setFeedUrl] = React.useState("https://www.darkreading.com/rss.xml");
+  const [ingesting, setIngesting] = React.useState(false);
+  const [ingestCount, setIngestCount] = React.useState(0);
+  const [topic, setTopic] = React.useState("All");
+  const [hovered, setHovered] = React.useState(null);
+
+  const PIPELINE = [
+    { key: "research", label: "Research", count: 200, sub: "signals" },
+    { key: "leads",    label: "Leads",    count: 12,  sub: "to approve", flag: true },
+    { key: "issues",   label: "Issues",   count: 3,   sub: "in draft" },
+    { key: "outlines", label: "Outlines", count: 8,   sub: "active" },
+  ];
+  const SIGNALS_SAMPLE = [
+    { id: 1, title: "AI models too scary to release — exclusive story", source: "MIT Technology Review", date: "4/10", topic: "AI", heat: 92 },
+    { id: 2, title: "Moderna's 'vaccine' vs 'therapy' dilemma", source: "MIT Technology Review", date: "4/10", topic: "Biotech", heat: 67 },
+    { id: 4, title: "Why the next great search engine might not have a search box", source: "Wired", date: "4/09", topic: "AI", heat: 88 },
+    { id: 8, title: "How three friends built a $40M newsletter in 18 months", source: "The Information", date: "4/07", topic: "Media", heat: 94 },
+    { id: 6, title: "A field guide to new open-source LLMs", source: "Ars Technica", date: "4/08", topic: "AI", heat: 81 },
+  ];
+
+  const topics = ["All","AI","Biotech","Media","Climate"];
+  const filtered = topic === "All" ? SIGNALS_SAMPLE : SIGNALS_SAMPLE.filter(s => s.topic === topic);
+
+  const runIngest = () => {
+    if (ingesting) return;
+    setIngesting(true); setIngestCount(0);
+    let n = 0;
+    const iv = setInterval(() => {
+      n += Math.floor(Math.random()*3)+1;
+      if (n >= 27) { n = 27; clearInterval(iv); setTimeout(() => setIngesting(false), 500); }
+      setIngestCount(n);
+    }, 85);
+  };
+
+  const now = new Date();
+  const hour = now.getHours();
+  const greet = hour < 12 ? "Good morning." : hour < 17 ? "Good afternoon." : "Good evening.";
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:28 }}>
+        <div>
+          <div style={{ fontFamily:t.mono, fontSize:11, letterSpacing:2, color:t.sub, textTransform:"uppercase", marginBottom:6 }}>
+            {now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}
+          </div>
+          <h1 style={{ fontFamily:t.serif, fontWeight:400, margin:0, fontSize:52, lineHeight:1, letterSpacing:-0.5 }}>
+            {greet} <span style={{ fontStyle:"italic", color:t.accent }}>You have ideas waiting.</span>
+          </h1>
+        </div>
+        <div style={{ display:"flex", gap:8 }}>
+          <button style={{ fontFamily:t.sans, fontSize:13, padding:"9px 14px", background:"transparent", color:t.ink, border:`1px solid ${t.line}`, borderRadius:999, cursor:"pointer" }}>⌘K  Search</button>
+          <button onClick={() => setPage("issues")} style={{ fontFamily:t.sans, fontSize:13, padding:"9px 16px", background:t.ink, color:t.bg, border:"none", borderRadius:999, cursor:"pointer", fontWeight:500 }}>+ New issue</button>
+        </div>
+      </div>
+
+      {/* Pipeline rail */}
+      <Card style={{ marginBottom:20 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:16 }}>
+          <SectionLabel>End-to-end flow</SectionLabel>
+          <div style={{ fontSize:12, color:t.sub }}>Last ingest <span style={{ color:t.ink }}>9 days ago</span> · <span style={{ color:t.accent }}>+27 fresh</span></div>
+        </div>
+        <div style={{ display:"flex", alignItems:"stretch" }}>
+          {PIPELINE.map((p,i) => (
+            <React.Fragment key={p.key}>
+              <div style={{ flex:1, position:"relative", cursor:"pointer" }} onClick={() => setPage(p.key === "research" ? "research" : p.key)}>
+                <div style={{ fontFamily:t.serif, fontSize:44, lineHeight:1, fontStyle:"italic", color:p.flag ? t.accent : t.ink }}>{p.count}</div>
+                <div style={{ marginTop:6, fontSize:14, fontWeight:500 }}>{p.label}</div>
+                <div style={{ fontSize:12, color:t.sub, marginTop:2 }}>{p.sub}</div>
+                {p.flag && <div style={{ position:"absolute", top:-6, right:16, fontFamily:t.mono, fontSize:9, letterSpacing:1.5, background:t.accent, color:"#FBF7EE", padding:"3px 7px", borderRadius:3 }}>NEEDS YOU</div>}
+              </div>
+              {i < PIPELINE.length-1 && <div style={{ width:40, display:"flex", alignItems:"center", justifyContent:"center", color:t.sub, fontSize:18 }}>→</div>}
+            </React.Fragment>
+          ))}
+        </div>
+      </Card>
+
+      {/* 2-col: ingest + nudge */}
+      <div style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr", gap:18, marginBottom:20 }}>
+        <Card>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12 }}>
+            <div style={{ fontFamily:t.serif, fontSize:20, fontStyle:"italic" }}>Ingest a feed</div>
+            <SectionLabel>RSS · ATOM · Sitemap</SectionLabel>
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <Input value={feedUrl} onChange={e => setFeedUrl(e.target.value)} mono style={{ flex:1 }} />
+            <Btn onClick={runIngest} disabled={ingesting} style={{ minWidth:120, borderRadius:8, position:"relative", overflow:"hidden" }}>
+              {ingesting ? `Ingesting… ${ingestCount}` : "Ingest feed"}
+              {ingesting && <div style={{ position:"absolute", bottom:0, left:0, height:2, background:"rgba(251,247,238,0.5)", width:`${(ingestCount/27)*100}%`, transition:"width 100ms" }} />}
+            </Btn>
+          </div>
+          <div style={{ display:"flex", gap:6, marginTop:10, flexWrap:"wrap" }}>
+            {["darkreading","mit tech review","the verge","bloomberg","stratechery"].map(f => (
+              <div key={f} style={{ fontSize:11, fontFamily:t.mono, color:t.sub, padding:"3px 9px", background:t.chip, borderRadius:999 }}>⟲ {f}</div>
+            ))}
+          </div>
+        </Card>
+        <Card style={{ background:`linear-gradient(160deg, ${t.accent}12 0%, transparent 60%), ${t.panel}` }}>
+          <SectionLabel>The cornerstone</SectionLabel>
+          <div style={{ fontFamily:t.serif, fontSize:24, lineHeight:1.2, marginBottom:14 }}>
+            Two leads have been waiting <span style={{ fontStyle:"italic", color:t.accent }}>four days</span>. Approve them to keep Issue 41 on pace.
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <Btn size="sm" variant="ink" onClick={() => setPage("leads")}>Review leads →</Btn>
+            <Btn size="sm" variant="secondary">Snooze</Btn>
+          </div>
+        </Card>
+      </div>
+
+      {/* Signals */}
+      <Card>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+          <div style={{ display:"flex", alignItems:"baseline", gap:10 }}>
+            <span style={{ fontFamily:t.serif, fontSize:22, fontStyle:"italic" }}>Latest signals</span>
+            <span style={{ fontFamily:t.mono, fontSize:11, color:t.sub }}>{filtered.length} of 200</span>
+          </div>
+          <div style={{ display:"flex", gap:4 }}>
+            {topics.map(tp => (
+              <div key={tp} onClick={() => setTopic(tp)} style={{ fontSize:11, fontFamily:t.mono, letterSpacing:0.5, padding:"4px 10px", borderRadius:999, cursor:"pointer", background:tp===topic?t.ink:"transparent", color:tp===topic?t.bg:t.sub, border:`1px solid ${tp===topic?t.ink:t.line}` }}>{tp.toLowerCase()}</div>
+            ))}
+            <div onClick={() => setPage("signals")} style={{ fontSize:11, fontFamily:t.mono, padding:"4px 10px", borderRadius:999, cursor:"pointer", color:t.accent, border:`1px solid ${t.line}` }}>all signals →</div>
+          </div>
+        </div>
+        <Divider />
+        {filtered.map((s,i) => (
+          <div key={s.id}
+            onMouseEnter={() => setHovered(s.id)}
+            onMouseLeave={() => setHovered(null)}
+            style={{ display:"grid", gridTemplateColumns:"28px 1fr auto auto 80px", gap:16, alignItems:"center", padding:"13px 4px", borderBottom:`1px solid ${t.line}`, background:hovered===s.id?t.chip:"transparent", transition:"background 100ms", cursor:"default" }}>
+            <div style={{ fontFamily:t.mono, fontSize:10, color:t.sub, textAlign:"right" }}>{String(s.id).padStart(3,"0")}</div>
+            <div>
+              <div style={{ fontSize:14, lineHeight:1.35 }}>{s.title}</div>
+              <div style={{ fontSize:11, fontFamily:t.mono, color:t.sub, marginTop:3 }}>{s.source} · {s.date}</div>
+            </div>
+            <Tag>{s.topic}</Tag>
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ fontSize:9, color:t.sub, fontFamily:t.mono }}>heat</div>
+              <div style={{ width:48, height:4, background:t.chip, borderRadius:2, overflow:"hidden" }}>
+                <div style={{ width:`${s.heat}%`, height:"100%", background:t.accent }} />
+              </div>
+            </div>
+            <div style={{ opacity:hovered===s.id?1:0, transition:"opacity 100ms", display:"flex", justifyContent:"flex-end" }}>
+              <Btn variant="positive" size="sm">↗ Lead</Btn>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+// ── App shell ─────────────────────────────────────────────────────────────
+const INIT_PAGE = localStorage.getItem("cs_page") || "dashboard";
+
+function App() {
+  const [page, setPage] = React.useState(INIT_PAGE);
+  const [tweakOn, setTweakOn] = React.useState(false);
+
+  const navigate = (p) => {
+    setPage(p);
+    localStorage.setItem("cs_page", p);
+  };
+
+  React.useEffect(() => {
+    const onMsg = e => {
+      const d = e.data || {};
+      if (d.type === '__activate_edit_mode')   setTweakOn(true);
+      if (d.type === '__deactivate_edit_mode') setTweakOn(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const t = window.T;
+  const isACE = page === "ace";
+
+  const pageContent = (() => {
+    switch(page) {
+      case "dashboard": return <PageDashboard setPage={navigate} />;
+      case "signals":   return <PageSignals setPage={navigate} />;
+      case "leads":     return <PageLeads setPage={navigate} />;
+      case "issues":    return <PageIssues setPage={navigate} />;
+      case "outlines":  return <PageOutlines setPage={navigate} />;
+      case "brand":     return <PageBrand />;
+      case "research":  return <PageResearch setPage={navigate} />;
+      case "ace":       return <PageACE />;
+      default:          return <PageDashboard setPage={navigate} />;
+    }
+  })();
+
+  return (
+    <div style={{ display:"flex", height:"100vh", overflow:"hidden", background: isACE ? "#0F0C08" : t.bg, fontFamily:t.sans, color:t.ink }}>
+      <Sidebar page={page} setPage={navigate} />
+      {isACE ? (
+        // ACE takes over main — fills with its own dark shell
+        <div style={{ flex:1, position:"relative", overflow:"hidden" }}>
+          {pageContent}
+        </div>
+      ) : (
+        <main style={{ flex:1, overflowY:"auto", padding:"36px 48px 80px" }}>
+          {pageContent}
+        </main>
+      )}
+
+      {/* Tweaks panel */}
+      {tweakOn && (
+        <div style={{
+          position:"fixed", bottom:20, right:20, width:240,
+          background:t.ink, color:t.panel, borderRadius:12,
+          padding:"16px 18px", fontFamily:t.sans,
+          boxShadow:"0 20px 50px rgba(0,0,0,0.25)", zIndex:100,
+        }}>
+          <div style={{ fontFamily:t.mono, fontSize:10, letterSpacing:2, textTransform:"uppercase", opacity:0.6, marginBottom:12 }}>Tweaks</div>
+          <div style={{ fontSize:12, opacity:0.7, marginBottom:10 }}>Jump to page:</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            {["dashboard","signals","leads","issues","outlines","brand","research","ace"].map(p => (
+              <div key={p} onClick={() => { navigate(p); }} style={{
+                padding:"7px 10px", borderRadius:6, cursor:"pointer", fontSize:12, textTransform:"capitalize",
+                background: page === p ? `${t.accent}33` : "transparent",
+                color: page === p ? t.accent : t.panel,
+              }}>{p === "ace" ? "⚙ ACE" : p}</div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
