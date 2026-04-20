@@ -227,6 +227,99 @@ Resolution behavior:
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
 
+## Brainstorming Hub Runbook
+
+The Brainstorming Hub (`/brainstorm`) is a workspace-scoped ideation surface that persists sessions/messages, can trigger bounded ingest, supports manual-signal confirmation, and can promote a saved working artifact into `issue_drafts`.
+
+### Prerequisites
+
+- Apply `lib/supabase/schema-brainstorm.sql` in Supabase.
+- Set `WORKSPACE_ID`.
+- Configure LLM routing for brainstorm turns (optional explicit override):
+  - `LLM_BRAINSTORM=anthropic:claude-sonnet-4-20250514` (or `openai:<model>`).
+- Ensure at least one `brand_profiles` row exists if you want to promote to Issues.
+
+### API Surface
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brainstorm/sessions` | `GET` | List sessions for the workspace |
+| `/api/brainstorm/sessions` | `POST` | Create session (`title`, optional `brandProfileId`) |
+| `/api/brainstorm/sessions/[id]` | `GET` | Get session detail (`artifact_json` included) |
+| `/api/brainstorm/sessions/[id]/messages` | `GET` | List messages in session |
+| `/api/brainstorm/sessions/[id]/messages` | `POST` | Append user turn and run Brainstormer tool loop |
+| `/api/brainstorm/sessions/[id]/confirm-manual-signal` | `POST` | Insert pending manual signal from `artifact_json` |
+| `/api/brainstorm/sessions/[id]/promote-draft` | `POST` | Convert saved artifact to `DraftObject` + insert `issue_drafts` row |
+
+### Tooling Available To The Brainstormer
+
+The model can call these tools during a turn:
+
+- `query_signals`
+- `get_signal`
+- `list_recent_drafts`
+- `trigger_signal_ingest`
+- `propose_manual_signal`
+- `save_artifact_draft`
+
+Implementation constraints:
+
+- Tool loop caps at 8 tool steps per turn.
+- LLM context uses a capped recent history window (36 user/assistant turns).
+- Workspace isolation is enforced on all DB reads/writes via `workspace_id`.
+
+### Typical Workflow
+
+1. Create a session (optional brand profile binding).
+2. Send chat turns via `/messages` (optionally pass `signalId` to pin a signal in prompt context).
+3. If the assistant proposes a manual signal, confirm insertion from the session hub (`confirm-manual-signal`).
+4. Ask the assistant to call `save_artifact_draft` once thesis/outline/citations are ready.
+5. Promote with `promote-draft` to create an `issue_drafts` row, then continue in `/issues`.
+
+Create session:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Zero-trust identity narrative","brandProfileId":"<brand_profile_id>"}'
+```
+
+Send a turn:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions/<session_id>/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Find three angles tying NHI growth to ITDR failures.","signalId":"<optional_signal_id>"}'
+```
+
+Promote saved artifact to Issues draft:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions/<session_id>/promote-draft \
+  -H "Content-Type: application/json" \
+  -d '{"brandProfileId":"<brand_profile_id>"}'
+```
+
+### Streaming Mode (NDJSON)
+
+`POST /messages` accepts `"stream": true` and responds as `application/x-ndjson` events:
+
+- `{"type":"start"}`
+- `{"type":"delta","text":"..."}`
+- `{"type":"done","messages":[...],"lastAssistant":{...}}`
+- `{"type":"error","message":"..."}`
+
+### Troubleshooting
+
+- `500 WORKSPACE_ID not configured`: set `WORKSPACE_ID` in environment.
+- `404 Session not found`: wrong session id or wrong workspace.
+- `400 content is required`: missing/empty `content` in `/messages` POST.
+- `400 No pending manual signal on this session`: call `propose_manual_signal` first.
+- `400 Pending signal is missing a title`: tool payload lacked `title`.
+- `400 brandProfileId is required...`: session has no brand and promote body omitted override.
+- `404 Brand profile not found`: `brandProfileId` is invalid for this workspace.
+- `500 Nothing to promote: save an artifact with save_artifact_draft first.`: no `working_artifact` persisted yet.
+
 ## Autonomous Pipeline Runbook
 
 The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result.
