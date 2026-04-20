@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, Save, Star } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
+import { studioInner } from "@/lib/studio/inner-classes";
 
 type ListItem = { id: string; name: string; created_at: string };
 
@@ -23,8 +24,8 @@ type FullProfile = {
   created_at: string;
 };
 
-const jsonTextareaClass =
-  "font-mono text-xs min-h-[100px] w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary";
+const jsonHintClass =
+  "float-right font-[family-name:var(--font-geist-mono)] text-[9px] uppercase tracking-wider text-[#9C8E78]";
 
 const DEFAULT_OBJECTS = {
   voice_rules_json: "{\n  \n}",
@@ -61,6 +62,7 @@ export default function BrandProfilesPage() {
   const [settingDefault, setSettingDefault] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [saveFlash, setSaveFlash] = useState(false);
 
   const [name, setName] = useState("");
   const [profileVersion, setProfileVersion] = useState("1.0");
@@ -200,6 +202,8 @@ export default function BrandProfilesPage() {
         }
         const id = data.id as string | undefined;
         setMessage("Profile created.");
+        setSaveFlash(true);
+        window.setTimeout(() => setSaveFlash(false), 2000);
         await loadList();
         if (id) await loadProfile(id);
         else resetNewForm();
@@ -215,6 +219,8 @@ export default function BrandProfilesPage() {
           return;
         }
         setMessage("Saved.");
+        setSaveFlash(true);
+        window.setTimeout(() => setSaveFlash(false), 2000);
         await loadList();
         await loadProfile(selectedId);
       }
@@ -267,21 +273,19 @@ export default function BrandProfilesPage() {
     await loadList();
   }
 
-  const selectClass =
-    "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors";
+  const selectClass = studioInner.select;
 
   return (
-    <div className="p-6 lg:p-10 max-w-[1100px]">
+    <div className={studioInner.pageRoot}>
       <PageHeader
+        variant="studio"
         title="Brand profiles"
-        description="Voice rules, formatting, ElevenLabs defaults, and workspace default for Issues and content products"
+        description="Voice rules, formatting, ElevenLabs defaults, and workspace default for Issues and content products."
       />
 
-      <div className="rounded-xl border border-border bg-card p-5 mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:flex-wrap">
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-            Profile
-          </label>
+      <div className={cn(studioInner.card, "mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:flex-wrap")}>
+        <div className="min-w-[200px] flex-1">
+          <label className={cn(studioInner.sectionLabel, "mb-1.5 block")}>Profile</label>
           <select
             className={cn(selectClass, "w-full")}
             value={isNew ? "__new__" : selectedId}
@@ -309,11 +313,7 @@ export default function BrandProfilesPage() {
             <option value="__new__">+ New profile</option>
           </select>
         </div>
-        <button
-          type="button"
-          onClick={() => resetNewForm()}
-          className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors"
-        >
+        <button type="button" onClick={() => resetNewForm()} className={studioInner.btnSecondary}>
           <Plus className="h-4 w-4" />
           New
         </button>
@@ -322,10 +322,10 @@ export default function BrandProfilesPage() {
             type="button"
             onClick={() => void saveProfile()}
             disabled={saving || loadingProfile}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className={studioInner.btnPrimary}
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {isNew ? "Create" : "Save"}
+            {saveFlash ? "✓ Saved" : isNew ? "Create" : "Save"}
           </button>
         )}
         {selectedId && !isNew && (
@@ -334,9 +334,11 @@ export default function BrandProfilesPage() {
               type="button"
               onClick={() => void makeWorkspaceDefault()}
               disabled={settingDefault || defaultBrandProfileId === selectedId}
-              className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/15 disabled:opacity-50 transition-colors"
+              className={cn(
+                defaultBrandProfileId === selectedId ? studioInner.btnPositive : studioInner.btnSecondary
+              )}
             >
-              <Star className="h-4 w-4" />
+              <Star className="h-4 w-4" fill={defaultBrandProfileId === selectedId ? "currentColor" : "none"} />
               Set as workspace default
             </button>
             {defaultBrandProfileId && (
@@ -344,7 +346,7 @@ export default function BrandProfilesPage() {
                 type="button"
                 onClick={() => void clearWorkspaceDefault()}
                 disabled={settingDefault}
-                className="text-sm text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                className={cn(studioInner.link, "text-sm")}
               >
                 Clear default
               </button>
@@ -354,12 +356,12 @@ export default function BrandProfilesPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger mb-4">
+        <div className="mb-4 rounded-[10px] border border-[#C0442A]/35 bg-[#C0442A]/08 px-4 py-3 text-sm text-[#8B2E1F]">
           {error}
         </div>
       )}
-      {message && (
-        <div className="rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm text-foreground mb-4">
+      {message && !saveFlash && (
+        <div className="mb-4 rounded-[10px] border border-[#3F6B45]/30 bg-[#3F6B45]/08 px-4 py-3 text-sm text-[#1F1A14]">
           {message}
         </div>
       )}
@@ -367,7 +369,7 @@ export default function BrandProfilesPage() {
       {(selectedId || isNew) && (
         <div className="space-y-6">
           {loadingProfile && !isNew && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 text-sm text-[#6B5F4E]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading…
             </div>
@@ -375,29 +377,25 @@ export default function BrandProfilesPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-                Name
-              </label>
+              <label className={cn(studioInner.sectionLabel, "mb-1.5 block")}>Name</label>
               <input
-                className={cn(selectClass, "w-full")}
+                className={cn(studioInner.input, "w-full")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Identity Jedi"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-                Profile version
-              </label>
+              <label className={cn(studioInner.sectionLabel, "mb-1.5 block")}>Profile version</label>
               <input
-                className={cn(selectClass, "w-full")}
+                className={cn(studioInner.input, "w-full")}
                 value={profileVersion}
                 onChange={(e) => setProfileVersion(e.target.value)}
                 placeholder="1.0"
               />
             </div>
             <div>
-              <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
+              <label className="block text-[11px] font-mono uppercase tracking-widest text-[#6B5F4E] mb-1.5">
                 ElevenLabs voice ID
               </label>
               <input
@@ -408,11 +406,9 @@ export default function BrandProfilesPage() {
               />
             </div>
             <div>
-              <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-                ElevenLabs model ID
-              </label>
+              <label className={cn(studioInner.sectionLabel, "mb-1.5 block")}>ElevenLabs model ID</label>
               <input
-                className={cn(selectClass, "w-full")}
+                className={cn(studioInner.input, "w-full")}
                 value={elevenlabsModelId}
                 onChange={(e) => setElevenlabsModelId(e.target.value)}
                 placeholder="e.g. eleven_turbo_v2_5"
@@ -432,11 +428,14 @@ export default function BrandProfilesPage() {
               ] as const
             ).map(([label, value, setter]) => (
               <div key={label}>
-                <label className="block text-[11px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-                  {label}
+                <label className={cn(studioInner.sectionLabel, "mb-1.5 block overflow-hidden")}>
+                  <span className={jsonHintClass}>
+                    {label.includes("array") ? "JSON array" : "JSON object"}
+                  </span>
+                  {label.replace(/\s*\([^)]+\)\s*$/, "")}
                 </label>
                 <textarea
-                  className={jsonTextareaClass}
+                  className={studioInner.textareaMono}
                   value={value}
                   onChange={(e) => setter(e.target.value)}
                   spellCheck={false}
@@ -448,7 +447,7 @@ export default function BrandProfilesPage() {
       )}
 
       {!selectedId && !isNew && !loadingList && (
-        <p className="text-sm text-muted-foreground">Select a profile or create a new one.</p>
+        <p className="text-sm text-[#6B5F4E]">Select a profile or create a new one.</p>
       )}
     </div>
   );

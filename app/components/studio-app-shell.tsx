@@ -60,6 +60,7 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const s = stats?.sidebar;
+  const isAce = pathname === "/ace" || pathname.startsWith("/ace/");
 
   return (
     <StudioUIProvider>
@@ -123,6 +124,7 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 p-4 space-y-1">
           {NAV.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const isAceItem = item.href === "/ace";
             const badge =
               item.badgeKey && s && typeof s[item.badgeKey] === "number" && s[item.badgeKey] > 0
                 ? (s[item.badgeKey] as number)
@@ -133,14 +135,24 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 className={cn(
                   "flex items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors",
-                  active
-                    ? "bg-[#FBF7EE] text-[#1A1A1A] border border-[#E8E0D4]"
-                    : "text-[#6B6B6B] hover:bg-[#FBF7EE]/60 hover:text-[#1A1A1A]"
+                  isAceItem && active
+                    ? "bg-[#1F1A14] text-[#F5EFE4] border border-[#2C2318] relative"
+                    : active
+                      ? "bg-[#EBDFC5] text-[#1A1A1A] font-medium border border-[#E4D9C2]"
+                      : "text-[#6B6B6B] hover:bg-[#FBF7EE]/60 hover:text-[#1A1A1A]"
                 )}
               >
-                <span>{item.label}</span>
-                {badge != null && (
-                  <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full bg-[#C8571E] text-white text-[10px] font-medium flex items-center justify-center">
+                <span className="flex items-center gap-2">
+                  {isAceItem && active && (
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E8A24A] opacity-60" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E8A24A]" />
+                    </span>
+                  )}
+                  {item.label}
+                </span>
+                {badge != null && !isAceItem && (
+                  <span className="font-[family-name:var(--font-geist-mono)] text-[11px] text-[#6B5F4E] tabular-nums">
                     {badge > 99 ? "99+" : badge}
                   </span>
                 )}
@@ -163,7 +175,14 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
       </aside>
-      <div className="flex-1 min-w-0">{children}</div>
+      <div
+        className={cn(
+          "flex-1 min-w-0 overflow-y-auto",
+          isAce ? "bg-[#0F0C08] text-[#F0E6CF]" : "bg-[#F5EFE4]"
+        )}
+      >
+        {children}
+      </div>
       <StudioCommandPalette />
     </div>
     </StudioUIProvider>

@@ -42,7 +42,7 @@ describe("getModelForRole", () => {
   });
 
   it("supports all defined agent roles", () => {
-    const roles: AgentRole[] = ["research", "leads", "editor", "drafting", "revision", "lint", "linkedin"];
+    const roles: AgentRole[] = ["research", "leads", "editor", "drafting", "revision", "lint", "linkedin", "brainstorm"];
     for (const role of roles) {
       const config = getModelForRole(role);
       expect(config.provider).toBeDefined();

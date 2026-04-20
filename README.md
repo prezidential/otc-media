@@ -25,7 +25,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; see `lib/supabase/` for additional schemas)
+- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; see `lib/supabase/` for additional schemas)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -48,6 +48,7 @@ LLM_DRAFTING=anthropic:claude-sonnet-4-20250514
 LLM_REVISION=anthropic:claude-sonnet-4-20250514
 LLM_LINT=anthropic:claude-sonnet-4-20250514
 LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
+LLM_BRAINSTORM=anthropic:claude-sonnet-4-20250514
 BEEHIIV_ENABLED=false
 BEEHIIV_API_KEY=your-beehiiv-api-key
 BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id

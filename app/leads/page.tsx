@@ -1,14 +1,43 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Sparkles, Megaphone, Check, Loader2, Inbox, CheckCircle2, FileText, X, CheckCheck, XCircle, Newspaper } from "lucide-react";
+import {
+  Sparkles,
+  Megaphone,
+  Check,
+  Loader2,
+  Inbox,
+  CheckCircle2,
+  FileText,
+  X,
+  CheckCheck,
+  XCircle,
+  Newspaper,
+} from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
+import { studioInner, studioTab, studioTabCountBadge } from "@/lib/studio/inner-classes";
 
 type BrandProfile = { id: string; name: string; created_at: string };
-type Lead = { id: string; angle: string; why_now: string; who_it_impacts: string; contrarian_take: string; confidence_score: number; status: string; created_at: string };
+type Lead = {
+  id: string;
+  angle: string;
+  why_now: string;
+  who_it_impacts: string;
+  contrarian_take: string;
+  confidence_score: number;
+  status: string;
+  created_at: string;
+};
 type LeadTab = "pending_review" | "approved" | "drafted";
+
+function leadAge(createdAt: string): string {
+  const d = Math.floor((Date.now() - new Date(createdAt).getTime()) / (24 * 60 * 60 * 1000));
+  if (d <= 0) return "today";
+  if (d === 1) return "1d";
+  return `${d}d`;
+}
 
 export default function LeadsPage() {
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
@@ -19,21 +48,40 @@ export default function LeadsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [promoLoading, setPromoLoading] = useState(false);
   const [promo, setPromo] = useState<{ item: { title: string; type: string }; promoText: string } | null>(null);
-  const [approvedLeadCount, setApprovedLeadCount] = useState(0);
+  const [tabCounts, setTabCounts] = useState<Record<LeadTab, number>>({
+    pending_review: 0,
+    approved: 0,
+    drafted: 0,
+  });
 
-  async function loadApprovedLeadCount() {
-    const res = await fetch("/api/leads/list?status=approved");
-    const text = await res.text();
-    let data: { leads?: Lead[] } = {};
-    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
-    setApprovedLeadCount((data.leads ?? []).length);
-  }
+  const loadTabCounts = useCallback(async () => {
+    const [r1, r2, r3] = await Promise.all([
+      fetch("/api/leads/list?status=pending_review"),
+      fetch("/api/leads/list?status=approved"),
+      fetch("/api/leads/list?status=drafted"),
+    ]);
+    const parse = async (res: Response) => {
+      const t = await res.text();
+      try {
+        const j = JSON.parse(t) as { leads?: Lead[] };
+        return (j.leads ?? []).length;
+      } catch {
+        return 0;
+      }
+    };
+    const [c1, c2, c3] = await Promise.all([parse(r1), parse(r2), parse(r3)]);
+    setTabCounts({ pending_review: c1, approved: c2, drafted: c3 });
+  }, []);
 
   async function loadBrandProfiles() {
     const res = await fetch("/api/brand-profiles/list");
     const text = await res.text();
     let data: { brandProfiles?: BrandProfile[]; defaultBrandProfileId?: string | null } = {};
-    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = {};
+    }
     const list = data.brandProfiles ?? [];
     setBrandProfiles(list);
     if (list.length > 0 && !selectedBrandProfileId) {
@@ -48,133 +96,201 @@ export default function LeadsPage() {
     const res = await fetch(`/api/leads/list?status=${status}`);
     const text = await res.text();
     let data: { leads?: Lead[] } = {};
-    try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = {};
+    }
     setLeads(data.leads ?? []);
   }
 
   function switchTab(tab: LeadTab) {
     setActiveTab(tab);
-    loadLeads(tab);
+    void loadLeads(tab);
   }
 
   async function generateLeads() {
-    if (!selectedBrandProfileId) { setMessage("Select a brand profile first."); return; }
-    setGenerating(true); setMessage(null);
+    if (!selectedBrandProfileId) {
+      setMessage("Select a brand profile first.");
+      return;
+    }
+    setGenerating(true);
+    setMessage(null);
+    const start = Date.now();
     try {
-      const res = await fetch("/api/leads/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandProfileId: selectedBrandProfileId }) });
+      const res = await fetch("/api/leads/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandProfileId: selectedBrandProfileId }),
+      });
       const data = await res.json().catch(() => ({}));
-      if (data.ok) { setMessage(`+${data.leadsInserted ?? 0} leads across ${data.directivesProcessed ?? 0} directives`); await loadLeads(); }
-      else { setMessage(data.error ?? `Error: ${res.status}`); }
-    } finally { setGenerating(false); }
+      const elapsed = Date.now() - start;
+      const minMs = 1800;
+      if (elapsed < minMs) await new Promise((r) => setTimeout(r, minMs - elapsed));
+      if (data.ok) {
+        setMessage(`+${data.leadsInserted ?? 0} leads across ${data.directivesProcessed ?? 0} directives`);
+        await loadLeads();
+        await loadTabCounts();
+      } else {
+        setMessage(data.error ?? `Error: ${res.status}`);
+      }
+    } finally {
+      setGenerating(false);
+    }
   }
 
   async function fetchPromo() {
     if (!selectedBrandProfileId) return;
-    setPromoLoading(true); setPromo(null);
+    setPromoLoading(true);
+    setPromo(null);
     try {
-      const res = await fetch("/api/revenue/recommend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandProfileId: selectedBrandProfileId }) });
+      const res = await fetch("/api/revenue/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandProfileId: selectedBrandProfileId }),
+      });
       const data = await res.json().catch(() => ({}));
       if (data.ok && data.item && data.promoText) setPromo({ item: data.item, promoText: data.promoText });
-    } finally { setPromoLoading(false); }
+    } finally {
+      setPromoLoading(false);
+    }
   }
 
   async function approve(id: string) {
-    const res = await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    const res = await fetch("/api/leads/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
     if (res.ok) {
       await loadLeads();
-      await loadApprovedLeadCount();
+      await loadTabCounts();
     }
   }
 
   async function dismiss(id: string) {
     setLeads((prev) => prev.filter((l) => l.id !== id));
-    const res = await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    const res = await fetch("/api/leads/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
     if (!res.ok) await loadLeads();
+    await loadTabCounts();
   }
 
   async function bulkApprove() {
     const ids = leads.map((l) => l.id);
     setLeads([]);
     for (const id of ids) {
-      await fetch("/api/leads/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      await fetch("/api/leads/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
     }
     await loadLeads();
-    await loadApprovedLeadCount();
+    await loadTabCounts();
   }
 
   async function bulkDismiss() {
     const ids = leads.map((l) => l.id);
     setLeads([]);
     for (const id of ids) {
-      await fetch("/api/leads/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      await fetch("/api/leads/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
     }
     await loadLeads();
+    await loadTabCounts();
   }
 
   useEffect(() => {
     void loadBrandProfiles();
     void loadLeads();
-    void loadApprovedLeadCount();
+    void loadTabCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  const confidenceColor = (score: number) =>
-    score >= 0.7 ? "bg-success" : score >= 0.4 ? "bg-warning" : "bg-danger";
-
   return (
-    <div className="p-6 lg:p-10 max-w-[1100px]">
-      <PageHeader title="Editorial Leads" description="Generate, review, and approve editorial leads" />
+    <div className={studioInner.pageRoot}>
+      <PageHeader
+        variant="studio"
+        title="Editorial leads"
+        description="Generate angles from research, review with a human gate, then feed approved leads into Issues."
+      />
 
-      {approvedLeadCount >= 3 && (
-        <div className="rounded-xl border border-success/30 bg-success/5 p-4 mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-foreground">
-            <span className="font-semibold">{approvedLeadCount} approved leads</span>
-            <span className="text-muted-foreground"> — enough to generate a newsletter draft (Editor agent or Issues page).</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/issues"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
-            >
+      {tabCounts.pending_review >= 2 && (
+        <div
+          className="mb-6 rounded-[14px] border border-[#3F6B45]/25 px-4 py-3 text-[13px] text-[#1F1A14]"
+          style={{ background: "linear-gradient(135deg, #3F6B4514, #FBF7EE)" }}
+        >
+          <span className="font-medium text-[#2d5231]">{tabCounts.pending_review} leads pending review</span>
+          <span className="text-[#6B5F4E]"> — clear the queue so writers can keep shipping.</span>
+        </div>
+      )}
+
+      {tabCounts.approved >= 3 && (
+        <div className="mb-6 rounded-[14px] border border-[#C8571E]/25 bg-[#C8571E]/08 px-4 py-3 text-[13px] text-[#1F1A14]">
+          <span className="font-medium">{tabCounts.approved} approved leads</span>
+          <span className="text-[#6B5F4E]"> — enough to generate a newsletter draft.</span>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Link href="/issues" className={studioInner.btnPrimary + " !py-1.5 !text-xs"}>
               <Newspaper className="h-3.5 w-3.5" />
               Open Issues
             </Link>
-            <Link
-              href="/research"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2 text-xs font-medium text-foreground hover:bg-accent transition-colors"
-            >
-              Run Editor on Research
+            <Link href="/research" className={studioInner.btnSecondary + " !py-1.5 !text-xs"}>
+              Run editor pipeline
             </Link>
           </div>
         </div>
       )}
 
-      <div className="rounded-xl border border-border bg-card p-5 mb-6">
-        <div className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+      <div className={cn(studioInner.card, "mb-6")}>
+        <div className={studioInner.sectionLabel}>
           <Sparkles className="h-3.5 w-3.5" />
-          Lead Generation
+          Lead generation
         </div>
-        <div className="flex gap-3 items-center flex-wrap">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={selectedBrandProfileId}
             onChange={(e) => setSelectedBrandProfileId(e.target.value)}
-            className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
+            className={cn(studioInner.select, "min-w-[200px] flex-1")}
           >
             <option value="">Select brand profile</option>
-            {brandProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {brandProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
           </select>
-          <button onClick={generateLeads} disabled={generating || !selectedBrandProfileId}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+          <button
+            type="button"
+            onClick={() => void generateLeads()}
+            disabled={generating || !selectedBrandProfileId}
+            className={studioInner.btnPrimary}
+          >
             {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {generating ? "Generating..." : "Generate Leads"}
+            {generating ? "Generating…" : "Generate leads"}
           </button>
-          <button onClick={fetchPromo} disabled={promoLoading || !selectedBrandProfileId}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50 transition-colors">
+          <button
+            type="button"
+            onClick={() => void fetchPromo()}
+            disabled={promoLoading || !selectedBrandProfileId}
+            className={studioInner.btnSecondary}
+          >
             {promoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Megaphone className="h-4 w-4" />}
-            {promoLoading ? "Loading..." : "Get Promo"}
+            {promoLoading ? "Loading…" : "Get promo"}
           </button>
           {message && (
-            <span className={`text-sm font-mono ${message.startsWith("+") ? "text-primary" : "text-danger"}`}>
+            <span
+              className={cn(
+                "font-[family-name:var(--font-geist-mono)] text-[12px]",
+                message.startsWith("+") ? "text-[#3F6B45]" : "text-[#C0442A]"
+              )}
+            >
               {message}
             </span>
           )}
@@ -182,52 +298,40 @@ export default function LeadsPage() {
       </div>
 
       {promo && (
-        <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 mb-6">
-          <div className="font-mono text-[11px] uppercase tracking-widest text-primary mb-3 flex items-center gap-2">
+        <div className={cn(studioInner.card, "mb-6 border-[#C8571E]/30")}>
+          <div className={studioInner.sectionLabel}>
             <Megaphone className="h-3.5 w-3.5" />
-            Recommended Promo: {promo.item.title} ({promo.item.type})
+            Recommended promo · {promo.item.title} ({promo.item.type})
           </div>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">{promo.promoText}</div>
+          <div className={cn(studioInner.body, "whitespace-pre-wrap")}>{promo.promoText}</div>
         </div>
       )}
 
-      <div className="flex items-center gap-1 mb-4">
-        <button onClick={() => switchTab("pending_review")}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-            activeTab === "pending_review" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-          )}>
+      <div className="mb-4 flex flex-wrap items-end gap-0 border-b border-[#E4D9C2]">
+        <button type="button" onClick={() => switchTab("pending_review")} className={studioTab(activeTab === "pending_review")}>
           <Inbox className="h-4 w-4" />
-          Pending Review
+          Pending review
+          <span className={studioTabCountBadge(activeTab === "pending_review")}>{tabCounts.pending_review}</span>
         </button>
-        <button onClick={() => switchTab("approved")}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-            activeTab === "approved" ? "bg-success/15 text-success" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-          )}>
+        <button type="button" onClick={() => switchTab("approved")} className={studioTab(activeTab === "approved")}>
           <CheckCircle2 className="h-4 w-4" />
           Approved
+          <span className={studioTabCountBadge(activeTab === "approved")}>{tabCounts.approved}</span>
         </button>
-        <button onClick={() => switchTab("drafted")}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-            activeTab === "drafted" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-          )}>
+        <button type="button" onClick={() => switchTab("drafted")} className={studioTab(activeTab === "drafted")}>
           <FileText className="h-4 w-4" />
           Drafted
+          <span className={studioTabCountBadge(activeTab === "drafted")}>{tabCounts.drafted}</span>
         </button>
-        <span className="ml-2 font-mono text-[11px] text-muted-foreground">({leads.length})</span>
         {activeTab === "pending_review" && leads.length > 1 && (
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={bulkDismiss}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-danger/10 px-3 py-1.5 text-[11px] font-medium text-danger hover:bg-danger/20 transition-colors">
+          <div className="mb-2 ml-auto flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => void bulkDismiss()} className={studioInner.btnSecondary + " !py-1.5 !text-xs"}>
               <XCircle className="h-3 w-3" />
-              Dismiss All
+              Dismiss all
             </button>
-            <button onClick={bulkApprove}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-3 py-1.5 text-[11px] font-semibold text-success hover:bg-success/25 transition-colors">
+            <button type="button" onClick={() => void bulkApprove()} className={studioInner.btnPositive + " !py-1.5 !text-xs"}>
               <CheckCheck className="h-3 w-3" />
-              Approve All
+              Approve all
             </button>
           </div>
         )}
@@ -235,70 +339,75 @@ export default function LeadsPage() {
 
       <div className="space-y-3">
         {leads.map((lead) => (
-          <div key={lead.id} className={cn(
-            "rounded-xl border bg-card p-5",
-            activeTab === "approved" ? "border-success/20" : "border-border"
-          )}>
-            <div className="text-sm font-semibold leading-snug mb-3">{lead.angle}</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs mb-3">
-              <div>
-                <span className="font-mono uppercase tracking-wider text-muted-foreground">Why now </span>
-                <span className="text-foreground">{lead.why_now}</span>
-              </div>
-              <div>
-                <span className="font-mono uppercase tracking-wider text-muted-foreground">Impacts </span>
-                <span className="text-foreground">{lead.who_it_impacts}</span>
-              </div>
+          <div
+            key={lead.id}
+            className={cn(
+              studioInner.card,
+              "grid grid-cols-1 gap-4 md:grid-cols-[auto_1fr_auto] md:items-start md:gap-5",
+              activeTab === "approved" && "border-[#3F6B45]/35"
+            )}
+          >
+            <div className="flex items-start gap-2">
+              <span
+                className="rounded px-2 py-1 font-[family-name:var(--font-geist-mono)] text-[10px] font-semibold uppercase tracking-wide text-[#C8571E]"
+                style={{ background: "#C8571E18" }}
+              >
+                {lead.id.slice(0, 8)}
+              </span>
             </div>
-            <div className="text-xs whitespace-pre-wrap leading-relaxed text-muted-foreground mb-4">
-              {lead.contrarian_take}
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden">
-                  <div className={`h-full rounded-full ${confidenceColor(lead.confidence_score)}`}
-                    style={{ width: `${lead.confidence_score * 100}%` }} />
-                </div>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {(lead.confidence_score * 100).toFixed(0)}%
+            <div className="min-w-0">
+              <div className="text-[15px] font-medium leading-snug text-[#1F1A14]">
+                {lead.angle}{" "}
+                <span className="font-[family-name:var(--font-instrument-serif)] text-[15px] font-normal italic text-[#6B5F4E]">
+                  · lens
                 </span>
               </div>
+              <p className={cn(studioInner.body, "mt-2 line-clamp-3")}>{lead.contrarian_take}</p>
+              <div className="mt-2 flex flex-wrap gap-3 font-[family-name:var(--font-geist-mono)] text-[10px] uppercase tracking-[0.14em] text-[#9C8E78]">
+                <span>{leadAge(lead.created_at)} old</span>
+                <span className="text-[#E4D9C2]">|</span>
+                <span>confidence {(lead.confidence_score * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 md:flex-col md:items-end">
               {activeTab === "pending_review" ? (
-                <div className="flex items-center gap-2">
-                  <button onClick={() => dismiss(lead.id)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-danger/10 px-3 py-2 text-xs font-medium text-danger hover:bg-danger/20 transition-colors">
+                <>
+                  <button type="button" onClick={() => dismiss(lead.id)} className={studioInner.btnSecondary + " !text-xs"}>
                     <X className="h-3.5 w-3.5" />
-                    Dismiss
+                    Pass
                   </button>
-                  <button onClick={() => approve(lead.id)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-success/15 px-4 py-2 text-xs font-semibold text-success hover:bg-success/25 transition-colors">
+                  <button type="button" onClick={() => approve(lead.id)} className={studioInner.btnPositive + " !text-xs"}>
                     <Check className="h-3.5 w-3.5" />
                     Approve
                   </button>
-                </div>
+                </>
               ) : activeTab === "approved" ? (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Approved
-                </span>
+                <Link href="/issues" className={studioInner.btnInk + " !text-xs"}>
+                  → Draft
+                </Link>
               ) : (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                  <FileText className="h-3.5 w-3.5" />
-                  Used in draft
-                </span>
+                <span className={cn(studioInner.tag, studioInner.tagGreen, "!normal-case")}>Used in draft</span>
               )}
             </div>
           </div>
         ))}
         {leads.length === 0 && (
-          <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card py-16 text-muted-foreground">
-            <Inbox className="h-10 w-10 mb-3 opacity-40" />
-            <span className="text-sm">
-              {activeTab === "pending_review" ? "No leads pending review" : activeTab === "approved" ? "No approved leads" : "No drafted leads yet"}
-            </span>
-            <span className="text-xs mt-1">
-              {activeTab === "pending_review" ? "Generate leads to get started" : activeTab === "approved" ? "Approve pending leads to see them here" : "Leads move here after being used in a draft"}
-            </span>
+          <div className="flex flex-col items-center justify-center rounded-[14px] border border-dashed border-[#E4D9C2] bg-[#FBF7EE]/80 py-16">
+            <Inbox className="mb-3 h-10 w-10 text-[#C8571E]/40" />
+            <p className="font-[family-name:var(--font-instrument-serif)] text-xl italic text-[#6B5F4E]">
+              {activeTab === "pending_review"
+                ? "No leads pending review"
+                : activeTab === "approved"
+                  ? "No approved leads yet"
+                  : "No drafted leads"}
+            </p>
+            <p className={cn(studioInner.body, "mt-2 max-w-md text-center")}>
+              {activeTab === "pending_review"
+                ? "Generate leads from the card above to populate this queue."
+                : activeTab === "approved"
+                  ? "Approve items from Pending review to stage them here."
+                  : "Leads appear here after they are used in an issue draft."}
+            </p>
           </div>
         )}
       </div>
