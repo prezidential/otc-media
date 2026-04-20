@@ -27,6 +27,14 @@ const PUBLIC_PATH_PREFIXES = [
   "/favicon.ico",
 ];
 
+/** Paths that signed-in-but-no-workspace users must still be able to reach. */
+const ONBOARDING_ALLOWED_PREFIXES = [
+  "/onboarding",
+  "/api/me",
+  "/api/workspaces",
+  "/api/auth",
+];
+
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return true;
@@ -35,6 +43,12 @@ function isPublicPath(pathname: string): boolean {
   const last = pathname.split("/").pop() ?? "";
   if (last.includes(".")) return true;
   return false;
+}
+
+function isOnboardingAllowed(pathname: string): boolean {
+  return ONBOARDING_ALLOWED_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
 }
 
 export async function middleware(req: NextRequest) {
@@ -74,6 +88,21 @@ export async function middleware(req: NextRequest) {
     url.pathname = "/sign-in";
     url.searchParams.set("next", pathname + search);
     return NextResponse.redirect(url);
+  }
+
+  // Signed-in users without any workspace are sent to /onboarding (except for
+  // the small allowlist that the onboarding flow itself depends on).
+  if (!isOnboardingAllowed(pathname)) {
+    const { count } = await supabase
+      .from("workspace_members")
+      .select("workspace_id", { count: "exact", head: true })
+      .eq("user_id", user.id);
+    if (!count || count === 0) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/onboarding";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
   }
 
   return res;
