@@ -2,14 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createMockSupabase, makeRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
-vi.mock("@/lib/supabase/server", () => ({
-  supabaseAdmin: () => mockSupabase,
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" };
+
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctx),
 }));
 
 import { GET } from "@/app/api/signals/list/route";
 
 beforeEach(() => {
-  vi.stubEnv("WORKSPACE_ID", "ws-123");
   vi.clearAllMocks();
 });
 

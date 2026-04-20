@@ -2,8 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createMockSupabase, makeRequest, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" };
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctx),
 }));
 
 import { GET } from "@/app/api/brand-profiles/list/route";

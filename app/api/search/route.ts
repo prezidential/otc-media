@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import type { SearchResultPayload } from "@/lib/search/types";
 
 /** Avoid breaking PostgREST `ilike` patterns and cap length. */
@@ -20,11 +20,6 @@ function dedupeSignals<T extends { id?: string }>(rows: T[]): T[] {
 }
 
 export async function GET(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
-
   const { searchParams } = new URL(req.url);
   const qRaw = (searchParams.get("q") ?? "").trim();
   const fragment = sanitizeIlikeFragment(qRaw);
@@ -33,8 +28,11 @@ export async function GET(req: Request) {
     return NextResponse.json(empty);
   }
 
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
+
   const pattern = `%${fragment}%`;
-  const supabase = supabaseAdmin();
 
   const [byTitle, byPublisher, leadsRes, draftsRes, outlinesRes] = await Promise.all([
     supabase
