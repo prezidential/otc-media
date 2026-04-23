@@ -1,44 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockSupabase, makeRequest } from "./helpers";
 
-const { mockSupabase } = vi.hoisted(() => {
-  type Result = { data: unknown; error: { message: string } | null };
-
-  function createChain(finalResult: Result = { data: null, error: null }) {
-    const chain = {} as Record<string, ReturnType<typeof vi.fn>>;
-    const methods = ["select", "insert", "update", "eq", "order", "limit"] as const;
-    for (const method of methods) {
-      chain[method] = vi.fn().mockReturnValue(chain);
-    }
-    chain.maybeSingle = vi.fn().mockResolvedValue(finalResult);
-    chain.single = vi.fn().mockResolvedValue(finalResult);
-    (chain as unknown as { then: (resolve: (value: Result) => void) => void }).then = (resolve) =>
-      resolve(finalResult);
-    return chain;
-  }
-
-  const chains = new Map<string, ReturnType<typeof createChain>>();
-  const from = vi.fn((table: string) => {
-    if (!chains.has(table)) {
-      chains.set(table, createChain());
-    }
-    return chains.get(table)!;
-  });
-
-  return {
-    mockSupabase: {
-      from,
-      _chains: chains,
-      _reset() {
-        chains.clear();
-      },
-      _setResult(table: string, result: Result) {
-        const chain = createChain(result);
-        chains.set(table, chain);
-        return chain;
-      },
-    },
-  };
-});
+const mockSupabase = createMockSupabase();
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
@@ -46,102 +9,136 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { POST } from "@/app/api/brainstorm/sessions/[id]/confirm-manual-signal/route";
 
-const ctx = { params: Promise.resolve({ id: "session-1" }) };
+function routeParams(id: string) {
+  return { params: Promise.resolve({ id }) };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSupabase._reset();
   vi.stubEnv("WORKSPACE_ID", "ws-123");
 });
 
 describe("POST /api/brainstorm/sessions/[id]/confirm-manual-signal", () => {
-  it("returns 400 when the session has no pending manual signal", async () => {
-    mockSupabase._setResult("brainstorm_sessions", {
-      data: { id: "session-1", artifact_json: { working_artifact: { thesis: "Keep me" } } },
+  it("returns 500 when WORKSPACE_ID is missing", async () => {
+    vi.stubEnv("WORKSPACE_ID", "");
+
+    const res = await POST(
+      makeRequest("http://localhost:3000/api/brainstorm/sessions/sess-1/confirm-manual-signal", {
+        method: "POST",
+      }),
+      routeParams("sess-1")
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(json.error).toContain("WORKSPACE_ID");
+  });
+
+  it("returns 400 when there is no pending manual signal artifact", async () => {
+    const sessionChain = mockSupabase._setResult("brainstorm_sessions", { data: null, error: null });
+    sessionChain.maybeSingle.mockResolvedValueOnce({
+      data: {
+        id: "sess-1",
+        artifact_json: {},
+      },
       error: null,
     });
 
     const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
+      makeRequest("http://localhost:3000/api/brainstorm/sessions/sess-1/confirm-manual-signal", {
+        method: "POST",
+      }),
+      routeParams("sess-1")
     );
     const json = await res.json();
 
     expect(res.status).toBe(400);
     expect(json.error).toContain("No pending manual signal");
-    expect(mockSupabase.from).toHaveBeenCalledTimes(1);
-    expect(mockSupabase._chains.has("signals")).toBe(false);
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("signals");
   });
 
-  it("requires a non-empty pending signal title before inserting", async () => {
-    mockSupabase._setResult("brainstorm_sessions", {
-      data: { id: "session-1", artifact_json: { pending_manual_signal: { title: "   " } } },
+  it("returns 400 when pending signal has no title", async () => {
+    const sessionChain = mockSupabase._setResult("brainstorm_sessions", { data: null, error: null });
+    sessionChain.maybeSingle.mockResolvedValueOnce({
+      data: {
+        id: "sess-1",
+        artifact_json: { pending_manual_signal: { url: "https://example.com" } },
+      },
       error: null,
     });
 
     const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
+      makeRequest("http://localhost:3000/api/brainstorm/sessions/sess-1/confirm-manual-signal", {
+        method: "POST",
+      }),
+      routeParams("sess-1")
     );
     const json = await res.json();
 
     expect(res.status).toBe(400);
     expect(json.error).toContain("missing a title");
-    expect(mockSupabase._chains.has("signals")).toBe(false);
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("signals");
   });
 
-  it("inserts the pending signal and clears only the pending artifact", async () => {
-    const sessionChain = mockSupabase._setResult("brainstorm_sessions", {
+  it("creates a signal, clears pending artifact, and returns created signal", async () => {
+    const sessionChain = mockSupabase._setResult("brainstorm_sessions", { data: null, error: null });
+    sessionChain.maybeSingle.mockResolvedValueOnce({
       data: {
-        id: "session-1",
+        id: "sess-1",
         artifact_json: {
-          working_artifact: { thesis: "Keep this draft state" },
           pending_manual_signal: {
-            title: "  OAuth grants expanding in CI  ",
-            url: "   ",
-            notes: "  Field notes from customer calls  ",
+            title: "  AI launch rumor  ",
+            url: " https://news.example/ai-rumor ",
+            notes: "  Mentioned by two creators.  ",
           },
+          existing_key: "keep-me",
         },
       },
       error: null,
     });
-    const signalChain = mockSupabase._setResult("signals", {
-      data: { id: "signal-1", title: "OAuth grants expanding in CI", url: "manual://abc123" },
+
+    const signalsChain = mockSupabase._setResult("signals", {
+      data: { id: "sig-1", title: "AI launch rumor", url: "https://news.example/ai-rumor" },
+      error: null,
+    });
+    signalsChain.single.mockResolvedValueOnce({
+      data: { id: "sig-1", title: "AI launch rumor", url: "https://news.example/ai-rumor" },
       error: null,
     });
 
+    const sessionsUpdateChain = mockSupabase._setResult("brainstorm_sessions", { data: null, error: null });
+
     const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
+      makeRequest("http://localhost:3000/api/brainstorm/sessions/sess-1/confirm-manual-signal", {
+        method: "POST",
+      }),
+      routeParams("sess-1")
     );
     const json = await res.json();
 
     expect(res.status).toBe(200);
     expect(json).toEqual({
       ok: true,
-      signal: { id: "signal-1", title: "OAuth grants expanding in CI", url: "manual://abc123" },
+      signal: { id: "sig-1", title: "AI launch rumor", url: "https://news.example/ai-rumor" },
     });
 
-    expect(signalChain.insert).toHaveBeenCalledTimes(1);
-    const insertPayload = vi.mocked(signalChain.insert).mock.calls[0][0] as Record<string, unknown>;
-    expect(insertPayload).toMatchObject({
-      workspace_id: "ws-123",
-      source_id: null,
-      title: "OAuth grants expanding in CI",
-      publisher: "Manual Entry",
-      raw_text: "Field notes from customer calls",
-      normalized_summary: "Field notes from customer calls",
-      relevance_score: 0.5,
-      trust_score: 1.0,
-    });
-    expect(insertPayload.url).toMatch(/^manual:\/\/[a-f0-9]{12}$/);
-    expect(insertPayload.dedupe_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(signalsChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: "ws-123",
+        title: "AI launch rumor",
+        publisher: "Manual Entry",
+        raw_text: "Mentioned by two creators.",
+        normalized_summary: "Mentioned by two creators.",
+      })
+    );
 
-    expect(sessionChain.update).toHaveBeenCalledTimes(1);
-    const updatePayload = vi.mocked(sessionChain.update).mock.calls[0][0] as Record<string, unknown>;
-    expect(updatePayload.artifact_json).toEqual({
-      working_artifact: { thesis: "Keep this draft state" },
-      pending_manual_signal: null,
-    });
+    expect(signalsChain.insert.mock.calls[0]?.[0]?.url).toBe("https://news.example/ai-rumor");
+    expect(String(signalsChain.insert.mock.calls[0]?.[0]?.dedupe_hash)).toMatch(/^[a-f0-9]{64}$/);
+
+    expect(sessionsUpdateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact_json: { pending_manual_signal: null, existing_key: "keep-me" },
+      })
+    );
   });
 });
