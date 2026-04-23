@@ -106,8 +106,6 @@ describe("POST /api/brainstorm/sessions/[id]/confirm-manual-signal", () => {
       error: null,
     });
 
-    const sessionsUpdateChain = mockSupabase._setResult("brainstorm_sessions", { data: null, error: null });
-
     const res = await POST(
       makeRequest("http://localhost:3000/api/brainstorm/sessions/sess-1/confirm-manual-signal", {
         method: "POST",
@@ -135,7 +133,7 @@ describe("POST /api/brainstorm/sessions/[id]/confirm-manual-signal", () => {
     expect(signalsChain.insert.mock.calls[0]?.[0]?.url).toBe("https://news.example/ai-rumor");
     expect(String(signalsChain.insert.mock.calls[0]?.[0]?.dedupe_hash)).toMatch(/^[a-f0-9]{64}$/);
 
-    expect(sessionsUpdateChain.update).toHaveBeenCalledWith(
+    expect(sessionChain.update).toHaveBeenCalledWith(
       expect.objectContaining({
         artifact_json: { pending_manual_signal: null, existing_key: "keep-me" },
       })
