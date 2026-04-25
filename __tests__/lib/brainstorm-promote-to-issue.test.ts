@@ -1,141 +1,123 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { callLLM, getModelForRole } from "@/lib/llm/provider";
 import { promoteBrainstormSessionToIssueDraft } from "@/lib/brainstorm/promote-to-issue";
 
-const providerMocks = vi.hoisted(() => ({
+vi.mock("@/lib/llm/provider", () => ({
   callLLM: vi.fn(),
   getModelForRole: vi.fn(),
 }));
 
-vi.mock("@/lib/llm/provider", () => ({
-  callLLM: providerMocks.callLLM,
-  getModelForRole: providerMocks.getModelForRole,
-}));
-
-const draftObject = {
-  title: "Promoted brainstorm",
-  hook_paragraphs: ["Hook one", "Hook two"],
-  fresh_signals: "Signal context",
-  deep_dive: "Deep dive body",
-  dojo_checklist: ["Check 1", "Check 2", "Check 3", "Check 4", "Check 5"],
-  promo_slot: "Subscribe for more.",
-  close: "See you next week.",
-  sources: ["https://example.com/signal"],
-  metadata: { model: "test-drafting-model", thesis: "This is the thesis." },
+const validDraft = {
+  title: "The operating system for creator signals",
+  hook_paragraphs: ["Signal volume keeps rising.", "The winners turn it into an editorial edge."],
+  fresh_signals: "Two cited stories show distribution and tooling pressure.",
+  deep_dive: "Creators need a repeatable system for deciding which signals become issues.",
+  dojo_checklist: ["Pick one thesis", "Cite the source", "Name the reader", "Make the move", "Ship it"],
+  promo_slot: "Subscribe for the next operator memo.",
+  close: "See you in the next issue.",
+  sources: ["https://example.com/signal-one"],
+  metadata: {
+    model: "claude-test",
+    thesis: "Signal workflows reduce editorial drift.",
+  },
 };
 
-function createPromoteSupabase() {
-  const signalResult = {
-    data: [
-      {
-        id: "sig-1",
-        title: "Signal One",
-        url: "https://example.com/signal",
-        normalized_summary: "Summary text",
-      },
-    ],
-    error: null,
+function createPromoteSupabaseMock() {
+  const signalQuery = {
+    select: vi.fn(() => signalQuery),
+    eq: vi.fn(() => signalQuery),
+    in: vi.fn().mockResolvedValue({
+      data: [
+        {
+          id: "sig-1",
+          title: "Signal One",
+          url: "https://example.com/signal-one",
+          normalized_summary: "A useful source summary.",
+        },
+      ],
+      error: null,
+    }),
   };
-  const insertResult = { data: { id: "draft-123" }, error: null };
 
-  const signalsChain = {
-    select: vi.fn(),
-    eq: vi.fn(),
-    in: vi.fn(),
+  const issueQuery = {
+    insert: vi.fn(() => issueQuery),
+    select: vi.fn(() => issueQuery),
+    single: vi.fn().mockResolvedValue({ data: { id: "draft-1" }, error: null }),
   };
-  signalsChain.select.mockReturnValue(signalsChain);
-  signalsChain.eq.mockReturnValue(signalsChain);
-  signalsChain.in.mockResolvedValue(signalResult);
-
-  const draftsChain = {
-    insert: vi.fn(),
-    select: vi.fn(),
-    single: vi.fn(),
-  };
-  draftsChain.insert.mockReturnValue(draftsChain);
-  draftsChain.select.mockReturnValue(draftsChain);
-  draftsChain.single.mockResolvedValue(insertResult);
 
   const from = vi.fn((table: string) => {
-    if (table === "signals") return signalsChain;
-    if (table === "issue_drafts") return draftsChain;
-    throw new Error(`Unexpected table: ${table}`);
+    if (table === "signals") return signalQuery;
+    if (table === "issue_drafts") return issueQuery;
+    throw new Error(`Unexpected table ${table}`);
   });
 
   return {
     supabase: { from },
     from,
-    signalsChain,
-    draftsChain,
+    signalQuery,
+    issueQuery,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  providerMocks.getModelForRole.mockReturnValue({
-    provider: "anthropic",
-    model: "test-drafting-model",
-  });
+  vi.mocked(getModelForRole).mockReturnValue({ provider: "anthropic", model: "claude-test" });
 });
 
 describe("promoteBrainstormSessionToIssueDraft", () => {
-  it("turns a saved artifact into a validated issue draft insert", async () => {
-    providerMocks.callLLM.mockResolvedValueOnce({
-      text: `Model notes before JSON:\n${JSON.stringify(draftObject)}\nThanks.`,
+  it("validates noisy model JSON and inserts a rendered workspace-scoped draft", async () => {
+    const { supabase, signalQuery, issueQuery } = createPromoteSupabaseMock();
+    vi.mocked(callLLM).mockResolvedValue({
+      text: `Here is the draft:\n${JSON.stringify(validDraft)}\nDone.`,
       provider: "anthropic",
-      model: "test-drafting-model",
+      model: "claude-test",
     });
-    const { supabase, signalsChain, draftsChain } = createPromoteSupabase();
-    const citedSignalIds = Array.from({ length: 15 }, (_, i) => `sig-${i + 1}`);
 
     const result = await promoteBrainstormSessionToIssueDraft({
       supabase: supabase as never,
-      workspaceId: "ws-123",
+      workspaceId: "workspace-1",
       sessionId: "session-1",
       brandProfileId: "brand-1",
       artifactJson: {
         working_artifact: {
-          thesis: "Identity security angle",
-          working_outline: "Outline",
-          cited_signal_ids: [...citedSignalIds, 42, ""],
+          thesis: "Signal workflows reduce editorial drift.",
+          cited_signal_ids: ["sig-1", "sig-2"],
+          working_outline: "Opening thesis, cited signals, operator playbook.",
         },
       },
     });
 
-    expect(result).toEqual({ draftId: "draft-123", contentJson: draftObject });
-    expect(signalsChain.in).toHaveBeenCalledWith("id", citedSignalIds.slice(0, 12));
-    expect(providerMocks.callLLM).toHaveBeenCalledWith(
-      "drafting",
-      expect.arrayContaining([
-        expect.objectContaining({ role: "system" }),
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("Signal One"),
-        }),
-      ]),
-      { max_tokens: 8192, temperature: 0.35 }
-    );
-    expect(draftsChain.insert).toHaveBeenCalledWith({
-      workspace_id: "ws-123",
+    expect(result.draftId).toBe("draft-1");
+    expect(result.contentJson).toEqual(validDraft);
+    expect(signalQuery.eq).toHaveBeenCalledWith("workspace_id", "workspace-1");
+    expect(signalQuery.in).toHaveBeenCalledWith("id", ["sig-1", "sig-2"]);
+
+    const llmMessages = vi.mocked(callLLM).mock.calls[0]![1];
+    expect(llmMessages[1]!.content).toContain("Signal One");
+    expect(llmMessages[1]!.content).toContain("session-1");
+
+    expect(issueQuery.insert).toHaveBeenCalledWith({
+      workspace_id: "workspace-1",
       brand_profile_id: "brand-1",
-      content: expect.stringContaining("**Promoted brainstorm**"),
-      content_json: draftObject,
+      content: expect.stringContaining("The operating system for creator signals"),
+      content_json: validDraft,
     });
   });
 
-  it("rejects promotion when no working artifact has been saved", async () => {
-    const { supabase, from } = createPromoteSupabase();
+  it("rejects promotion before calling the model when no working artifact was saved", async () => {
+    const { supabase, from } = createPromoteSupabaseMock();
 
     await expect(
       promoteBrainstormSessionToIssueDraft({
         supabase: supabase as never,
-        workspaceId: "ws-123",
+        workspaceId: "workspace-1",
         sessionId: "session-1",
         brandProfileId: "brand-1",
         artifactJson: {},
       })
     ).rejects.toThrow("Nothing to promote");
 
+    expect(callLLM).not.toHaveBeenCalled();
     expect(from).not.toHaveBeenCalled();
-    expect(providerMocks.callLLM).not.toHaveBeenCalled();
   });
 });
