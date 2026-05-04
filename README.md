@@ -17,7 +17,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 - **Framework:** Next.js 16 (App Router, TypeScript)
 - **AI:** Pluggable Anthropic/OpenAI via `lib/llm/provider.ts` (default: Claude Sonnet)
 - **Database:** Supabase (hosted PostgreSQL)
-- **UI:** Tailwind CSS v4, Lucide React, JetBrains Mono
+- **UI:** Tailwind CSS v4, Lucide React, Instrument Serif + Geist Mono Studio shell
 - **Testing:** Vitest
 
 ## Getting Started
@@ -60,6 +60,14 @@ ELEVENLABS_VOICE_ID=
 
 # Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
 PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
+
+# Optional — ACE scheduled/manual automation + Telegram approvals
+ACE_ENABLED=false
+CRON_SECRET=your-cron-secret
+NOTIFICATION_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_WEBHOOK_SECRET=
 ```
 
 Notes:
@@ -69,6 +77,7 @@ Notes:
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
+- ACE variables are optional unless you run `/ace`, `/api/ace/cron`, or notification approvals. See [`docs/Cornerstone-OS-ACE.md`](docs/Cornerstone-OS-ACE.md) for Telegram webhook setup and required ACE schemas.
 
 ### Install & Run
 
@@ -77,7 +86,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000); `/` redirects to the Studio dashboard at `/dashboard`.
 
 ### First-Time Setup
 
@@ -106,13 +115,22 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ```
 app/
-├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── components/          # Studio shell, command palette, shared page pieces
+├── page.tsx             # Redirects to /dashboard
+├── dashboard/page.tsx   # Studio home: pipeline counts, nudge, quick actions
+├── signals/page.tsx     # Captured signals and ingest entry points
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
 ├── issues/page.tsx      # Issue draft generation
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── brand-profiles/      # Workspace brand voice profiles
+├── brainstorm/page.tsx  # Conversational ideation over workspace signals
+├── ace/page.tsx         # Autonomous Content Engine dashboard
 └── api/
+    ├── dashboard/stats/     # Studio counts, greeting, sidebar badges
+    ├── search/              # Cmd/Ctrl+K command palette entity search
+    ├── ace/                 # Dashboard, manual run, cron run
+    ├── brainstorm/          # Sessions, messages, manual signal, promote
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
@@ -126,21 +144,114 @@ app/
     └── runs/list/           # List ingest/generation runs
 
 lib/
+├── ace/                 # ACE orchestrator, lane balance, run helpers
+├── brainstorm/          # Tool loop, system prompt, promote-to-issue mapping
+├── dashboard/           # Studio stats and nudge helpers
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
 ├── research/            # RSS feed map (8 directives, 13+ sources)
+├── studio/              # Studio nav and inner-page CSS class tokens
 ├── supabase/            # Server + browser clients
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # System specs, ACE spec, Studio design handoffs
 ```
 
 ## Architecture
 
-See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap. ACE implementation details live in [`docs/Cornerstone-OS-ACE.md`](docs/Cornerstone-OS-ACE.md); Studio visual references live in [`docs/design_handoff_cornerstone_dashboard/README.md`](docs/design_handoff_cornerstone_dashboard/README.md) and [`docs/design_handoff_inner_pages/README.md`](docs/design_handoff_inner_pages/README.md).
+
+## Studio Shell Runbook
+
+`app/layout.tsx` wraps the app in `StudioAppShell`, so all primary routes share the cream Studio chrome, sidebar navigation, mobile nav, sidebar badges, and command palette. The sidebar routes come from `STUDIO_NAV` in `lib/studio/nav.ts`.
+
+### Dashboard And Search
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/dashboard` | UI | Studio home with pipeline counts, ingest shortcuts, nudge card, and promote-from-signal actions |
+| `/api/dashboard/stats` | `GET` | Counts `signals`, pending `editorial_leads`, draft/reviewed `issue_drafts`, active `content_outlines`, last ingest freshness, and sidebar badge text |
+| `/api/search?q=<term>` | `GET` | Command palette search across Studio pages, `signals`, `editorial_leads`, `issue_drafts`, and active `content_outlines` |
+
+Press `Cmd+K` or `Ctrl+K` to open the command palette. Empty search shows navigation destinations; non-empty search adds workspace-scoped database results. Signal results with external URLs open in a new tab, while leads, drafts, and outlines route back to their Studio pages.
+
+Operational constraints:
+
+- `WORKSPACE_ID` must be configured for dashboard stats and search.
+- Search escapes PostgREST wildcard characters and caps query fragments at 80 characters.
+- Sidebar badge counts are best-effort; the shell ignores stats fetch failures so page content can still render.
+
+## Brainstorming Hub Runbook
+
+The Brainstorming Hub is the conversational ideation surface at `/brainstorm`. Sessions and messages persist in Supabase via `brainstorm_sessions` and `brainstorm_messages`; each turn reloads recent history, optional brand-profile rules, and tool results before calling the `brainstorm` LLM role.
+
+### Setup
+
+Apply `lib/supabase/schema-brainstorm.sql` and configure `LLM_BRAINSTORM` if the brainstorm role should use a different provider/model from the global default. The UI also reads brand profiles from `/api/brand-profiles/list`, so seed or create a brand profile before promoting brainstorm artifacts into issue drafts.
+
+### API Paths
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brainstorm/sessions` | `GET` | List the latest 80 sessions for `WORKSPACE_ID` |
+| `/api/brainstorm/sessions` | `POST` | Create a session with optional `{ "title", "brandProfileId" }` |
+| `/api/brainstorm/sessions/[id]` | `GET` | Fetch session metadata and `artifact_json` |
+| `/api/brainstorm/sessions/[id]/messages` | `GET` | List messages for a session |
+| `/api/brainstorm/sessions/[id]/messages` | `POST` | Add a user turn, run the Brainstormer tool loop, and persist the assistant turn |
+| `/api/brainstorm/sessions/[id]/confirm-manual-signal` | `POST` | Insert the pending manual signal proposed by the agent |
+| `/api/brainstorm/sessions/[id]/promote-draft` | `POST` | Convert `artifact_json.working_artifact` into an `issue_drafts` row |
+
+### Tool Loop Capabilities
+
+The Brainstormer can call these server-side tools from `lib/brainstorm/signal-tools.ts`:
+
+- `query_signals`: searches workspace `signals` by title, optional directive, and recent-day window.
+- `get_signal`: fetches one workspace-scoped signal with summary, raw text, scores, and tags.
+- `list_recent_drafts`: returns recent `issue_drafts` titles from `content_json`.
+- `trigger_signal_ingest`: runs bounded daily or weekly cadence ingest through `runCadenceIngest`.
+- `propose_manual_signal`: stores a pending signal on the session for human confirmation.
+- `save_artifact_draft`: stores a working outline, key claims, cited signal ids, and thesis in `artifact_json.working_artifact`.
+
+### Usage Examples
+
+Create a session:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title":"RSA angle exploration","brandProfileId":"<brand_profile_id>"}'
+```
+
+Send a non-streaming turn:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions/<session_id>/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Find recent identity-security signals and shape a contrarian newsletter thesis."}'
+```
+
+Send a streaming turn by adding `"stream": true`; the response is newline-delimited JSON with `start`, `delta`, `error`, and `done` events. Add `"signalId": "<signal_id>"` to pin a user-selected signal into the prompt context.
+
+Promote a saved artifact:
+
+```bash
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions/<session_id>/promote-draft \
+  -H "Content-Type: application/json" \
+  -d '{"brandProfileId":"<brand_profile_id>"}'
+```
+
+Promotion requires a saved `working_artifact`; ask the agent to save the direction first if the endpoint returns `Nothing to promote`. The promote path uses the `drafting` LLM role to map the artifact into a validated `DraftObject`, renders Markdown, and inserts `issue_drafts`.
+
+### Troubleshooting
+
+- `500 WORKSPACE_ID not configured`: set `WORKSPACE_ID` in `.env.local`.
+- `404 Session not found`: session id is missing or belongs to another workspace.
+- `400 content is required`: message body has no non-empty `content`.
+- `400 brandProfileId is required`: the session has no brand profile and promote was called without an override.
+- `400 No pending manual signal on this session`: the agent has not proposed a manual signal for confirmation.
 
 ## Content Outlines Runbook
 
@@ -256,6 +367,42 @@ Operational constraints:
 
 - `WORKSPACE_ID` must be configured.
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+
+## ACE Runbook
+
+ACE (Autonomous Content Engine) is the scheduled/manual automation loop exposed at `/ace`. The page reads `GET /api/ace/dashboard` for the latest run, pending notification approvals, recent run history, lane balance, and the `ACE_ENABLED` flag.
+
+### API Paths
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/ace/dashboard` | `GET` | Returns ACE status, pending approvals, last 10 runs, and lane balance |
+| `/api/ace/run` | `POST` | Manually runs ACE with optional `{ "forceRerun": true }` |
+| `/api/ace/cron` | `POST` | Cron-safe ACE trigger guarded by `Authorization: Bearer $CRON_SECRET` |
+
+### Manual Run
+
+```bash
+curl -s -X POST http://localhost:3000/api/ace/run \
+  -H "Content-Type: application/json" \
+  -d '{"forceRerun":false}'
+```
+
+Use `forceRerun: true` to bypass normal rerun checks from the UI's **Force** button.
+
+### Cron Run
+
+```bash
+curl -s -X POST http://localhost:3000/api/ace/cron \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+Operational constraints:
+
+- `ACE_ENABLED=true` is required for cron runs to execute; otherwise `/api/ace/cron` returns a skipped result.
+- `/api/ace/cron` requires `CRON_SECRET`; `/api/ace/run` is intended for trusted app contexts and directly calls `runAce`.
+- ACE reads/writes `ace_runs`, `notification_approvals`, and lane-related tables. Apply the ACE schema bundle described in `docs/Cornerstone-OS-ACE.md` before enabling it.
+- Telegram approvals require `NOTIFICATION_PROVIDER=telegram`, Telegram token/chat/webhook variables, and the webhook registration documented in `docs/Cornerstone-OS-ACE.md`.
 
 ## Publishing Runbook
 

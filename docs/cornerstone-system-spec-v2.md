@@ -514,6 +514,17 @@ All data access is **scoped to `workspace_id`** (from environment / tenancy cont
    - **Generate socials / podcast** — requires a **`DraftObject`-compatible `content_json`** (or a **promotion step** that maps Hub artifact → that shape). Reuse **`POST /api/content-products/social-snippets`**, **`podcast-script`**, **`podcast-tts`** with `draftId` or `content_json` + `brandProfileId` as today.
    - **Create blog post (new)** — see **Blog handoff** below.
 
+### Implementation notes (MVP/M1)
+
+Current implementation lives in `app/brainstorm/page.tsx`, `app/api/brainstorm/sessions/*`, and `lib/brainstorm/*`.
+
+- Sessions and messages persist in `brainstorm_sessions` / `brainstorm_messages` via `lib/supabase/schema-brainstorm.sql`.
+- `POST /api/brainstorm/sessions/[id]/messages` supports non-streaming JSON and streaming newline-delimited JSON (`start`, `delta`, `error`, `done`).
+- Implemented tools: `query_signals`, `get_signal`, `list_recent_drafts`, `trigger_signal_ingest`, `propose_manual_signal`, and `save_artifact_draft`.
+- `POST /api/brainstorm/sessions/[id]/confirm-manual-signal` inserts a human-confirmed manual signal into `signals`.
+- `POST /api/brainstorm/sessions/[id]/promote-draft` maps `artifact_json.working_artifact` into a validated newsletter `DraftObject` and inserts `issue_drafts`.
+- Blog longform remains planned; the shipped promote path targets newsletter-compatible issue drafts.
+
 ### Conversation persistence (aligns with §3.12)
 
 - Store **sessions** and **messages** in **Supabase** (names indicative: `brainstorm_sessions`, `brainstorm_messages`). Columns at minimum: `workspace_id`, `session_id`, `user_id` (future), `title`, `created_at`, `updated_at`; messages: `role`, `content`, `tool_calls` / `tool_results` (JSON), `created_at`.
@@ -767,8 +778,8 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
-| **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
-| **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
+| **Brainstormer Agent (Ideation)** | **Implemented (MVP/M1)** | §3.1 / §3.13 — `lib/brainstorm/*` tool loop, `LLM_BRAINSTORM`, workspace-scoped signal tools, ingest/manual-signal/artifact-save tools |
+| **Brainstorming Hub** | **Implemented (MVP/M1)** | §3.13 — `/brainstorm`, sessions/messages, optional streaming, manual signal confirmation, promote to newsletter `DraftObject` via `issue_drafts` |
 | **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
 | **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
