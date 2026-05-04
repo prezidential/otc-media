@@ -61,7 +61,7 @@ describe("executeBrainstormTool", () => {
       ok: true,
       inserted: 2,
       skipped: 1,
-      details: [{ feed: "x", inserted: 2, skipped: 1 }],
+      details: [{ directive: "AI", feedUrl: "https://example.com/rss", inserted: 2, skipped: 1 }],
       run_id: "run-1",
     });
 
@@ -81,7 +81,7 @@ describe("executeBrainstormTool", () => {
       limit_per_feed: 30,
       inserted: 2,
       skipped: 1,
-      details: [{ feed: "x", inserted: 2, skipped: 1 }],
+      details: [{ directive: "AI", feedUrl: "https://example.com/rss", inserted: 2, skipped: 1 }],
       error: undefined,
       run_id: "run-1",
     });
