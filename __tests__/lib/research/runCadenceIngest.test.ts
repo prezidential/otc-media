@@ -245,4 +245,23 @@ describe("runCadenceIngest", () => {
     });
     expect(runUpdate.filters).toContainEqual({ method: "eq", args: ["id", "run-2"] });
   });
+
+  it("returns a startup failure when the audit run cannot be created", async () => {
+    const { supabase, pending } = createQueuedSupabase([
+      { table: "runs", result: { data: null, error: { message: "runs insert denied" } } },
+    ]);
+
+    const result = await runCadenceIngest(supabase, "ws-1", "weekly", 5);
+
+    expect(result).toEqual({
+      ok: false,
+      inserted: 0,
+      skipped: 0,
+      details: [],
+      error: "runs insert denied",
+      run_id: "",
+    });
+    expect(pending).toHaveLength(0);
+    expect(parseURLMock).not.toHaveBeenCalled();
+  });
 });
