@@ -7,6 +7,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 | Stage | Description |
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
+| **Brainstorming** | Runs conversational ideation against workspace signals, manual signal proposals, saved artifacts, and Issues promotion |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
 | **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
@@ -86,10 +87,11 @@ Open [http://localhost:3000](http://localhost:3000).
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
 4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
 5. **Ingest signals:** Go to Research → click "Run All Directives"
-6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
-7. **Approve leads:** Review and approve leads on the Leads page
-8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
-9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+6. **Ideate from signals (optional):** Go to Brainstorming, start a session, and promote a saved artifact to Issues
+7. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
+8. **Approve leads:** Review and approve leads on the Leads page
+9. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
+10. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
 ## Available Scripts
 
@@ -106,26 +108,33 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ```
 app/
-├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── components/          # Studio shell, command palette, page header, shared UI
+├── dashboard/page.tsx   # Studio dashboard
+├── signals/page.tsx     # Signal review and Brainstorm deep links
 ├── research/page.tsx    # Research console
+├── brainstorm/page.tsx  # Conversational ideation hub
 ├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── issues/page.tsx      # Issue draft generation + content products
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── ace/page.tsx         # Autonomous Content Engine dashboard
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
+    ├── brainstorm/          # Sessions, messages, manual signal confirm, draft promotion
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
+    ├── brand-profiles/      # List/create/update/seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
-    ├── signals/list/        # List captured signals
+    ├── signals/             # List and fetch captured signals
+    ├── ace/                 # ACE manual run, cron, dashboard data
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
 lib/
+├── ace/                 # ACE orchestration and lane-balance helpers
+├── brainstorm/          # Tool loop, signal tools, response parsing, promotion mapper
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
@@ -135,12 +144,84 @@ lib/
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # System specifications and design handoffs
 ```
 
 ## Architecture
 
 See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Brainstorming Hub Runbook
+
+The Brainstorming Hub (`/brainstorm`) is a conversational workspace for turning existing research signals and creator direction into a saved artifact that can be promoted into the Issues workflow.
+
+### Setup
+
+Apply the Brainstorming schema before using the page:
+
+```bash
+# Run this SQL in Supabase
+lib/supabase/schema-brainstorm.sql
+```
+
+Required runtime configuration:
+
+- `WORKSPACE_ID` scopes every session, message, signal lookup, and promotion.
+- `LLM_BRAINSTORM` is optional; when unset, the role falls back to `LLM_PROVIDER` + `LLM_MODEL`.
+- `LLM_DRAFTING` is used when promoting a saved artifact into a validated `DraftObject`.
+
+### User Flow
+
+1. Open `/brainstorm`; the page loads recent sessions or creates a default "Brainstorm" session.
+2. Optionally choose a brand profile before clicking **New**. The selected profile is attached to that new session and added to the Brainstormer system prompt.
+3. Ask for angles, comparisons, or draft directions. From `/signals`, use the **Brainstorm** link to open the Hub with a pinned `signalId`.
+4. The agent may use tools to query signals, fetch a signal, list recent drafts, trigger cadence ingest, propose a manual signal, or save a working artifact.
+5. Review any pending manual signal in the Session hub and click **Insert signal** to create it in `signals`.
+6. After the agent saves a working artifact, choose a brand profile if needed and click **Promote to Issues**. Promotion maps the artifact into `issue_drafts.content_json` and renders `issue_drafts.content`.
+
+### API Surface
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brainstorm/sessions` | `GET` | List up to 80 recent sessions for the workspace |
+| `/api/brainstorm/sessions` | `POST` | Create a session; accepts `title` and optional `brandProfileId` |
+| `/api/brainstorm/sessions/[id]` | `GET` | Fetch session detail, including `artifact_json` |
+| `/api/brainstorm/sessions/[id]/messages` | `GET` | List up to 200 messages for the session |
+| `/api/brainstorm/sessions/[id]/messages` | `POST` | Insert a user message, run a Brainstormer turn, and persist the assistant reply |
+| `/api/brainstorm/sessions/[id]/confirm-manual-signal` | `POST` | Insert the pending manual signal from `artifact_json.pending_manual_signal` |
+| `/api/brainstorm/sessions/[id]/promote-draft` | `POST` | Convert `artifact_json.working_artifact` into an Issues draft |
+
+`POST /messages` accepts:
+
+- `content` (required): user prompt text.
+- `signalId` (optional): adds a pinned signal block to the prompt after verifying the signal belongs to the workspace.
+- `stream` (optional boolean): returns newline-delimited JSON events (`start`, `delta`, `error`, `done`) with `Content-Type: application/x-ndjson`.
+
+### Agent Tools
+
+| Tool | Behavior | Constraints |
+|------|----------|-------------|
+| `query_signals` | Searches recent `signals` by title, directive, and age | Workspace-scoped; max `limit` 50 |
+| `get_signal` | Returns one signal with summary/raw text/trust metadata | Workspace-scoped by id |
+| `list_recent_drafts` | Lists recent issue draft ids and titles | Workspace-scoped; max `limit` 25 |
+| `trigger_signal_ingest` | Runs daily or weekly cadence ingest | Uses `runCadenceIngest`; `limit_per_feed` is clamped from 5 to 30 |
+| `propose_manual_signal` | Stores a pending manual signal on the session | Requires a session; human must click **Insert signal** before DB insert |
+| `save_artifact_draft` | Stores `working_artifact` on the session | Required before promotion to Issues |
+
+### Promotion Contract
+
+Promotion is intentionally explicit. `POST /promote-draft` requires either the session's `brand_profile_id` or a request-body `brandProfileId`. It reads `artifact_json.working_artifact`, enriches cited signals from `signals`, asks the drafting LLM to produce JSON, validates it with `validateDraftObject`, renders markdown with `renderDraftMarkdown`, then inserts `issue_drafts`.
+
+### Troubleshooting
+
+- `500 WORKSPACE_ID not configured`: set `WORKSPACE_ID` in `.env.local`.
+- `404 Session not found`: the session id is invalid or belongs to another workspace.
+- `404 Brand profile not found`: the provided `brandProfileId` is not in this workspace.
+- `400 content is required`: `POST /messages` received an empty prompt.
+- `400 No pending manual signal on this session`: the agent has not called `propose_manual_signal`, or the signal was already inserted.
+- `400 brandProfileId is required...`: the session has no brand profile and promotion did not pass one.
+- `500 Nothing to promote...`: ask the agent to save an artifact first, or use the Hub hint to call `save_artifact_draft`.
+- Missing `artifact_json` / column errors: re-run `lib/supabase/schema-brainstorm.sql`; it includes an idempotent `ALTER TABLE` for existing `brainstorm_sessions`.
 
 ## Content Outlines Runbook
 
