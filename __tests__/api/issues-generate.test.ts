@@ -46,8 +46,18 @@ function setCommonDbFixtures() {
 
   mockSupabase._setResult("issue_drafts", {
     data: [
-      { content_json: { title: "Previous One" } },
-      { content_json: { title: "Previous Two" } },
+      {
+        content_json: {
+          title: "Previous One",
+          hook_paragraphs: ["Agents are forcing identity teams to redraw trust boundaries."],
+        },
+      },
+      {
+        content_json: {
+          title: "Previous Two",
+          hook_paragraphs: ["Access rules now have to explain machine intent."],
+        },
+      },
       { content_json: { title: 123 } },
     ],
     error: null,
@@ -137,7 +147,7 @@ afterEach(() => {
 });
 
 describe("POST /api/issues/generate", () => {
-  it("parses fenced editorial-angle JSON and injects previous titles into prompt", async () => {
+  it("parses fenced editorial-angle JSON and injects previous titles plus anti-repetition context into prompts", async () => {
     setCommonDbFixtures();
     setCommonClaudeResponses(`\`\`\`json
 {
@@ -171,6 +181,16 @@ describe("POST /api/issues/generate", () => {
     const draftMessages = mockCallLLM.mock.calls[3][1] as Array<{ role: string; content: string }>;
     const draftUserMsg = draftMessages.find((m) => m.role === "user")?.content ?? "";
     expect(draftUserMsg).toContain("Title: Fenced Angle Title");
+    expect(draftUserMsg).toContain("Anti-repetition (mandatory for Opening Hook)");
+    expect(draftUserMsg).toContain("This week, something shifted.");
+    expect(draftUserMsg).toContain("Not in a vendor-demo way.");
+    expect(draftUserMsg).toContain("Recent first lines from this workspace");
+    expect(draftUserMsg).toContain("- Agents are forcing identity teams to redraw trust boundaries.");
+    expect(draftUserMsg).toContain("- Access rules now have to explain machine intent.");
+    expect(draftUserMsg).toContain("do not open by pasting that Hook line verbatim");
+
+    const draftOptions = mockCallLLM.mock.calls[3][2] as { max_tokens?: number; temperature?: number };
+    expect(draftOptions).toMatchObject({ max_tokens: 8192, temperature: 0.82 });
   });
 
   it("fails fast when editorial-angle payload is not valid JSON", async () => {
