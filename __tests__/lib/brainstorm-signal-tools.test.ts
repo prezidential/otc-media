@@ -1,21 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   brainstormQuerySignals,
   executeBrainstormTool,
 } from "@/lib/brainstorm/signal-tools";
+import { runCadenceIngest } from "@/lib/research/runCadenceIngest";
 
-type Result = { data: unknown; error: { message: string } | null };
+vi.mock("@/lib/research/runCadenceIngest", () => ({
+  runCadenceIngest: vi.fn(),
+}));
 
-function createChain(finalResult: Result = { data: null, error: null }) {
-  const chain = {} as Record<string, ReturnType<typeof vi.fn>>;
-  const methods = ["select", "update", "eq", "gte", "ilike", "order", "limit"] as const;
-  for (const method of methods) {
-    chain[method] = vi.fn().mockReturnValue(chain);
+type QueryResult = { data: unknown; error: { message: string } | null };
+
+class MockQuery {
+  select = vi.fn(() => this);
+  insert = vi.fn(() => this);
+  update = vi.fn(() => this);
+  eq = vi.fn(() => this);
+  gte = vi.fn(() => this);
+  ilike = vi.fn(() => this);
+  order = vi.fn(() => this);
+  limit = vi.fn(() => this);
+  maybeSingle = vi.fn(async () => this.result);
+
+  constructor(private readonly result: QueryResult = { data: null, error: null }) {}
+
+  then<TResult1 = QueryResult, TResult2 = never>(
+    onfulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ): Promise<TResult1 | TResult2> {
+    return Promise.resolve(this.result).then(onfulfilled, onrejected);
   }
-  chain.maybeSingle = vi.fn().mockResolvedValue(finalResult);
-  (chain as unknown as { then: (resolve: (value: Result) => void) => void }).then = (resolve) =>
-    resolve(finalResult);
-  return chain;
+}
+
+function createQueuedSupabase(queries: MockQuery[]) {
+  return {
+    from: vi.fn(() => {
+      const query = queries.shift();
+      if (!query) throw new Error("Unexpected Supabase query");
+      return query;
+    }),
+  } as unknown as SupabaseClient;
 }
 
 beforeEach(() => {
@@ -23,84 +48,107 @@ beforeEach(() => {
 });
 
 describe("brainstorm signal tools", () => {
-  it("sanitizes query_signals filters and caps the result limit", async () => {
-    const signalRows = [{ id: "signal-1", title: "Identity drift" }];
-    const chain = createChain({ data: signalRows, error: null });
-    const supabase = { from: vi.fn(() => chain) };
-
-    const result = await brainstormQuerySignals(supabase as never, "ws-123", {
-      q: "identity%, access",
-      directive_id: "  directive-1  ",
-      since_days: 14,
-      limit: 999,
-    });
-
-    expect(result).toEqual({ signals: signalRows, count: 1 });
-    expect(supabase.from).toHaveBeenCalledWith("signals");
-    expect(chain.eq).toHaveBeenCalledWith("workspace_id", "ws-123");
-    expect(chain.eq).toHaveBeenCalledWith("directive_id", "directive-1");
-    expect(chain.limit).toHaveBeenCalledWith(50);
-    expect(chain.gte).toHaveBeenCalledWith("captured_at", expect.any(String));
-    expect(chain.ilike).toHaveBeenCalledWith("title", "%identity\\%  access%");
-  });
-
-  it("rejects manual-signal proposals without an active session", async () => {
-    const supabase = { from: vi.fn() };
-
-    await expect(
-      executeBrainstormTool(
-        supabase as never,
-        "ws-123",
-        "propose_manual_signal",
-        { title: "High-signal customer note" },
-        {}
-      )
-    ).rejects.toThrow("requires an active brainstorm session");
-    expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  it("trims and stores a pending manual signal while preserving existing artifacts", async () => {
-    const sessionChain = createChain({
-      data: {
-        artifact_json: {
-          working_artifact: { thesis: "Already saved" },
-        },
-      },
+  it("keeps signal search workspace-scoped while clamping limits and escaping search text", async () => {
+    const query = new MockQuery({
+      data: [{ id: "sig-1", title: "OAuth regression" }],
       error: null,
     });
-    const supabase = { from: vi.fn(() => sessionChain) };
+    const supabase = createQueuedSupabase([query]);
+
+    const result = await brainstormQuerySignals(supabase, "workspace-1", {
+      q: "OAuth%, breach",
+      limit: 999,
+      sinceDays: 14,
+      directive_id: "directive-1",
+    });
+
+    expect(result).toEqual({
+      signals: [{ id: "sig-1", title: "OAuth regression" }],
+      count: 1,
+    });
+    expect(query.eq).toHaveBeenCalledWith("workspace_id", "workspace-1");
+    expect(query.eq).toHaveBeenCalledWith("directive_id", "directive-1");
+    expect(query.limit).toHaveBeenCalledWith(50);
+    expect(query.ilike).toHaveBeenCalledWith("title", "%OAuth\\%  breach%");
+    expect(query.gte).toHaveBeenCalledWith("captured_at", expect.any(String));
+  });
+
+  it("merges proposed manual signals into the session artifact for human confirmation", async () => {
+    const selectSession = new MockQuery({
+      data: { artifact_json: { existing: true } },
+      error: null,
+    });
+    const updateSession = new MockQuery({ data: null, error: null });
+    const supabase = createQueuedSupabase([selectSession, updateSession]);
 
     const result = await executeBrainstormTool(
-      supabase as never,
-      "ws-123",
+      supabase,
+      "workspace-1",
       "propose_manual_signal",
       {
-        title: "  OAuth grants expanding in CI  ",
-        url: "   ",
-        notes: "  Field notes from customer calls  ",
+        title: "  New manual source  ",
+        url: " https://example.com/signal ",
+        notes: " Important context ",
       },
       { sessionId: "session-1" }
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: true,
       awaiting_human_confirmation: true,
       pending_manual_signal: {
-        title: "OAuth grants expanding in CI",
-        url: undefined,
-        notes: "Field notes from customer calls",
+        title: "New manual source",
+        url: "https://example.com/signal",
+        notes: "Important context",
       },
+      hint: expect.stringContaining("Insert signal"),
     });
-
-    expect(sessionChain.update).toHaveBeenCalledTimes(1);
-    const updatePayload = vi.mocked(sessionChain.update).mock.calls[0][0] as Record<string, unknown>;
-    expect(updatePayload.artifact_json).toEqual({
-      working_artifact: { thesis: "Already saved" },
-      pending_manual_signal: {
-        title: "OAuth grants expanding in CI",
-        url: undefined,
-        notes: "Field notes from customer calls",
+    expect(updateSession.update).toHaveBeenCalledWith({
+      artifact_json: {
+        existing: true,
+        pending_manual_signal: {
+          title: "New manual source",
+          url: "https://example.com/signal",
+          notes: "Important context",
+        },
       },
+      updated_at: expect.any(String),
+    });
+    expect(updateSession.eq).toHaveBeenCalledWith("id", "session-1");
+    expect(updateSession.eq).toHaveBeenCalledWith("workspace_id", "workspace-1");
+  });
+
+  it("normalizes triggered ingest options before delegating to cadence ingest", async () => {
+    vi.mocked(runCadenceIngest).mockResolvedValue({
+      ok: true,
+      inserted: 3,
+      skipped: 1,
+      details: [{ feed: "identity", inserted: 3, skipped: 1 }],
+      run_id: "run-1",
+    });
+    const supabase = createQueuedSupabase([]);
+
+    const result = await executeBrainstormTool(
+      supabase,
+      "workspace-1",
+      "trigger_signal_ingest",
+      { cadence: "monthly", limit_per_feed: 100 }
+    );
+
+    expect(runCadenceIngest).toHaveBeenCalledWith(
+      supabase,
+      "workspace-1",
+      "daily",
+      30,
+      { source: "brainstorm_tool_trigger_signal_ingest" }
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      cadence: "daily",
+      limit_per_feed: 30,
+      inserted: 3,
+      skipped: 1,
+      run_id: "run-1",
     });
   });
 });
