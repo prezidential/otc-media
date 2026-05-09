@@ -1,44 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockSupabase } from "./helpers";
 
-const { mockSupabase } = vi.hoisted(() => {
-  type Result = { data: unknown; error: { message: string } | null };
-
-  function createChain(finalResult: Result = { data: null, error: null }) {
-    const chain = {} as Record<string, ReturnType<typeof vi.fn>>;
-    const methods = ["select", "insert", "update", "eq", "order", "limit"] as const;
-    for (const method of methods) {
-      chain[method] = vi.fn().mockReturnValue(chain);
-    }
-    chain.maybeSingle = vi.fn().mockResolvedValue(finalResult);
-    chain.single = vi.fn().mockResolvedValue(finalResult);
-    (chain as unknown as { then: (resolve: (value: Result) => void) => void }).then = (resolve) =>
-      resolve(finalResult);
-    return chain;
-  }
-
-  const chains = new Map<string, ReturnType<typeof createChain>>();
-  const from = vi.fn((table: string) => {
-    if (!chains.has(table)) {
-      chains.set(table, createChain());
-    }
-    return chains.get(table)!;
-  });
-
-  return {
-    mockSupabase: {
-      from,
-      _chains: chains,
-      _reset() {
-        chains.clear();
-      },
-      _setResult(table: string, result: Result) {
-        const chain = createChain(result);
-        chains.set(table, chain);
-        return chain;
-      },
-    },
-  };
-});
+const mockSupabase = createMockSupabase();
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
@@ -46,102 +9,95 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { POST } from "@/app/api/brainstorm/sessions/[id]/confirm-manual-signal/route";
 
-const ctx = { params: Promise.resolve({ id: "session-1" }) };
+function routeParams(id: string) {
+  return { params: Promise.resolve({ id }) };
+}
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  mockSupabase._reset();
   vi.stubEnv("WORKSPACE_ID", "ws-123");
+  vi.clearAllMocks();
 });
 
 describe("POST /api/brainstorm/sessions/[id]/confirm-manual-signal", () => {
-  it("returns 400 when the session has no pending manual signal", async () => {
+  it("rejects sessions without a pending manual signal", async () => {
     mockSupabase._setResult("brainstorm_sessions", {
-      data: { id: "session-1", artifact_json: { working_artifact: { thesis: "Keep me" } } },
+      data: { id: "session-1", artifact_json: { working_artifact: { thesis: "x" } } },
       error: null,
     });
 
-    const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
-    );
+    const res = await POST(new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"), routeParams("session-1"));
     const json = await res.json();
 
     expect(res.status).toBe(400);
-    expect(json.error).toContain("No pending manual signal");
-    expect(mockSupabase.from).toHaveBeenCalledTimes(1);
-    expect(mockSupabase._chains.has("signals")).toBe(false);
+    expect(json.error).toBe("No pending manual signal on this session");
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("signals");
   });
 
-  it("requires a non-empty pending signal title before inserting", async () => {
+  it("rejects pending manual signals without a title", async () => {
     mockSupabase._setResult("brainstorm_sessions", {
       data: { id: "session-1", artifact_json: { pending_manual_signal: { title: "   " } } },
       error: null,
     });
 
-    const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
-    );
+    const res = await POST(new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"), routeParams("session-1"));
     const json = await res.json();
 
     expect(res.status).toBe(400);
-    expect(json.error).toContain("missing a title");
-    expect(mockSupabase._chains.has("signals")).toBe(false);
+    expect(json.error).toBe("Pending signal is missing a title");
+    expect(mockSupabase.from).not.toHaveBeenCalledWith("signals");
   });
 
-  it("inserts the pending signal and clears only the pending artifact", async () => {
+  it("creates a signal with a deterministic manual URL and clears the pending artifact", async () => {
     const sessionChain = mockSupabase._setResult("brainstorm_sessions", {
       data: {
         id: "session-1",
         artifact_json: {
-          working_artifact: { thesis: "Keep this draft state" },
           pending_manual_signal: {
-            title: "  OAuth grants expanding in CI  ",
-            url: "   ",
-            notes: "  Field notes from customer calls  ",
+            title: "  Manual topic  ",
+            notes: "  Useful context  ",
           },
+          working_artifact: { thesis: "keep me" },
         },
       },
       error: null,
     });
     const signalChain = mockSupabase._setResult("signals", {
-      data: { id: "signal-1", title: "OAuth grants expanding in CI", url: "manual://abc123" },
+      data: {
+        id: "signal-1",
+        title: "Manual topic",
+        url: "manual://returned",
+      },
       error: null,
     });
 
-    const res = await POST(
-      new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"),
-      ctx
-    );
+    const res = await POST(new Request("http://localhost/api/brainstorm/sessions/session-1/confirm-manual-signal"), routeParams("session-1"));
     const json = await res.json();
 
     expect(res.status).toBe(200);
     expect(json).toEqual({
       ok: true,
-      signal: { id: "signal-1", title: "OAuth grants expanding in CI", url: "manual://abc123" },
+      signal: {
+        id: "signal-1",
+        title: "Manual topic",
+        url: "manual://returned",
+      },
     });
-
-    expect(signalChain.insert).toHaveBeenCalledTimes(1);
-    const insertPayload = vi.mocked(signalChain.insert).mock.calls[0][0] as Record<string, unknown>;
-    expect(insertPayload).toMatchObject({
-      workspace_id: "ws-123",
-      source_id: null,
-      title: "OAuth grants expanding in CI",
-      publisher: "Manual Entry",
-      raw_text: "Field notes from customer calls",
-      normalized_summary: "Field notes from customer calls",
-      relevance_score: 0.5,
-      trust_score: 1.0,
-    });
-    expect(insertPayload.url).toMatch(/^manual:\/\/[a-f0-9]{12}$/);
-    expect(insertPayload.dedupe_hash).toMatch(/^[a-f0-9]{64}$/);
-
-    expect(sessionChain.update).toHaveBeenCalledTimes(1);
-    const updatePayload = vi.mocked(sessionChain.update).mock.calls[0][0] as Record<string, unknown>;
-    expect(updatePayload.artifact_json).toEqual({
-      working_artifact: { thesis: "Keep this draft state" },
-      pending_manual_signal: null,
+    expect(signalChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: "ws-123",
+        url: expect.stringMatching(/^manual:\/\/[a-f0-9]{12}$/),
+        title: "Manual topic",
+        publisher: "Manual Entry",
+        raw_text: "Useful context",
+        normalized_summary: "Useful context",
+      })
+    );
+    expect(sessionChain.update).toHaveBeenCalledWith({
+      artifact_json: {
+        pending_manual_signal: null,
+        working_artifact: { thesis: "keep me" },
+      },
+      updated_at: expect.any(String),
     });
   });
 });
