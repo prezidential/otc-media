@@ -19,14 +19,23 @@ function SignInForm() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const { error: err } = await supabaseBrowser.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (err) {
-      setError(err.message);
-      return;
+    try {
+      const { error: err } = await supabaseBrowser.auth.signInWithPassword({ email, password });
+      if (err) {
+        setError(err.message);
+        return;
+      }
+      router.replace(next);
+      router.refresh();
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Sign in failed — check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
     }
-    router.replace(next);
-    router.refresh();
   }
 
   return (
