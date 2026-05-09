@@ -106,7 +106,7 @@ Three-layer model:
    can belong to many workspaces, each with `owner` / `editor` / `viewer` role.
 3. **Per-query enforcement** — every user-facing route runs through `supabaseUser()`
    under the `authenticated` Postgres role; RLS policies built around the
-   `auth.user_in_workspace(uuid)` helper restrict every read/write to the active
+   `public.user_in_workspace(uuid)` helper restrict every read/write to the active
    workspace.
 
 Service-role client (`supabaseAdmin()`) is reserved for cron, webhook, and
@@ -117,20 +117,16 @@ must filter by `workspace_id` explicitly.
 
 In the Supabase SQL editor, run:
 
-```sql
--- 1. Tenancy tables + auth.user_in_workspace() helper + RLS on tenancy tables.
-\i lib/supabase/schema-tenancy.sql
-
--- 2. Backfill existing rows. Replace the UUID below with your current
---    WORKSPACE_ID env value, then re-run the schema file (the DO block
---    is idempotent and reads `app.workspace_id`):
-SET app.workspace_id = '11111111-2222-3333-4444-555555555555';
-\i lib/supabase/schema-tenancy.sql
-
--- 3. RLS rollout for wave-1 read routes (signals, editorial_leads, issue_drafts,
---    content_outlines, brand_profiles, workspace_settings, runs).
-\i lib/supabase/schema-rls-wave1.sql
-```
+1. Paste + run `lib/supabase/schema-tenancy.sql` — creates the
+   `workspaces`, `workspace_members`, `workspace_invites` tables, the
+   `public.user_in_workspace()` helper, and RLS policies on those three tables.
+2. Open `lib/supabase/schema-tenancy-backfill.sql`, replace the placeholder
+   UUID on the `ws_id :=` line with your `WORKSPACE_ID` env value, paste +
+   run. This binds every existing `auth.users` row to a "default" workspace
+   so the legacy data keeps working.
+3. Paste + run `lib/supabase/schema-rls-wave1.sql` — turns on RLS for the
+   wave-1 tables (signals, editorial_leads, issue_drafts, content_outlines,
+   brand_profiles, workspace_settings, runs).
 
 ### Auth flow
 
