@@ -27,7 +27,8 @@ export type AgentRole =
   | "revision"
   | "lint"
   | "linkedin"
-  | "brainstorm";
+  | "brainstorm"
+  | "integration";
 
 type RoleConfig = {
   provider: LLMProvider;
