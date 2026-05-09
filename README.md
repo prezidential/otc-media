@@ -56,7 +56,7 @@ BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
 # Optional — Issues → Phase 2 → Podcast script → Download MP3 (ElevenLabs)
 ELEVENLABS_API_KEY=
 ELEVENLABS_VOICE_ID=
-# ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+# ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
 
 # Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
 PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
@@ -69,6 +69,7 @@ Notes:
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
+- `ELEVENLABS_MODEL_ID` defaults to `eleven_turbo_v2_5` in `POST /api/content-products/podcast-tts` when omitted.
 
 ### Install & Run
 
@@ -118,8 +119,9 @@ app/
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
+    ├── brand-profiles/      # List, create, seed, [id] get/patch
     ├── revenue/             # List, seed, recommend
+    ├── workspace/settings/  # Default brand profile for this workspace
     ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
@@ -226,6 +228,115 @@ Resolution behavior:
 - `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
+
+## Brand Profiles Runbook
+
+`brand_profiles` defines voice/formatting constraints and optional ElevenLabs defaults used across Issues + content products.
+
+### Endpoints
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brand-profiles/list` | `GET` | List profile ids/names and current `defaultBrandProfileId` |
+| `/api/brand-profiles/create` | `POST` | Create a profile from validated JSON fields |
+| `/api/brand-profiles/[id]` | `GET` | Fetch one full profile |
+| `/api/brand-profiles/[id]` | `PATCH` | Replace profile fields (same validation as create) |
+| `/api/brand-profiles/seed` | `POST` | Seed Identity Jedi default only when workspace has zero profile rows |
+| `/api/workspace/settings` | `GET` | Read workspace `defaultBrandProfileId` |
+| `/api/workspace/settings` | `PATCH` | Set/clear workspace default profile |
+
+### Create Profile Example
+
+```bash
+curl -s -X POST http://localhost:3000/api/brand-profiles/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"Identity Jedi",
+    "voice_rules_json":{"tone":["direct","practical"]},
+    "formatting_rules_json":{"paragraph_length":"3-4 sentences"},
+    "forbidden_patterns_json":["In today'\''s digital world"],
+    "cta_rules_json":{"default_cta":"Subscribe"},
+    "emoji_policy_json":{"allowed":true,"allowed_emojis":["🏾"]},
+    "narrative_preferences_json":{"core_thesis":["Identity is the control plane."]},
+    "profile_version":"1.0",
+    "elevenlabs_voice_id":"<optional_voice_id>",
+    "elevenlabs_model_id":"<optional_model_id>"
+  }'
+```
+
+Validation constraints (enforced by `lib/brand-profile/creatorBrandProfile.ts`):
+
+- `name` required (non-empty string).
+- `voice_rules_json`, `formatting_rules_json`, `cta_rules_json`, `emoji_policy_json`, `narrative_preferences_json` must be JSON objects.
+- `forbidden_patterns_json` must be a JSON array.
+- ElevenLabs fields are optional string-or-null.
+
+### Workspace Default
+
+Set default:
+
+```bash
+curl -s -X PATCH http://localhost:3000/api/workspace/settings \
+  -H "Content-Type: application/json" \
+  -d '{"defaultBrandProfileId":"<brand_profile_id>"}'
+```
+
+Clear default:
+
+```bash
+curl -s -X PATCH http://localhost:3000/api/workspace/settings \
+  -H "Content-Type: application/json" \
+  -d '{"defaultBrandProfileId":null}'
+```
+
+Operational notes:
+
+- `defaultBrandProfileId` must point to a profile in the same workspace; cross-workspace ids return `404`.
+- Issues page loads this default and preselects it when present.
+
+## Content Products Runbook (Issues Phase 2)
+
+Phase 2 endpoints transform a newsletter draft (`draftId`) or in-memory `content_json` into derivative assets.
+
+### Endpoints
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/content-products/social-snippets` | `POST` | Returns `{ ok, snippets: { x_post, linkedin_teaser, threads } }` |
+| `/api/content-products/podcast-script` | `POST` | Returns TTS-oriented script JSON + signal grounding counts |
+| `/api/content-products/podcast-tts` | `POST` | Returns `audio/mpeg`; optional persistence to `podcast_episodes` + Storage |
+| `/api/content-products/podcast-outline` | `POST` | Legacy beats outline endpoint (deprecated in headers) |
+| `/api/content-products/sponsorship-alignment` | `POST` | Returns best-fit revenue item recommendation |
+
+### Brand Resolution Rules
+
+- `social-snippets`: prefers `issue_drafts.brand_profile_id` when `draftId` is provided; otherwise falls back to `brandProfileId` in request body (used by in-memory drafts).
+- `podcast-tts`: voice/model resolution priority is `body.voiceId`/`body.modelId` → draft brand profile (`elevenlabs_voice_id`, `elevenlabs_model_id`) → env defaults.
+
+### TTS Persistence Example
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-products/podcast-tts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "draftId":"<issue_draft_id>",
+    "persist":true,
+    "script":{"working_title":"...","script_segments":[{"id":"intro","narrator_text":"..."}],"outro_cta":"..."}
+  }' --output episode.mp3
+```
+
+Persistence constraints:
+
+- Requires `WORKSPACE_ID`, `PODCAST_AUDIO_STORAGE_BUCKET`, `draftId`, and `script` when `persist=true`.
+- On partial persistence failure, the route still returns MP3 and reports status via response headers (`X-Podcast-Persist-*`).
+
+### Troubleshooting
+
+- `400 draftId required`: no `draftId` and no `content_json` provided where required.
+- `404 Draft not found or has no content_json`: draft id is invalid for this workspace or row has no structured draft payload.
+- `400 No ElevenLabs voice...`: no request voice, no env voice, and no voice on the draft's brand profile row.
+- `503 ELEVENLABS_API_KEY is not configured`: TTS env key missing.
+- `404 No active revenue items to align`: sponsorship endpoint needs active rows in `revenue_items`.
 
 ## Autonomous Pipeline Runbook
 
