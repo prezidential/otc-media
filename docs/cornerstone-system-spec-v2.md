@@ -767,8 +767,8 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
-| **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
-| **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
+| **Brainstormer Agent (Ideation)** | **Implemented (MVP + M1 subset)** | §3.1 / §3.13 — Hub tool loop (`query_signals`, `get_signal`, `list_recent_drafts`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`) via `lib/brainstorm/*`; uses `LLM_BRAINSTORM` role routing |
+| **Brainstorming Hub** | **Implemented (MVP + M1 subset)** | §3.13 — `/brainstorm` UI, sessions/messages persistence (`brainstorm_sessions`, `brainstorm_messages`), optional NDJSON streaming, manual-signal confirmation, and promote-to-`DraftObject` into `issue_drafts` |
 | **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
 | **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
@@ -830,8 +830,8 @@ Stretch:
 ### Phase 2C — Brainstorming Hub + blog longform **[NEW in v2.7]**
 
 - **Spec:** §3.13 (Hub UX, persistence, tools, security) and **Brainstormer Agent** in §3.1.
-- **MVP:** `brainstorm_sessions` / `brainstorm_messages` (or equivalent); chat UI; tools **`query_signals`**, **`get_signal`**; streaming responses; **brand profile** in system prompt.
-- **M1:** **`trigger_signal_ingest`**, **`propose_manual_signal`**, **`save_artifact_draft`**; **Promote to `DraftObject`** → **`issue_drafts`** so **Social snippets**, **Podcast script**, **TTS**, and Issues flows attach without rework.
+- **Landed:** `brainstorm_sessions` / `brainstorm_messages`; `/brainstorm` chat UI; tools **`query_signals`**, **`get_signal`**; optional streaming responses; **brand profile** in system prompt.
+- **Landed (M1 subset):** **`trigger_signal_ingest`**, **`propose_manual_signal`**, **`save_artifact_draft`**; confirm-manual-signal flow; **Promote to `DraftObject`** → **`issue_drafts`** so **Social snippets**, **Podcast script**, **TTS**, and Issues flows attach without rework.
 - **M2:** **`BlogDraftObject`** + **`POST /api/content-products/blog-draft`** (name TBD) + Markdown/HTML export UI; persistence table vs `issue_drafts` discriminator — **decision at implementation**.
 - **M3:** Optional **`list_recent_drafts`** tool; full-text / embedding search over signals; eval hooks.
 
