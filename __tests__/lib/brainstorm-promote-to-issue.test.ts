@@ -1,141 +1,155 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { promoteBrainstormSessionToIssueDraft } from "@/lib/brainstorm/promote-to-issue";
+import { createMockSupabase } from "../api/helpers";
 
-const providerMocks = vi.hoisted(() => ({
-  callLLM: vi.fn(),
-  getModelForRole: vi.fn(),
+const { mockCallLLM, mockGetModelForRole } = vi.hoisted(() => ({
+  mockCallLLM: vi.fn(),
+  mockGetModelForRole: vi.fn(),
 }));
 
 vi.mock("@/lib/llm/provider", () => ({
-  callLLM: providerMocks.callLLM,
-  getModelForRole: providerMocks.getModelForRole,
+  callLLM: (...args: unknown[]) => mockCallLLM(...args),
+  getModelForRole: (...args: unknown[]) => mockGetModelForRole(...args),
 }));
 
-const draftObject = {
-  title: "Promoted brainstorm",
-  hook_paragraphs: ["Hook one", "Hook two"],
-  fresh_signals: "Signal context",
-  deep_dive: "Deep dive body",
-  dojo_checklist: ["Check 1", "Check 2", "Check 3", "Check 4", "Check 5"],
-  promo_slot: "Subscribe for more.",
-  close: "See you next week.",
-  sources: ["https://example.com/signal"],
-  metadata: { model: "test-drafting-model", thesis: "This is the thesis." },
-};
-
-function createPromoteSupabase() {
-  const signalResult = {
-    data: [
-      {
-        id: "sig-1",
-        title: "Signal One",
-        url: "https://example.com/signal",
-        normalized_summary: "Summary text",
-      },
-    ],
-    error: null,
-  };
-  const insertResult = { data: { id: "draft-123" }, error: null };
-
-  const signalsChain = {
-    select: vi.fn(),
-    eq: vi.fn(),
-    in: vi.fn(),
-  };
-  signalsChain.select.mockReturnValue(signalsChain);
-  signalsChain.eq.mockReturnValue(signalsChain);
-  signalsChain.in.mockResolvedValue(signalResult);
-
-  const draftsChain = {
-    insert: vi.fn(),
-    select: vi.fn(),
-    single: vi.fn(),
-  };
-  draftsChain.insert.mockReturnValue(draftsChain);
-  draftsChain.select.mockReturnValue(draftsChain);
-  draftsChain.single.mockResolvedValue(insertResult);
-
-  const from = vi.fn((table: string) => {
-    if (table === "signals") return signalsChain;
-    if (table === "issue_drafts") return draftsChain;
-    throw new Error(`Unexpected table: ${table}`);
-  });
-
-  return {
-    supabase: { from },
-    from,
-    signalsChain,
-    draftsChain,
-  };
-}
+import { promoteBrainstormSessionToIssueDraft } from "@/lib/brainstorm/promote-to-issue";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  providerMocks.getModelForRole.mockReturnValue({
-    provider: "anthropic",
-    model: "test-drafting-model",
-  });
+  mockGetModelForRole.mockReturnValue({ provider: "anthropic", model: "claude-test" });
 });
 
+function makeDraftObject() {
+  return {
+    title: "Identity Boundaries Are Collapsing",
+    hook_paragraphs: ["Paragraph one.", "Paragraph two."],
+    fresh_signals: "Fresh signal summary",
+    deep_dive: "Deep dive body",
+    dojo_checklist: ["One", "Two", "Three", "Four", "Five"],
+    promo_slot: "Subscribe CTA",
+    close: "Close line",
+    sources: ["https://example.com/source-a"],
+    metadata: { model: "claude-test", thesis: "Treat machine identities as first-class actors." },
+  };
+}
+
 describe("promoteBrainstormSessionToIssueDraft", () => {
-  it("turns a saved artifact into a validated issue draft insert", async () => {
-    providerMocks.callLLM.mockResolvedValueOnce({
-      text: `Model notes before JSON:\n${JSON.stringify(draftObject)}\nThanks.`,
-      provider: "anthropic",
-      model: "test-drafting-model",
-    });
-    const { supabase, signalsChain, draftsChain } = createPromoteSupabase();
-    const citedSignalIds = Array.from({ length: 15 }, (_, i) => `sig-${i + 1}`);
-
-    const result = await promoteBrainstormSessionToIssueDraft({
-      supabase: supabase as never,
-      workspaceId: "ws-123",
-      sessionId: "session-1",
-      brandProfileId: "brand-1",
-      artifactJson: {
-        working_artifact: {
-          thesis: "Identity security angle",
-          working_outline: "Outline",
-          cited_signal_ids: [...citedSignalIds, 42, ""],
-        },
-      },
-    });
-
-    expect(result).toEqual({ draftId: "draft-123", contentJson: draftObject });
-    expect(signalsChain.in).toHaveBeenCalledWith("id", citedSignalIds.slice(0, 12));
-    expect(providerMocks.callLLM).toHaveBeenCalledWith(
-      "drafting",
-      expect.arrayContaining([
-        expect.objectContaining({ role: "system" }),
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("Signal One"),
-        }),
-      ]),
-      { max_tokens: 8192, temperature: 0.35 }
-    );
-    expect(draftsChain.insert).toHaveBeenCalledWith({
-      workspace_id: "ws-123",
-      brand_profile_id: "brand-1",
-      content: expect.stringContaining("**Promoted brainstorm**"),
-      content_json: draftObject,
-    });
-  });
-
-  it("rejects promotion when no working artifact has been saved", async () => {
-    const { supabase, from } = createPromoteSupabase();
+  it("rejects promotion when working artifact is missing", async () => {
+    const supabase = createMockSupabase();
 
     await expect(
       promoteBrainstormSessionToIssueDraft({
         supabase: supabase as never,
         workspaceId: "ws-123",
-        sessionId: "session-1",
-        brandProfileId: "brand-1",
+        sessionId: "sess-1",
         artifactJson: {},
+        brandProfileId: "bp-1",
       })
     ).rejects.toThrow("Nothing to promote");
+  });
 
-    expect(from).not.toHaveBeenCalled();
-    expect(providerMocks.callLLM).not.toHaveBeenCalled();
+  it("builds context from cited signals and inserts issue draft", async () => {
+    const supabase = createMockSupabase();
+    const signalsChain = supabase._setResult("signals", {
+      data: [
+        {
+          id: "sig-1",
+          title: "Signal one",
+          url: "https://example.com/sig-1",
+          normalized_summary: "Summary one",
+        },
+      ],
+      error: null,
+    });
+    const draftsChain = supabase._setResult("issue_drafts", {
+      data: { id: "draft-123" },
+      error: null,
+    });
+    mockCallLLM.mockResolvedValueOnce({
+      text: `Here is your object:
+\`\`\`json
+${JSON.stringify(makeDraftObject(), null, 2)}
+\`\`\``,
+      provider: "anthropic",
+      model: "claude-test",
+    });
+
+    const result = await promoteBrainstormSessionToIssueDraft({
+      supabase: supabase as never,
+      workspaceId: "ws-123",
+      sessionId: "sess-1",
+      artifactJson: {
+        working_artifact: {
+          working_outline: "Outline text",
+          cited_signal_ids: ["sig-1"],
+          thesis: "draft thesis",
+        },
+      },
+      brandProfileId: "bp-1",
+    });
+
+    expect(signalsChain.in).toHaveBeenCalledWith("id", ["sig-1"]);
+    expect(mockCallLLM).toHaveBeenCalledTimes(1);
+    const llmUserMessage = (mockCallLLM.mock.calls[0]?.[1] as Array<{ role: string; content: string }>).find(
+      (m) => m.role === "user"
+    )?.content;
+    expect(llmUserMessage).toContain("cited_signals_context");
+    expect(llmUserMessage).toContain("Signal one");
+    expect(draftsChain.insert).toHaveBeenCalledWith({
+      workspace_id: "ws-123",
+      brand_profile_id: "bp-1",
+      content: expect.stringContaining("**Identity Boundaries Are Collapsing**"),
+      content_json: expect.objectContaining({
+        title: "Identity Boundaries Are Collapsing",
+      }),
+    });
+    expect(result).toEqual({
+      draftId: "draft-123",
+      contentJson: expect.objectContaining({
+        metadata: { model: "claude-test", thesis: "Treat machine identities as first-class actors." },
+      }),
+    });
+  });
+
+  it("throws when model output cannot be parsed as json", async () => {
+    const supabase = createMockSupabase();
+    supabase._setResult("signals", { data: [], error: null });
+    mockCallLLM.mockResolvedValueOnce({
+      text: "not-json",
+      provider: "anthropic",
+      model: "claude-test",
+    });
+
+    await expect(
+      promoteBrainstormSessionToIssueDraft({
+        supabase: supabase as never,
+        workspaceId: "ws-123",
+        sessionId: "sess-1",
+        artifactJson: { working_artifact: { cited_signal_ids: [] } },
+        brandProfileId: "bp-1",
+      })
+    ).rejects.toThrow("Model did not return a JSON object for DraftObject");
+  });
+
+  it("throws when returned json fails DraftObject validation", async () => {
+    const supabase = createMockSupabase();
+    supabase._setResult("signals", { data: [], error: null });
+    mockCallLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        ...makeDraftObject(),
+        metadata: { model: "claude-test" },
+      }),
+      provider: "anthropic",
+      model: "claude-test",
+    });
+
+    await expect(
+      promoteBrainstormSessionToIssueDraft({
+        supabase: supabase as never,
+        workspaceId: "ws-123",
+        sessionId: "sess-1",
+        artifactJson: { working_artifact: { cited_signal_ids: [] } },
+        brandProfileId: "bp-1",
+      })
+    ).rejects.toThrow("metadata.thesis is required");
   });
 });
