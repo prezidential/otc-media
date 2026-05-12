@@ -92,12 +92,31 @@ export async function middleware(req: NextRequest) {
 
   // Signed-in users without any workspace are sent to /onboarding (except for
   // the small allowlist that the onboarding flow itself depends on).
+  //
+  // NOTE: we deliberately do NOT use `{ count: "exact", head: true }` here.
+  // In the Next.js Edge runtime, @supabase/ssr's HEAD-based count requests
+  // return an empty response body that the client surfaces as an opaque
+  // `{"message":""}` PostgrestError instead of a real count. A plain
+  // `select … limit 1` is sufficient — we only need to know whether the user
+  // has *any* membership, not the exact total.
   if (!isOnboardingAllowed(pathname)) {
-    const { count } = await supabase
+    const { data, error } = await supabase
       .from("workspace_members")
-      .select("workspace_id", { count: "exact", head: true })
-      .eq("user_id", user.id);
-    if (!count || count === 0) {
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .limit(1);
+    if (error) {
+      // A real read error here is a deployment bug (RLS misconfigured, DB
+      // unreachable, etc.). Log loudly and fall through to /onboarding so we
+      // never strand the user on a 500 — the onboarding page is a safe place
+      // to land, and the next request will re-evaluate.
+      console.warn("[middleware] workspace_members lookup failed", {
+        userId: user.id,
+        pathname,
+        error: error.message,
+      });
+    }
+    if (!data || data.length === 0) {
       const url = req.nextUrl.clone();
       url.pathname = "/onboarding";
       url.search = "";
