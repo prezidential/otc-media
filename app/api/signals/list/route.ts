@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 function heatFromCapturedAt(capturedAt: string): number {
   const ageHours = (Date.now() - new Date(capturedAt).getTime()) / 3_600_000;
@@ -12,8 +12,9 @@ export async function GET(req: Request) {
   const limit = Number(searchParams.get("limit") || "25");
   const includeHeat = searchParams.get("heat") === "1" || searchParams.get("includeHeat") === "true";
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data, error } = await supabase
     .from("signals")

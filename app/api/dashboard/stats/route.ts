@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import {
   buildNudge,
   greetingParts,
@@ -9,12 +9,9 @@ import {
 } from "@/lib/dashboard/stats";
 
 export async function GET() {
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
-
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const [
     signalsCountRes,

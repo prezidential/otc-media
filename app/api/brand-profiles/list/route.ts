@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function GET() {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data, error } = await supabase
     .from("brand_profiles")

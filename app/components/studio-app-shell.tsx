@@ -38,10 +38,23 @@ const NAV: { href: string; label: string; badgeKey?: (typeof BADGE_KEYS)[number]
   return { href: item.href, label: item.label, ...(badgeKey ? { badgeKey } : {}) };
 });
 
+type MeWorkspace = {
+  id: string;
+  slug: string;
+  name: string;
+  role: string;
+};
+type MePayload = {
+  user: { id: string; email: string | null } | null;
+  workspaces: MeWorkspace[];
+  activeWorkspaceId: string | null;
+};
+
 export function StudioAppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [stats, setStats] = useState<DashboardStatsPayload | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
+  const [me, setMe] = useState<MePayload | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,13 +67,28 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
         /* optional */
       }
     })();
+    (async () => {
+      try {
+        const res = await fetch("/api/me");
+        const j = (await res.json()) as MePayload;
+        if (!cancelled) setMe(j);
+      } catch {
+        /* optional */
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, []);
 
+  async function onSignOut() {
+    await fetch("/api/auth/sign-out", { method: "POST" });
+    window.location.assign("/sign-in");
+  }
+
   const s = stats?.sidebar;
   const isAce = pathname === "/ace" || pathname.startsWith("/ace/");
+  const activeWorkspace = me?.workspaces.find((w) => w.id === me?.activeWorkspaceId) ?? null;
 
   return (
     <StudioUIProvider>
@@ -174,6 +202,31 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
             <p className="text-xs text-[#6B6B6B]">Loading…</p>
           )}
         </div>
+        {me?.user && (
+          <div className="p-4 border-t border-[#E8E0D4] space-y-2">
+            <div className="text-[10px] font-[family-name:var(--font-geist-mono)] uppercase tracking-widest text-[#6B6B6B]">
+              Workspace
+            </div>
+            {activeWorkspace ? (
+              <p className="text-xs text-[#1A1A1A] leading-tight">
+                {activeWorkspace.name}{" "}
+                <span className="text-[#8B7E6A]">({activeWorkspace.role})</span>
+              </p>
+            ) : (
+              <p className="text-xs text-[#8B7E6A]">No workspace</p>
+            )}
+            <p className="text-xs text-[#6B6B6B] truncate" title={me.user.email ?? ""}>
+              {me.user.email}
+            </p>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="text-[10px] font-[family-name:var(--font-geist-mono)] uppercase tracking-widest text-[#8B7E6A] hover:text-[#1A1A1A]"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </aside>
       <div
         className={cn(

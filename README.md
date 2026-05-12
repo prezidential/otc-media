@@ -38,6 +38,10 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
 SUPABASE_SECRET_KEY=your-service-role-key
 ANTHROPIC_API_KEY=your-anthropic-key
 OPENAI_API_KEY=your-openai-key
+# Phase 2A multi-tenancy: this UUID is the legacy default workspace; routes that
+# haven't yet been migrated to supabaseUser() still read it. Once every route is
+# migrated and a real workspace exists in the `workspaces` table, this can be
+# removed (the cron/orchestrator code paths will be cut over in M1).
 WORKSPACE_ID=your-workspace-uuid
 LLM_PROVIDER=anthropic
 LLM_MODEL=claude-sonnet-4-20250514
@@ -90,6 +94,73 @@ Open [http://localhost:3000](http://localhost:3000).
 7. **Approve leads:** Review and approve leads on the Leads page
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
 9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+
+## Auth + Multi-Tenancy (Phase 2A — M0)
+
+Cornerstone OS uses Supabase Auth + Postgres Row-Level Security for the
+authorization boundary. See spec v2.9 §3.16 for the full model.
+
+Three-layer model:
+1. **Authentication** — Supabase Auth (email + password today, OAuth in M2).
+2. **Workspace binding** — `workspaces` and `workspace_members` tables; one user
+   can belong to many workspaces, each with `owner` / `editor` / `viewer` role.
+3. **Per-query enforcement** — every user-facing route runs through `supabaseUser()`
+   under the `authenticated` Postgres role; RLS policies built around the
+   `public.user_in_workspace(uuid)` helper restrict every read/write to the active
+   workspace.
+
+Service-role client (`supabaseAdmin()`) is reserved for cron, webhook, and
+orchestrator contexts that have no user JWT. Service-role callers bypass RLS and
+must filter by `workspace_id` explicitly.
+
+### One-time SQL setup (in this order)
+
+In the Supabase SQL editor, run:
+
+1. Paste + run `lib/supabase/schema-tenancy.sql` — creates the
+   `workspaces`, `workspace_members`, `workspace_invites` tables, the
+   `public.user_in_workspace()` helper, and RLS policies on those three tables.
+2. Open `lib/supabase/schema-tenancy-backfill.sql`, replace the placeholder
+   UUID on the `ws_id :=` line with your `WORKSPACE_ID` env value, paste +
+   run. This binds every existing `auth.users` row to a "default" workspace
+   so the legacy data keeps working.
+3. Paste + run `lib/supabase/schema-rls-wave1.sql` — turns on RLS for the
+   wave-1 tables (signals, editorial_leads, issue_drafts, content_outlines,
+   brand_profiles, workspace_settings, runs).
+
+### Auth flow
+
+- `/sign-in` and `/sign-up` use `supabaseBrowser` for email + password.
+- Middleware (`middleware.ts`) refreshes the Supabase session on every request,
+  redirects unauthenticated traffic to `/sign-in?next=...`, and redirects
+  signed-in users with no workspaces to `/onboarding`.
+- `/onboarding` collects a workspace name + slug and POSTs to `/api/workspaces`,
+  which creates the workspace, adds the user as `owner`, and sets the
+  `cs_active_workspace` cookie.
+- The studio sidebar shows the active workspace, role, and a sign-out button.
+
+### Workspace + invite endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET  /api/me` | Current user, every workspace they belong to, active workspace id |
+| `POST /api/workspaces` | Create a workspace, become its owner, set active cookie |
+| `POST /api/workspaces/active` | Switch the active workspace (RLS-gated) |
+| `GET/POST/DELETE /api/workspaces/[id]/members` | List members + invites; create invite token; remove member (owner-only via RLS) |
+| `GET  /api/workspaces/invites/[token]` | Public invite landing — redirects to /sign-in then accepts the invite |
+
+Email delivery for invites is intentionally out of scope for M0; owners copy the
+invite URL and share it manually until M1 wires SMTP.
+
+### Migration status (M0)
+
+- Migrated to `supabaseUser()` + `requireWorkspace()`:
+  `/api/dashboard/stats`, `/api/search`, `/api/signals/list`, `/api/issues/list`,
+  `/api/brand-profiles/list`.
+- Every other workspace-scoped route still uses `supabaseAdmin()` with
+  `process.env.WORKSPACE_ID` and continues to work because service-role bypasses
+  RLS. Wave-2 rollout converts those routes and ships
+  `schema-rls-wave2.sql`.
 
 ## Available Scripts
 

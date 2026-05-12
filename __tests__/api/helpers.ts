@@ -5,10 +5,13 @@ export type MockSupabaseChain = {
   insert: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   upsert: ReturnType<typeof vi.fn>;
+  delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
   gte: ReturnType<typeof vi.fn>;
   in: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
+  ilike: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -16,10 +19,24 @@ export type MockSupabaseChain = {
 };
 
 export function createMockSupabaseChain(
-  finalResult: { data: unknown; error: unknown } = { data: null, error: null }
+  finalResult: { data: unknown; error: unknown; count?: number | null } = { data: null, error: null }
 ): MockSupabaseChain {
   const chain: MockSupabaseChain = {} as MockSupabaseChain;
-  const methods = ["select", "insert", "update", "upsert", "eq", "is", "gte", "in", "order", "limit"] as const;
+  const methods = [
+    "select",
+    "insert",
+    "update",
+    "upsert",
+    "delete",
+    "eq",
+    "is",
+    "gte",
+    "in",
+    "or",
+    "ilike",
+    "order",
+    "limit",
+  ] as const;
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain);
   }
@@ -46,7 +63,7 @@ export function createMockSupabase() {
   return {
     from,
     _chains: chains,
-    _setResult(table: string, result: { data: unknown; error: unknown }) {
+    _setResult(table: string, result: { data: unknown; error: unknown; count?: number | null }) {
       const chain = createMockSupabaseChain(result);
       chains.set(table, chain);
       return chain;
