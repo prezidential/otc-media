@@ -4,6 +4,7 @@ import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/browser";
+import { signInWithProvider, type OAuthProvider } from "@/lib/auth/oauth";
 
 function SignInForm() {
   const router = useRouter();
@@ -14,6 +15,18 @@ function SignInForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<OAuthProvider | null>(null);
+
+  async function onOAuth(provider: OAuthProvider) {
+    setError(null);
+    setOauthLoading(provider);
+    try {
+      await signInWithProvider(provider, { next });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign in failed — try again.");
+      setOauthLoading(null);
+    }
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,7 +52,31 @@ function SignInForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => onOAuth("google")}
+          disabled={oauthLoading !== null || loading}
+          className="w-full rounded-md border border-[#E4D9C2] bg-white px-4 py-2 text-sm font-medium text-[#1A1A1A] transition hover:bg-[#F5EFE4] disabled:opacity-60"
+        >
+          {oauthLoading === "google" ? "Redirecting…" : "Continue with Google"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOAuth("linkedin_oidc")}
+          disabled={oauthLoading !== null || loading}
+          className="w-full rounded-md border border-[#E4D9C2] bg-white px-4 py-2 text-sm font-medium text-[#1A1A1A] transition hover:bg-[#F5EFE4] disabled:opacity-60"
+        >
+          {oauthLoading === "linkedin_oidc" ? "Redirecting…" : "Continue with LinkedIn"}
+        </button>
+      </div>
+      <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-[#6B5F4E]">
+        <span className="h-px flex-1 bg-[#E4D9C2]" />
+        <span>or</span>
+        <span className="h-px flex-1 bg-[#E4D9C2]" />
+      </div>
+      <form onSubmit={onSubmit} className="space-y-4">
       <label className="block">
         <span className="text-xs uppercase tracking-wide text-[#6B5F4E]">Email</span>
         <input
@@ -80,7 +117,8 @@ function SignInForm() {
           Create an account
         </Link>
       </p>
-    </form>
+      </form>
+    </div>
   );
 }
 

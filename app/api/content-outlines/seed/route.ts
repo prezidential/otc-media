@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { DEFAULT_INSIDER_OUTLINE, DEFAULT_NEWSLETTER_OUTLINE } from "@/lib/content-outlines/default-specs";
 
+/**
+ * POST /api/content-outlines/seed
+ *
+ * Seeds the workspace with one default outline per kind (`newsletter_issue` and
+ * `insider_access`) the first time it's called. Idempotent: returns
+ * `{ inserted: 0 }` once any outline row exists for the workspace.
+ *
+ * Migration note (Phase 2A M2): previously read `process.env.WORKSPACE_ID` and
+ * used `supabaseAdmin()`. Now uses `requireWorkspace()` so the wizard / first-
+ * time setup writes into whatever workspace the caller is currently in. RLS
+ * (`content_outlines_workspace_rw`, `schema-rls-wave1.sql`) enforces scoping.
+ */
 export async function POST() {
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: existing, error: fetchError } = await supabase
     .from("content_outlines")

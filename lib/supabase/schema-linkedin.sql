@@ -1,4 +1,4 @@
--- Phase 2A M1 — LinkedIn OAuth tables (Cornerstone OS spec v2.9 §3.16 + §3.9).
+-- Phase 2A M1 + M2 — LinkedIn OAuth tables (Cornerstone OS spec v2.9 §3.16 + §3.9).
 --
 -- Tables:
 --   linkedin_connections — one row per (workspace, user, LinkedIn account). Stores
@@ -12,28 +12,39 @@
 -- `public.user_in_workspace(uuid)` helper from `schema-tenancy.sql` for RLS.
 -- DO NOT redefine that helper here.
 --
--- Token encryption (M1 limitation): `access_token` and `refresh_token` are stored
--- as plaintext in this milestone. The columns are guarded by RLS so only the
--- token's owner (via the `linkedin_connections_self_write` policy) can write
--- them, and a service-role connection is required to read at all once we
--- restrict authenticated SELECTs further. M2 will migrate these columns to
--- pgsodium-encrypted secrets (`pgsodium.create_key()` + `crypto_aead_det_*`),
--- mirroring Supabase's recommended pattern for OAuth tokens.
+-- M2 — Token encryption at rest:
+--   `access_token` and `refresh_token` are stored as `bytea` ciphertext produced
+--   by `public.linkedin_encrypt(text)` (pgsodium AEAD-DET). Reads go through the
+--   `linkedin_connections_decrypted` view, and writes go through the
+--   `public.upsert_linkedin_connection(...)` RPC defined below. Application
+--   code should not touch the `access_token` / `refresh_token` columns
+--   directly; it works in plaintext at the view + RPC boundary.
 --
--- Idempotent. Run in the Supabase SQL editor after `schema-tenancy.sql`,
--- `schema-tenancy-backfill.sql`, and the wave-1 / wave-2 RLS files. Safe to
--- re-run.
+-- Apply order on a fresh deploy:
+--   1. schema-tenancy.sql (+ tenancy-backfill, wave-1 / wave-2 RLS)
+--   2. schema-linkedin-crypto.sql      (defines linkedin_encrypt/decrypt + key)
+--   3. schema-linkedin.sql             (this file)
+--
+-- Apply order on an existing M1 deploy (tokens are still plaintext text):
+--   1. schema-linkedin-crypto.sql      (creates key + helpers — safe to re-run)
+--   2. schema-linkedin.sql             (the DO block below detects text columns
+--                                       and migrates them to bytea in place,
+--                                       re-encrypting existing values)
+--
+-- Idempotent. Safe to re-run.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ---- linkedin_connections ------------------------------------------------------
+-- New columns are `bytea` from the start. The DO block further down handles
+-- the in-place text->bytea migration for pre-M2 deploys.
 CREATE TABLE IF NOT EXISTS linkedin_connections (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id     uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   provider_user_id text NOT NULL,
-  access_token     text NOT NULL,
-  refresh_token    text,
+  access_token     bytea NOT NULL,
+  refresh_token    bytea,
   expires_at       timestamptz NOT NULL,
   scope            text NOT NULL,
   profile_json     jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -45,10 +56,34 @@ CREATE TABLE IF NOT EXISTS linkedin_connections (
 CREATE INDEX IF NOT EXISTS idx_linkedin_connections_workspace_user
   ON linkedin_connections (workspace_id, user_id);
 
-COMMENT ON TABLE  linkedin_connections IS 'Per-(workspace, user, LinkedIn account) OAuth tokens and profile snapshot.';
+-- M1 -> M2 in-place migration. Detects whether `access_token` is still `text`
+-- (pre-M2 deploys) and, if so, re-types both token columns to `bytea` by
+-- piping the existing plaintext through `linkedin_encrypt`. No-op on fresh
+-- deploys (CREATE TABLE above already used bytea) and no-op on re-runs.
+DO $migrate$
+DECLARE
+  v_access_type text;
+BEGIN
+  SELECT data_type INTO v_access_type
+  FROM information_schema.columns
+  WHERE table_schema = 'public'
+    AND table_name   = 'linkedin_connections'
+    AND column_name  = 'access_token';
+
+  IF v_access_type = 'text' THEN
+    ALTER TABLE public.linkedin_connections
+      ALTER COLUMN access_token  TYPE bytea
+        USING public.linkedin_encrypt(access_token),
+      ALTER COLUMN refresh_token TYPE bytea
+        USING public.linkedin_encrypt(refresh_token);
+  END IF;
+END
+$migrate$;
+
+COMMENT ON TABLE  linkedin_connections IS 'Per-(workspace, user, LinkedIn account) OAuth tokens (M2: pgsodium-encrypted at rest) and profile snapshot.';
 COMMENT ON COLUMN linkedin_connections.provider_user_id IS 'LinkedIn `sub` from /v2/userinfo (stable per LinkedIn account).';
-COMMENT ON COLUMN linkedin_connections.access_token IS 'M1: plaintext. M2: migrate to pgsodium-encrypted column. RLS-restricted to the owning user.';
-COMMENT ON COLUMN linkedin_connections.refresh_token IS 'M1: plaintext. M2: pgsodium. Optional — LinkedIn only issues refresh tokens with the offline_access scope.';
+COMMENT ON COLUMN linkedin_connections.access_token IS 'M2: AEAD-DET ciphertext (pgsodium, key `linkedin_tokens_v1`). Read via `linkedin_connections_decrypted` view; write via `upsert_linkedin_connection` RPC.';
+COMMENT ON COLUMN linkedin_connections.refresh_token IS 'M2: AEAD-DET ciphertext (pgsodium). NULL when the connection was issued without `offline_access` scope.';
 COMMENT ON COLUMN linkedin_connections.profile_json IS 'Snapshot from /v2/userinfo at connect time (name, headline, picture, email).';
 
 ALTER TABLE linkedin_connections ENABLE ROW LEVEL SECURITY;
@@ -115,3 +150,97 @@ CREATE POLICY linkedin_drafts_member_write ON linkedin_drafts
   FOR ALL TO authenticated
   USING (public.user_in_workspace(workspace_id))
   WITH CHECK (public.user_in_workspace(workspace_id));
+
+-- ---- decrypted read view -------------------------------------------------------
+-- Application code reads from `linkedin_connections_decrypted` so it never
+-- handles the ciphertext bytea directly. The view is `security_invoker=true`,
+-- so the caller's RLS on the underlying `linkedin_connections` table still
+-- applies — only `linkedin_decrypt` itself runs as definer (so it can reach
+-- the pgsodium key without granting the caller pgsodium privileges).
+CREATE OR REPLACE VIEW public.linkedin_connections_decrypted
+  WITH (security_invoker = true)
+AS
+SELECT
+  id,
+  workspace_id,
+  user_id,
+  provider_user_id,
+  public.linkedin_decrypt(access_token)  AS access_token,
+  public.linkedin_decrypt(refresh_token) AS refresh_token,
+  expires_at,
+  scope,
+  profile_json,
+  created_at,
+  updated_at
+FROM public.linkedin_connections;
+
+COMMENT ON VIEW public.linkedin_connections_decrypted IS
+  'Decrypted read view over linkedin_connections. RLS on the base table still applies (security_invoker=true). Use this view for reads; use upsert_linkedin_connection for writes.';
+
+GRANT SELECT ON public.linkedin_connections_decrypted TO authenticated;
+
+-- ---- write RPC -----------------------------------------------------------------
+-- Single atomic write path so callers never see the encryption boundary. The
+-- function is SECURITY INVOKER, so the RLS check
+-- `user_id = auth.uid() AND public.user_in_workspace(workspace_id)` from the
+-- `linkedin_connections_self_write` policy still applies. The function pins
+-- `user_id := auth.uid()` itself so a caller cannot impersonate another user.
+CREATE OR REPLACE FUNCTION public.upsert_linkedin_connection(
+  p_workspace_id     uuid,
+  p_provider_user_id text,
+  p_access_token     text,
+  p_refresh_token    text,
+  p_expires_at       timestamptz,
+  p_scope            text,
+  p_profile_json     jsonb
+) RETURNS uuid
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'upsert_linkedin_connection requires an authenticated session';
+  END IF;
+
+  INSERT INTO public.linkedin_connections (
+    workspace_id,
+    user_id,
+    provider_user_id,
+    access_token,
+    refresh_token,
+    expires_at,
+    scope,
+    profile_json,
+    updated_at
+  ) VALUES (
+    p_workspace_id,
+    auth.uid(),
+    p_provider_user_id,
+    public.linkedin_encrypt(p_access_token),
+    public.linkedin_encrypt(p_refresh_token),
+    p_expires_at,
+    p_scope,
+    coalesce(p_profile_json, '{}'::jsonb),
+    now()
+  )
+  ON CONFLICT (workspace_id, user_id, provider_user_id) DO UPDATE
+    SET access_token  = EXCLUDED.access_token,
+        refresh_token = EXCLUDED.refresh_token,
+        expires_at    = EXCLUDED.expires_at,
+        scope         = EXCLUDED.scope,
+        profile_json  = EXCLUDED.profile_json,
+        updated_at    = now()
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+COMMENT ON FUNCTION public.upsert_linkedin_connection(uuid, text, text, text, timestamptz, text, jsonb) IS
+  'Atomic upsert into linkedin_connections that encrypts the tokens via linkedin_encrypt. Pins user_id := auth.uid(); RLS on linkedin_connections still applies.';
+
+REVOKE ALL ON FUNCTION public.upsert_linkedin_connection(uuid, text, text, text, timestamptz, text, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.upsert_linkedin_connection(uuid, text, text, text, timestamptz, text, jsonb) TO authenticated;

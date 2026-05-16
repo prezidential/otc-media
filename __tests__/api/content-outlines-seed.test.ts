@@ -3,15 +3,19 @@ import { createMockSupabase } from "./helpers";
 import { DEFAULT_INSIDER_OUTLINE, DEFAULT_NEWSLETTER_OUTLINE } from "@/lib/content-outlines/default-specs";
 
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctx),
 }));
 
 import { POST } from "@/app/api/content-outlines/seed/route";
 
 beforeEach(() => {
-  vi.stubEnv("WORKSPACE_ID", "ws-123");
   vi.clearAllMocks();
 });
 

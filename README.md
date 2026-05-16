@@ -38,11 +38,13 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
 SUPABASE_SECRET_KEY=your-service-role-key
 ANTHROPIC_API_KEY=your-anthropic-key
 OPENAI_API_KEY=your-openai-key
-# Phase 2A multi-tenancy: this UUID is the legacy default workspace; routes that
-# haven't yet been migrated to supabaseUser() still read it. Once every route is
-# migrated and a real workspace exists in the `workspaces` table, this can be
-# removed (the cron/orchestrator code paths will be cut over in M1).
-WORKSPACE_ID=your-workspace-uuid
+# WORKSPACE_ID — REMOVED in Phase 2A M2. No longer required (or read) by any
+# production route. User-facing routes resolve the active workspace via
+# `requireWorkspace()` from `@/lib/auth/session`. The ACE cron entrypoint
+# iterates `workspace_settings.ace_enabled = true` (see
+# `lib/supabase/schema-workspace-settings.sql`); inbound webhooks encode the
+# workspace id in the URL path
+# (`/api/notifications/webhook/[provider]/[workspaceId]`).
 LLM_PROVIDER=anthropic
 LLM_MODEL=claude-sonnet-4-20250514
 LLM_RESEARCH=anthropic:claude-sonnet-4-20250514
@@ -84,7 +86,9 @@ Notes:
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
-- **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin.sql` in the Supabase SQL editor to create `linkedin_connections` and `linkedin_drafts` before connecting an account.
+- **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin-crypto.sql` first (M2: bootstraps the pgsodium key + `linkedin_encrypt`/`linkedin_decrypt` helpers), then `lib/supabase/schema-linkedin.sql` (creates `linkedin_connections` + `linkedin_drafts`, the `linkedin_connections_decrypted` view, and the `upsert_linkedin_connection` RPC) in the Supabase SQL editor before connecting an account.
+- **LinkedIn tokens are encrypted at rest (M2).** `access_token` and `refresh_token` in `linkedin_connections` are pgsodium AEAD-DET ciphertext (`bytea`); the `pgsodium` extension must be enabled in the Supabase project. App code only ever sees plaintext (via the `linkedin_connections_decrypted` view and the `upsert_linkedin_connection` RPC, wrapped by `lib/linkedin/store.ts`). Pre-M2 deploys auto-migrate on re-running `schema-linkedin.sql` — see the file header for ordering.
+- **OAuth sign-in providers (M2) are not configured in `.env.local`.** Google and LinkedIn-as-auth (`linkedin_oidc`) client IDs and secrets are stored in the Supabase dashboard under **Authentication → Providers**. See `docs/m2-oauth-runbook.md` for setup steps. These are separate from the M1 publishing-OAuth `LINKEDIN_*` env vars above.
 
 ### Install & Run
 
@@ -107,7 +111,7 @@ Open [http://localhost:3000](http://localhost:3000).
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
 9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
-## Auth + Multi-Tenancy (Phase 2A — M0)
+## Auth + Multi-Tenancy (Phase 2A — M0 → M2)
 
 Cornerstone OS uses Supabase Auth + Postgres Row-Level Security for the
 authorization boundary. See spec v2.9 §3.16 for the full model.
@@ -139,10 +143,20 @@ In the Supabase SQL editor, run:
 3. Paste + run `lib/supabase/schema-rls-wave1.sql` — turns on RLS for the
    wave-1 tables (signals, editorial_leads, issue_drafts, content_outlines,
    brand_profiles, workspace_settings, runs).
+4. Paste + run `lib/supabase/schema-workspace-settings.sql` — adds the
+   `ace_enabled boolean` opt-in column the ACE cron entrypoint iterates over.
+   To opt your existing legacy workspace into ACE in the same session, run
+   `SET app.legacy_workspace_id = '<your-old-WORKSPACE_ID-uuid>';` first; the
+   migration will flip its `ace_enabled` to true.
 
 ### Auth flow
 
-- `/sign-in` and `/sign-up` use `supabaseBrowser` for email + password.
+- `/sign-in` and `/sign-up` use `supabaseBrowser` for email + password, plus
+  **Continue with Google** and **Continue with LinkedIn** buttons that call
+  `signInWithProvider` (`lib/auth/oauth.ts`) → `supabase.auth.signInWithOAuth()`.
+  Providers must be enabled in the Supabase dashboard; see
+  `docs/m2-oauth-runbook.md`. The redirect lands at `/api/auth/callback`, which
+  exchanges the code for a session.
 - Middleware (`middleware.ts`) refreshes the Supabase session on every request,
   redirects unauthenticated traffic to `/sign-in?next=...`, and redirects
   signed-in users with no workspaces to `/onboarding`.
@@ -168,15 +182,34 @@ share it manually. The POST response includes
 when delivery falls back. A one-click resend endpoint is available at
 `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only).
 
-### Migration status (M0)
+### Migration status (M2 — `WORKSPACE_ID` removed)
 
-- Migrated to `supabaseUser()` + `requireWorkspace()`:
-  `/api/dashboard/stats`, `/api/search`, `/api/signals/list`, `/api/issues/list`,
-  `/api/brand-profiles/list`.
-- Every other workspace-scoped route still uses `supabaseAdmin()` with
-  `process.env.WORKSPACE_ID` and continues to work because service-role bypasses
-  RLS. Wave-2 rollout converts those routes and ships
-  `schema-rls-wave2.sql`.
+Every user-facing workspace-scoped route now uses `supabaseUser()` +
+`requireWorkspace()`. The legacy `process.env.WORKSPACE_ID` env var is no
+longer read by production code. RLS is the authorization boundary.
+
+System-only call sites that have no user JWT use `supabaseAdmin()` and resolve
+the workspace explicitly:
+
+- **ACE cron** (`POST /api/ace/cron`) — iterates rows in `workspace_settings`
+  where `ace_enabled = true` and runs `runAce()` once per workspace. The
+  per-workspace opt-in column is added by
+  `lib/supabase/schema-workspace-settings.sql`.
+- **ACE run** (`POST /api/ace/run`) — dual-mode. User-initiated calls (the
+  `/ace` page button) resolve the workspace from the session. Internal callers
+  (the cron entrypoint) pass `Authorization: Bearer ${CRON_SECRET}` and
+  `{ workspaceId }` in the body.
+- **Inbound notification webhooks** — moved from
+  `POST /api/notifications/webhook/[provider]` to
+  `POST /api/notifications/webhook/[provider]/[workspaceId]`. Each workspace
+  registers its own URL with the upstream provider (e.g. Telegram
+  `setWebhook`). The legacy URL returns **HTTP 410 Gone** so misconfigured
+  webhooks fail loudly. Webhook authenticity is still proven by the
+  provider-level signature (e.g. Telegram's secret-token header); the path
+  parameter is a routing hint and is cross-checked against the resolved
+  approval row.
+- **Health probe** (`GET /api/health`) — no longer checks `WORKSPACE_ID`. It
+  reports Supabase reachability via a trivial `select` against `workspaces`.
 
 ## Available Scripts
 
