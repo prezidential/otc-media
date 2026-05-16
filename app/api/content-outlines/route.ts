@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { requireWorkspace } from "@/lib/auth/session";
 import { dbRowToApiOutline } from "@/lib/content-outlines/api-serialize";
 import { collectOutlineSpecWarnings, formFieldsToSpecJson, validateOutlineFormBody } from "@/lib/content-outlines/spec-form";
 
 async function clearDefaultsForKind(
-  supabase: ReturnType<typeof supabaseAdmin>,
+  supabase: SupabaseClient,
   workspaceId: string,
   kind: string
 ) {
@@ -12,8 +13,9 @@ async function clearDefaultsForKind(
 }
 
 export async function GET(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
   const { searchParams } = new URL(req.url);
   const includeDisabled = searchParams.get("includeDisabled") === "1";
 
@@ -35,8 +37,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
 
   const parsed = validateOutlineFormBody(body);

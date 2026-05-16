@@ -11,9 +11,20 @@ chain.maybeSingle = maybeSingle;
 chain.insert = insert;
 
 const from = vi.fn(() => chain);
+const fakeSupabase = { from };
+const ctx = {
+  supabase: fakeSupabase,
+  workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  userId: "user-1",
+  role: "owner" as const,
+};
 
 vi.mock("@/lib/supabase/server", () => ({
-  supabaseAdmin: () => ({ from }),
+  supabaseAdmin: () => fakeSupabase,
+  supabaseUser: async () => fakeSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctx),
 }));
 
 import { POST } from "@/app/api/content-lanes/seed/route";

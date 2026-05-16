@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 function dedupeHash(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -17,8 +17,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const dh = dedupeHash(`manual|${title}|${publisher}`);
 

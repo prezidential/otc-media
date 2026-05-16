@@ -3,6 +3,7 @@ import { fullNarrationText, type PodcastScript } from "@/lib/content-products/po
 import { persistPodcastEpisodeAfterTts } from "@/lib/content-products/persistPodcastEpisode";
 import { resolveElevenLabsFromDraftBrand } from "@/lib/content-products/resolveElevenLabsVoice";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const ELEVEN_BASE = "https://api.elevenlabs.io/v1";
 /** ElevenLabs per-request character guidance; chunk below this to reduce failures. */
@@ -152,7 +153,9 @@ async function synthesizeChunk(
  * When persist=true, draftId + script + PODCAST_AUDIO_STORAGE_BUCKET: insert podcast_episodes + upload MP3.
  */
 export async function POST(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase: userSupabase, workspaceId } = ctx;
   const storageBucket = process.env.PODCAST_AUDIO_STORAGE_BUCKET?.trim();
   const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
   const defaultVoice = process.env.ELEVENLABS_VOICE_ID?.trim();
@@ -172,9 +175,8 @@ export async function POST(req: Request) {
   let modelId =
     typeof body.modelId === "string" && body.modelId.trim() ? body.modelId.trim() : defaultModelId;
 
-  if (!voiceId && workspaceId && draftIdForVoice) {
-    const supabase = supabaseAdmin();
-    const fromBrand = await resolveElevenLabsFromDraftBrand(supabase, workspaceId, draftIdForVoice);
+  if (!voiceId && draftIdForVoice) {
+    const fromBrand = await resolveElevenLabsFromDraftBrand(userSupabase, workspaceId, draftIdForVoice);
     if (fromBrand.voiceId) voiceId = fromBrand.voiceId;
     if (fromBrand.modelId && !body.modelId) modelId = fromBrand.modelId;
   }
@@ -210,9 +212,6 @@ export async function POST(req: Request) {
   const wantPersist = body.persist === true;
   const draftId = typeof body.draftId === "string" ? body.draftId.trim() : "";
   if (wantPersist) {
-    if (!workspaceId) {
-      return NextResponse.json({ ok: false, error: "WORKSPACE_ID is not set" }, { status: 503 });
-    }
     if (!draftId) {
       return NextResponse.json({ ok: false, error: "draftId is required when persist is true" }, { status: 400 });
     }
@@ -261,9 +260,9 @@ export async function POST(req: Request) {
       "X-Podcast-Tts-Chunks": String(chunks.length),
     };
 
-    if (wantPersist && storageBucket && workspaceId && draftId && scriptObj) {
-      const supabase = supabaseAdmin();
-      const saved = await persistPodcastEpisodeAfterTts(supabase, {
+    if (wantPersist && storageBucket && draftId && scriptObj) {
+      const adminSupabase = supabaseAdmin();
+      const saved = await persistPodcastEpisodeAfterTts(adminSupabase, {
         workspaceId,
         draftId,
         script: scriptObj,

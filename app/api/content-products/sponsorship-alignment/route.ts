@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { claudeClient } from "@/lib/llm/claude";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { draftSummaryForContentProducts } from "@/lib/content-products/promptContext";
 import { loadDraftContentJson } from "@/lib/content-products/loadDraft";
 
@@ -28,23 +28,21 @@ export async function POST(req: Request) {
   const draftId = body.draftId as string | undefined;
   const contentJsonOverride = body.content_json as Record<string, unknown> | undefined;
 
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   let contentJson: Record<string, unknown>;
   if (contentJsonOverride && typeof contentJsonOverride === "object") {
     contentJson = contentJsonOverride;
   } else {
-    const loaded = await loadDraftContentJson(draftId, workspaceId);
+    const loaded = await loadDraftContentJson(supabase, draftId, workspaceId);
     if (!loaded.ok) {
       return NextResponse.json({ error: loaded.error }, { status: loaded.Status });
     }
     contentJson = loaded.contentJson;
   }
 
-  const supabase = supabaseAdmin();
   const { data: items, error: itemsError } = await supabase
     .from("revenue_items")
     .select("id, type, title, description, priority_score, active")

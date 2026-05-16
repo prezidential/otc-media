@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createMockSupabase } from "../../api/helpers";
 
-const mockSupabase = createMockSupabase();
-
-vi.mock("@/lib/supabase/server", () => ({
-  supabaseAdmin: () => mockSupabase,
-}));
+const mockSupabaseRaw = createMockSupabase();
+const mockSupabase = mockSupabaseRaw as unknown as SupabaseClient;
 
 import { loadDraftContentJson } from "@/lib/content-products/loadDraft";
 
@@ -15,22 +13,22 @@ beforeEach(() => {
 
 describe("loadDraftContentJson", () => {
   it("returns 400 when draftId is missing", async () => {
-    const result = await loadDraftContentJson(undefined, "ws-123");
+    const result = await loadDraftContentJson(mockSupabase, undefined, "ws-123");
     expect(result).toEqual({
       ok: false,
       error: "draftId required",
       Status: 400,
     });
-    expect(mockSupabase.from).not.toHaveBeenCalled();
+    expect(mockSupabaseRaw.from).not.toHaveBeenCalled();
   });
 
   it("returns 500 when Supabase query fails", async () => {
-    mockSupabase._setResult("issue_drafts", {
+    mockSupabaseRaw._setResult("issue_drafts", {
       data: null,
       error: { message: "db down" },
     });
 
-    const result = await loadDraftContentJson("draft-1", "ws-123");
+    const result = await loadDraftContentJson(mockSupabase, "draft-1", "ws-123");
     expect(result).toEqual({
       ok: false,
       error: "db down",
@@ -39,12 +37,12 @@ describe("loadDraftContentJson", () => {
   });
 
   it("returns 404 when draft is missing content_json", async () => {
-    mockSupabase._setResult("issue_drafts", {
+    mockSupabaseRaw._setResult("issue_drafts", {
       data: { id: "draft-1", content_json: null },
       error: null,
     });
 
-    const result = await loadDraftContentJson("draft-1", "ws-123");
+    const result = await loadDraftContentJson(mockSupabase, "draft-1", "ws-123");
     expect(result).toEqual({
       ok: false,
       error: "Draft not found or has no content_json",
@@ -53,12 +51,12 @@ describe("loadDraftContentJson", () => {
   });
 
   it("returns content json and trims draft id for lookup", async () => {
-    const chain = mockSupabase._setResult("issue_drafts", {
+    const chain = mockSupabaseRaw._setResult("issue_drafts", {
       data: { id: "draft-1", content_json: { title: "Issue A" } },
       error: null,
     });
 
-    const result = await loadDraftContentJson(" draft-1  ", "ws-123");
+    const result = await loadDraftContentJson(mockSupabase, " draft-1  ", "ws-123");
     expect(result).toEqual({
       ok: true,
       draftId: "draft-1",

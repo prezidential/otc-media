@@ -2,11 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
+const { requireWorkspaceMock } = vi.hoisted(() => ({
+  requireWorkspaceMock: vi.fn(),
+}));
 const mockClaudeCreate = vi.fn();
 const mockLoadDraftContentJson = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: requireWorkspaceMock,
 }));
 
 vi.mock("@/lib/llm/claude", () => ({
@@ -26,6 +34,7 @@ import { POST } from "@/app/api/content-products/sponsorship-alignment/route";
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("WORKSPACE_ID", "ws-123");
+  requireWorkspaceMock.mockImplementation(async () => ctx);
   mockLoadDraftContentJson.mockResolvedValue({
     ok: true,
     draftId: "draft-1",
@@ -50,18 +59,18 @@ beforeEach(() => {
 });
 
 describe("POST /api/content-products/sponsorship-alignment", () => {
-  it("returns 503 when WORKSPACE_ID is missing", async () => {
-    vi.stubEnv("WORKSPACE_ID", "");
+  it("returns auth error response when requireWorkspace rejects", async () => {
+    requireWorkspaceMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 })
+    );
 
     const res = await POST(
       makeJsonRequest("http://localhost:3000/api/content-products/sponsorship-alignment", {
         content_json: { title: "x" },
       })
     );
-    const json = await res.json();
 
-    expect(res.status).toBe(503);
-    expect(json.error).toBe("WORKSPACE_ID is not set");
+    expect(res.status).toBe(401);
     expect(mockSupabase.from).not.toHaveBeenCalled();
     expect(mockClaudeCreate).not.toHaveBeenCalled();
   });

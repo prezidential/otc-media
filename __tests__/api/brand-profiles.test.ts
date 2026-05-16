@@ -166,19 +166,53 @@ describe("POST /api/brand-profiles/seed", () => {
       error: null,
     });
     // Override the limit to return existing data
-    chain.limit = vi.fn().mockResolvedValue({ data: [{ id: "existing" }], error: null });
+    chain.limit = vi.fn().mockResolvedValue({
+      data: [{ id: "existing", name: "Existing brand" }],
+      error: null,
+    });
 
-    const res = await POST_SEED();
+    const res = await POST_SEED(makeJsonRequest("http://x", {}));
     const json = await res.json();
 
     expect(json.inserted).toBe(0);
+    expect(json.brandProfile).toEqual({ id: "existing", name: "Existing brand" });
   });
 
   it("returns 500 on fetch error", async () => {
     const chain = mockSupabase._setResult("brand_profiles", { data: null, error: null });
     chain.limit = vi.fn().mockResolvedValue({ data: null, error: { message: "fetch fail" } });
 
-    const res = await POST_SEED();
+    const res = await POST_SEED(makeJsonRequest("http://x", {}));
     expect(res.status).toBe(500);
+  });
+
+  it("returns 400 for unknown template ids", async () => {
+    const res = await POST_SEED(makeJsonRequest("http://x", { template: "nonsense" }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toMatch(/Unknown template/);
+  });
+
+  it("inserts a blank template with override name when no profile exists", async () => {
+    const chain = mockSupabase._setResult("brand_profiles", { data: null, error: null });
+    chain.limit = vi.fn().mockResolvedValue({ data: [], error: null });
+    chain.single = vi
+      .fn()
+      .mockResolvedValue({ data: { id: "new-bp", name: "Override Name" }, error: null });
+
+    const res = await POST_SEED(
+      makeJsonRequest("http://x", { template: "blank", name: "  Override Name  " })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.inserted).toBe(1);
+    expect(json.brandProfile).toEqual({ id: "new-bp", name: "Override Name" });
+    expect(chain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace_id: "ws-123",
+        name: "Override Name",
+      })
+    );
   });
 });

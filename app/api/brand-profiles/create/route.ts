@@ -1,21 +1,19 @@
 import { NextResponse } from "next/server";
 import { validateCreatorBrandProfilePayload } from "@/lib/brand-profile/creatorBrandProfile";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function POST(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
-
   const body = await req.json().catch(() => null);
   const parsed = validateCreatorBrandProfilePayload(body);
   if (!parsed.ok) {
     return NextResponse.json({ error: parsed.errors.join("; ") }, { status: 400 });
   }
 
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
+
   const v = parsed.value;
-  const supabase = supabaseAdmin();
 
   const insertRow: Record<string, unknown> = {
     workspace_id: workspaceId,

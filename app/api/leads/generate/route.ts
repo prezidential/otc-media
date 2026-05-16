@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { callLLM } from "@/lib/llm/provider";
 import { LeadsOutputSchema, type LeadItem } from "@/lib/leads/leadSchema";
 
@@ -39,8 +39,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "brandProfileId required" }, { status: 400 });
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: brandProfile, error: profileError } = await supabase
     .from("brand_profiles")

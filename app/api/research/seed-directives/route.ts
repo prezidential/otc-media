@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const DEFAULT_DIRECTIVES = [
   { name: "Identity Vendor Moves", cadence: "daily", description: "Track identity vendor product updates, M&A, and strategy changes." },
@@ -13,8 +13,9 @@ const DEFAULT_DIRECTIVES = [
 ];
 
 export async function POST() {
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: existing, error: fetchError } = await supabase
     .from("research_directives")

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import Parser from "rss-parser";
 import crypto from "crypto";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const parser = new Parser();
 
@@ -13,8 +13,9 @@ export async function POST(req: Request) {
   const { feedUrl, sourceName, limit = 15 } = await req.json();
   if (!feedUrl) return NextResponse.json({ error: "feedUrl required" }, { status: 400 });
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const feed = await parser.parseURL(feedUrl);
   const publisher = sourceName || feed.title || "Unknown RSS";

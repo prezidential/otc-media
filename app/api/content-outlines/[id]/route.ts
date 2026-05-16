@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { requireWorkspace } from "@/lib/auth/session";
 import { dbRowToApiOutline } from "@/lib/content-outlines/api-serialize";
 import {
   collectOutlineSpecWarnings,
@@ -10,7 +11,7 @@ import {
 import type { OutlineKind } from "@/lib/content-outlines/types";
 
 async function clearDefaultsForKind(
-  supabase: ReturnType<typeof supabaseAdmin>,
+  supabase: SupabaseClient,
   workspaceId: string,
   kind: string
 ) {
@@ -21,8 +22,9 @@ type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: RouteParams) {
   const { id } = await params;
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data, error } = await supabase
     .from("content_outlines")
@@ -39,8 +41,9 @@ export async function GET(_req: Request, { params }: RouteParams) {
 
 export async function PATCH(req: Request, { params }: RouteParams) {
   const { id } = await params;
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
 
   const { data: existing, error: fetchError } = await supabase
@@ -119,8 +122,9 @@ export async function PATCH(req: Request, { params }: RouteParams) {
 
 export async function DELETE(_req: Request, { params }: RouteParams) {
   const { id } = await params;
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: existing, error: fetchError } = await supabase
     .from("content_outlines")

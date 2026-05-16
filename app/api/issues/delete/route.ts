@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
@@ -7,8 +7,9 @@ export async function POST(req: Request) {
 
   if (!id) return NextResponse.json({ error: "draftId or id required" }, { status: 400 });
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { error } = await supabase
     .from("issue_drafts")

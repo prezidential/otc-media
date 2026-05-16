@@ -7,7 +7,7 @@ import {
   buildPodcastStyleBlock,
   parsePodcastScriptRequestOptions,
 } from "@/lib/content-products/podcastScriptOptions";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import type { PodcastScript, PodcastScriptSegment } from "@/lib/content-products/podcastScriptTypes";
 
 const MODEL = "claude-sonnet-4-20250514";
@@ -68,23 +68,21 @@ export async function POST(req: Request) {
   const draftId = body.draftId as string | undefined;
   const contentJsonOverride = body.content_json as Record<string, unknown> | undefined;
 
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   let contentJson: Record<string, unknown>;
   if (contentJsonOverride && typeof contentJsonOverride === "object") {
     contentJson = contentJsonOverride;
   } else {
-    const loaded = await loadDraftContentJson(draftId, workspaceId);
+    const loaded = await loadDraftContentJson(supabase, draftId, workspaceId);
     if (!loaded.ok) {
       return NextResponse.json({ error: loaded.error }, { status: loaded.Status });
     }
     contentJson = loaded.contentJson;
   }
 
-  const supabase = supabaseAdmin();
   const { grounded, unmatchedUrls } = await resolveSignalsForDraft(supabase, workspaceId, contentJson);
   const groundingBlock = formatSignalGroundingForPrompt(grounded, unmatchedUrls);
   const draftSummary = draftSummaryForContentProducts(contentJson);

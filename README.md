@@ -64,6 +64,17 @@ ELEVENLABS_VOICE_ID=
 
 # Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
 PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
+
+# Optional — workspace invite emails via Resend. When unset, POST /api/workspaces/[id]/members
+# still creates the invite row and returns the join URL; owners share it manually.
+RESEND_API_KEY=your-resend-api-key
+EMAIL_FROM=cornerstone@onthecornermedia.com
+
+# Optional — LinkedIn OAuth (Phase 2A M1). Without these, the /api/auth/linkedin
+# endpoints return 503 and the integration is hidden in the UI.
+LINKEDIN_CLIENT_ID=your-linkedin-client-id
+LINKEDIN_CLIENT_SECRET=your-linkedin-client-secret
+LINKEDIN_REDIRECT_URI=http://localhost:3000/api/auth/linkedin/callback
 ```
 
 Notes:
@@ -73,6 +84,7 @@ Notes:
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
+- **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin.sql` in the Supabase SQL editor to create `linkedin_connections` and `linkedin_drafts` before connecting an account.
 
 ### Install & Run
 
@@ -149,8 +161,12 @@ In the Supabase SQL editor, run:
 | `GET/POST/DELETE /api/workspaces/[id]/members` | List members + invites; create invite token; remove member (owner-only via RLS) |
 | `GET  /api/workspaces/invites/[token]` | Public invite landing — redirects to /sign-in then accepts the invite |
 
-Email delivery for invites is intentionally out of scope for M0; owners copy the
-invite URL and share it manually until M1 wires SMTP.
+Email delivery for invites uses Resend when `RESEND_API_KEY` + `EMAIL_FROM` are
+set; without them, owners still get the invite URL in the response and can
+share it manually. The POST response includes
+`email: { sent: boolean, error: string | null }` so the UI can show a banner
+when delivery falls back. A one-click resend endpoint is available at
+`POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only).
 
 ### Migration status (M0)
 
