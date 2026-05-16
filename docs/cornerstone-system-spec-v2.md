@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.9
+## System Specification v2.10
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.8 (§3.0 and §3.9 filled in; **§3.16 Auth, Tenancy, and RLS** added; §7 Implementation Status and §8 Phase 2A roadmap updated to reflect Phase 2A M0 shipped scope)
+Supersedes: v2.9 (Phase 2A M1 and M2 shipped: OAuth sign-in providers, `WORKSPACE_ID` env fallback removed, LinkedIn token encryption at rest via pgsodium, per-workspace cron iteration via `workspace_settings.ace_enabled`; per-workspace billing surface deferred to a future milestone)
 
 ---
 
@@ -64,7 +64,7 @@ Cornerstone OS is **workspace-scoped by default**. Every domain row (`signals`, 
 
 **Per-query enforcement** — user-facing routes obtain their Supabase client through **`supabaseUser()`** in `lib/supabase/server.ts`. That client runs under the Postgres **`authenticated`** role, so every query is filtered by RLS policies built around the `public.user_in_workspace(uuid)` helper. Routes never need to manually `.eq("workspace_id", …)` to enforce isolation — RLS does it. See §3.16 for the full auth/tenancy/RLS contract.
 
-**Legacy `WORKSPACE_ID` env path** — early Phase 2A code paths resolved the active workspace from the **`WORKSPACE_ID`** environment variable rather than the cookie. That fallback still exists in a subset of API routes (the ones not yet migrated to wave-2 RLS — see §3.16) and is **scheduled for removal in Phase 2A M2** once every route is on `supabaseUser()` + RLS. The env var must remain set during the migration window; new code MUST NOT add new references to it.
+**Legacy `WORKSPACE_ID` env path** — **REMOVED in Phase 2A M2**. Early Phase 2A code paths resolved the active workspace from the `WORKSPACE_ID` environment variable. That fallback no longer exists in production code. User-facing routes resolve the active workspace through `requireWorkspace()` from `lib/auth/session.ts`. System-only callers without a user JWT (cron, inbound webhooks) resolve the workspace explicitly — see §3.16 "System-only workspace resolution".
 
 ---
 
@@ -850,7 +850,7 @@ Migrating every domain table from "API-enforced workspace filter" to "RLS-enforc
 
 Every route that touches these tables has been converted to `supabaseUser()`; the policies use `user_in_workspace(workspace_id)` exclusively.
 
-**Wave-2 (M1 — `lib/supabase/schema-rls-wave2.sql`, pending):**
+**Wave-2 (shipped, M1 — `lib/supabase/schema-rls-wave2.sql`):**
 
 - `brainstorm_sessions`
 - `brainstorm_messages`
@@ -859,9 +859,41 @@ Every route that touches these tables has been converted to `supabaseUser()`; th
 - `ace_runs`
 - `podcast_episodes`
 
-Wave-2 will also migrate the remaining 42 API routes still importing `supabaseAdmin` for user-facing reads/writes (full inventory in the M1 plan). Cron entrypoints, webhooks, and the workspace bootstrap stay on the admin client per the allowlist above.
+Wave-2 also migrated the remaining 42 user-facing API routes off `supabaseAdmin` onto `supabaseUser()` + `requireWorkspace()`. Only the system-only call sites in the allowlist above (cron entrypoints, inbound webhooks, the workspace bootstrap, etc.) stay on the admin client. The legacy `WORKSPACE_ID` env fallback was removed alongside wave-2 in M2.
 
-Once wave-2 lands, the legacy **`WORKSPACE_ID`** env fallback (§3.0) can be removed in M2.
+### System-only workspace resolution (M2)
+
+System-only call sites have no user JWT, so they cannot use `requireWorkspace()`. Each resolves the workspace explicitly:
+
+- **Per-workspace cron iteration** — the ACE cron entrypoint (`POST /api/ace/cron`) reads `workspace_settings.ace_enabled = true` via `supabaseAdmin()` and fans out one `runAce()` per opted-in workspace. The `ace_enabled boolean not null default false` column is added by `lib/supabase/schema-workspace-settings.sql`; existing single-tenant deployments can opt their legacy workspace in via the in-file backfill (set the `app.legacy_workspace_id` GUC before running the migration).
+- **Dual-mode run endpoint** — `POST /api/ace/run` accepts two callers. User-initiated calls resolve the workspace from the session via `requireWorkspace()` and tag the run `trigger=manual`. Internal callers (the cron entrypoint) present `Authorization: Bearer ${CRON_SECRET}` and pass `{ workspaceId }` in the body; those runs are tagged `trigger=cron`.
+- **Per-workspace inbound webhooks** — `POST /api/notifications/webhook/[provider]/[workspaceId]` encodes the workspace id in the URL path. Each workspace registers its own webhook URL with the upstream provider (e.g. Telegram `setWebhook`). The legacy path `[provider]/route.ts` returns `HTTP 410 Gone` so misconfigured webhooks fail loudly. Authenticity is still proven by the provider-level signature (e.g. Telegram's secret-token header) inside the provider plugin; the path parameter is a routing hint and is cross-checked against the loaded `notification_approvals` row.
+- **Health probe** — `GET /api/health` no longer reads `WORKSPACE_ID`. It reports Supabase reachability via a trivial `SELECT` against `workspaces` and returns `{ ok, supabase, checks }`.
+
+### LinkedIn token encryption at rest (M2)
+
+`linkedin_connections.access_token` and `refresh_token` are stored as **pgsodium AEAD-DET ciphertext** (`bytea`), keyed by a server-generated symmetric key `linkedin_tokens_v1`. The bootstrap migration is `lib/supabase/schema-linkedin-crypto.sql` and must run **before** `lib/supabase/schema-linkedin.sql`. The crypto file:
+
+- `CREATE EXTENSION IF NOT EXISTS pgsodium;`
+- creates the named key once (`pgsodium.create_key`, idempotent via `NOT EXISTS (… valid_key …)`),
+- defines `public.linkedin_encrypt(text) → bytea` and `public.linkedin_decrypt(bytea) → text` as `SECURITY DEFINER`, owned by `postgres`, with `EXECUTE` granted to `authenticated`. Associated data is the literal `'linkedin'` so the key can't decrypt non-LinkedIn ciphertext.
+
+`lib/supabase/schema-linkedin.sql` defines the token columns as `bytea`, exposes `linkedin_connections_decrypted` (a `security_invoker = true` view returning plaintext via `linkedin_decrypt`), and exposes `upsert_linkedin_connection(...)` (`SECURITY INVOKER`, pins `auth.uid()`, encrypts via `linkedin_encrypt`). Application code only ever sees plaintext through `lib/linkedin/store.ts` (`upsertLinkedInConnection` / `getLinkedInConnection`).
+
+Existing pre-M2 deploys with plaintext rows auto-migrate when `schema-linkedin.sql` is re-run: an idempotent `DO $migrate$` block detects `access_token text` and runs `ALTER COLUMN access_token TYPE bytea USING public.linkedin_encrypt(access_token)` (and the same for `refresh_token`). NULL `refresh_token` values stay NULL (encryption helper is null-safe).
+
+Threat model: protects against `pg_dump` / backups / direct `SELECT` on the base table. Does **not** defend against a `postgres`-role attacker (pgsodium keys are reachable by the DB owner by design). Key rotation is out of scope for M2.
+
+### OAuth sign-in providers (M2)
+
+Email + password remains the default. Two OAuth providers are wired in via Supabase Auth:
+
+- **Google** (`provider: "google"`)
+- **LinkedIn-as-auth** (`provider: "linkedin_oidc"`) — distinct from the M1 LinkedIn publishing OAuth at `/api/auth/linkedin/start|callback`. The publishing OAuth creates `linkedin_connections` rows for posting; the sign-in OAuth creates Supabase auth users.
+
+Both are presented as "Continue with …" buttons on `/sign-in` and `/sign-up` and call `signInWithProvider()` from `lib/auth/oauth.ts`, which builds the redirect URL from `window.location.origin + "/api/auth/callback"` and invokes `supabase.auth.signInWithOAuth()` with scopes `openid email profile`. The existing callback handler already exchanges the OAuth code for a session and forwards the `next` query param so deep links survive the round-trip.
+
+Provider credentials live in the **Supabase dashboard → Authentication → Providers**, not in `.env.local`. The provider-side redirect URI to register is `https://<project-ref>.supabase.co/auth/v1/callback`. Operator setup steps are in `docs/m2-oauth-runbook.md`.
 
 ---
 
@@ -927,18 +959,21 @@ Stretch:
 | **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
 | **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
-| Creator onboarding flow | **Implemented (M0 minimum)** | Minimal name+slug at **`app/onboarding/page.tsx`** → **`POST /api/workspaces`**; full 4-step wizard ships in M1 (§3.9) |
-| **Supabase Auth + sign-in/sign-up/sign-out** | **Implemented** | `app/sign-in`, `app/sign-up`, `app/api/auth` — email + password; OAuth in M2 (§3.16) |
+| Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done), optional 5th LinkedIn-connect step (§3.9) |
+| **Supabase Auth + sign-in/sign-up/sign-out** | **Implemented** | `app/sign-in`, `app/sign-up`, `app/api/auth` — email + password (M0); Google + LinkedIn-as-auth (M2 — §3.16) |
+| **OAuth sign-in providers (Google + LinkedIn-as-auth)** | **Implemented (M2)** | "Continue with …" buttons on `/sign-in` + `/sign-up`; `lib/auth/oauth.ts`; providers configured in Supabase dashboard; runbook at `docs/m2-oauth-runbook.md` (§3.16) |
 | **Workspace tenancy (workspaces, workspace_members, workspace_invites)** | **Implemented** | `lib/supabase/schema-tenancy.sql` — `(workspace_id, user_id, role)` join with `owner` / `editor` / `viewer` (§3.0) |
-| **RLS scaffolding + helper functions** | **Implemented (wave-1)** | `lib/supabase/schema-rls-wave1.sql` covers signals, editorial_leads, issue_drafts, content_outlines, brand_profiles, workspace_settings, runs; **wave-2 pending — 42 routes still on `supabaseAdmin()`** (§3.16) |
+| **RLS scaffolding + helper functions** | **Implemented (wave-1 + wave-2)** | `lib/supabase/schema-rls-wave1.sql` covers signals, editorial_leads, issue_drafts, content_outlines, brand_profiles, workspace_settings, runs; `schema-rls-wave2.sql` covers brainstorm_sessions, brainstorm_messages, content_lanes, notification_approvals, ace_runs, podcast_episodes (§3.16) |
+| **`WORKSPACE_ID` env removal** | **Implemented (M2)** | Removed from all production code paths. User-facing routes use `requireWorkspace()`; cron iterates `workspace_settings.ace_enabled`; webhooks moved to per-workspace URL paths (§3.16) |
 | **Auth middleware (session refresh + onboarding gate)** | **Implemented** | `middleware.ts` — refreshes Supabase session, redirects unauth to `/sign-in`, members-of-zero-workspaces to `/onboarding` |
 | **Workspace switcher + sidebar identity** | **Implemented** | `app/api/me/route.ts` returns current user + membership list; Studio sidebar switcher writes `cs_active_workspace` cookie via `PATCH /api/workspaces/active` |
-| LinkedIn OAuth connection | Not started | New |
+| **Workspace invites (email delivery)** | **Implemented (M1)** | `POST /api/workspaces/[id]/members` triggers Resend via `lib/email/resend.ts`; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only) |
+| **LinkedIn OAuth connection (publishing)** | **Implemented (M1)** | `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` defines `linkedin_connections` + `linkedin_drafts` with RLS via `user_in_workspace` |
+| **LinkedIn token encryption at rest** | **Implemented (M2)** | pgsodium AEAD-DET via `lib/supabase/schema-linkedin-crypto.sql`; `linkedin_connections_decrypted` view + `upsert_linkedin_connection` RPC; wrapped by `lib/linkedin/store.ts` (§3.16) |
+| **Per-workspace billing surface** | Deferred | Stripe (or equivalent) plan tiers — pushed out of Phase 2A M2 (§8) |
 | Post analysis + content type derivation | Not started | New |
-| LinkedIn Draft Engine | Not started | New |
-| LinkedIn Revision Engine | Not started | New |
-| linkedin_drafts table | Not started | New |
-| linkedin_connections table | Not started | New |
+| LinkedIn Draft Engine | Not started | Phase 3 |
+| LinkedIn Revision Engine | Not started | Phase 3 |
 | Manual topic injection | Implemented | `/api/signals/create` + UI |
 | Draft history | Implemented | `/api/issues/list` + UI with compare view |
 | QoL — signals freshness | Implemented | Freshness indicator + stale warning |
@@ -997,9 +1032,9 @@ Stretch:
 
 ## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products
 
-### Phase 2A — Auth, multi-tenancy, brand profile refactor + LinkedIn foundation **[REVISED in v2.9]**
+### Phase 2A — Auth, multi-tenancy, brand profile refactor + LinkedIn foundation **[REVISED in v2.10]**
 
-Phase 2A is sequenced in three milestones — **M0** (shipped), **M1** (in progress), **M2** (deferred). Together they take Cornerstone OS from "single-creator with `WORKSPACE_ID` env" to "true multi-tenant with auth, RLS, onboarding, invites, and LinkedIn".
+Phase 2A is sequenced in three milestones — **M0**, **M1**, **M2** — all shipped. Together they took Cornerstone OS from "single-creator with `WORKSPACE_ID` env" to "true multi-tenant with auth, RLS, onboarding, invites, LinkedIn, OAuth sign-in, and encrypted token storage". Per-workspace billing was scoped out of Phase 2A M2 and moved to a future milestone.
 
 #### M0 — Auth + tenancy + RLS scaffolding **(shipped, PR #68)**
 - ✅ Supabase Auth (email + password) — `app/sign-in`, `app/sign-up`, `app/api/auth`
@@ -1009,22 +1044,23 @@ Phase 2A is sequenced in three milestones — **M0** (shipped), **M1** (in progr
 - ✅ Workspace switcher + sidebar identity — `app/api/me/route.ts`, `cs_active_workspace` cookie, `PATCH /api/workspaces/active`
 - ✅ Onboarding flow (M0 minimum) — `app/onboarding/page.tsx` (name + slug → `POST /api/workspaces`)
 
-#### M1 — RLS wave-2, onboarding wizard, invites, LinkedIn **(next)**
-- **RLS wave-2 migration** — convert the remaining **42 user-facing routes** off `supabaseAdmin()` onto `supabaseUser()`; add `lib/supabase/schema-rls-wave2.sql` covering `brainstorm_sessions`, `brainstorm_messages`, `content_lanes`, `notification_approvals`, `ace_runs`, `podcast_episodes` (§3.16). Ships in four batches: reads → leads/issues/signals writes → brand/revenue/publish/products → pipeline/agent.
-- **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done), composing the existing seed endpoints; optional 5th step for LinkedIn connect (§3.9).
-- **Invite SMTP** — wire Resend into `POST /api/workspaces/[id]/members` so `workspace_invites` rows actually email the invitee; add `lib/email/resend.ts`; document `RESEND_API_KEY` + `EMAIL_FROM`.
-- **LinkedIn OAuth + tables** — new routes `GET /api/auth/linkedin/start` and `GET /api/auth/linkedin/callback`; new schema `lib/supabase/schema-linkedin.sql` with `linkedin_connections` and `linkedin_drafts` (both RLS-enabled via `user_in_workspace`); tokens encrypted at rest.
-- **Generic `CreatorBrandProfile` template flow** — extract brand-profile templates into `lib/brand-profile/templates/` (start with `idj.ts` and `blank.ts`); deprecate the hardcoded `DEFAULT_IDJ_PROFILE` in `app/api/brand-profiles/seed/route.ts`; wizard step 2 selects template by name.
+#### M1 — RLS wave-2, onboarding wizard, invites, LinkedIn **(shipped, PR #92)**
+- ✅ **RLS wave-2 migration** — 42 user-facing routes converted from `supabaseAdmin()` to `supabaseUser()` + `requireWorkspace()`; `lib/supabase/schema-rls-wave2.sql` covers `brainstorm_sessions`, `brainstorm_messages`, `content_lanes`, `notification_approvals`, `ace_runs`, `podcast_episodes` (§3.16).
+- ✅ **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done) plus optional 5th LinkedIn-connect step (§3.9).
+- ✅ **Invite SMTP** — Resend wired into `POST /api/workspaces/[id]/members`; `lib/email/resend.ts`; `RESEND_API_KEY` + `EMAIL_FROM` documented; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend`.
+- ✅ **LinkedIn OAuth (publishing) + tables** — `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` with `linkedin_connections` and `linkedin_drafts` (both RLS-enabled via `user_in_workspace`). Token encryption at rest was flagged as an M1 carryover and shipped in M2.
+- ✅ **Generic `CreatorBrandProfile` template flow** — templates extracted to `lib/brand-profile/templates/` (`idj.ts` + `blank.ts`); hardcoded `DEFAULT_IDJ_PROFILE` deprecated; wizard step 2 selects template by name.
 
-#### M2 — OAuth, billing, env cleanup **(deferred)**
-- **OAuth sign-in providers** — Google and LinkedIn-as-auth (distinct from the M1 LinkedIn-as-publishing-target OAuth).
-- **Per-workspace billing surface** — Stripe (or equivalent) hooks, plan tier on `workspaces`.
-- **Remove `WORKSPACE_ID` env fallback** — gated on every route being migrated to `supabaseUser()` + RLS (wave-2 complete). Until then the env var must remain set; new code MUST NOT add new references to it.
+#### M2 — OAuth sign-in, env cleanup, token encryption **(shipped)**
+- ✅ **OAuth sign-in providers** — Google and LinkedIn-as-auth (`linkedin_oidc`) via Supabase Auth; sign-in/sign-up UI buttons; `lib/auth/oauth.ts`; operator runbook at `docs/m2-oauth-runbook.md` (§3.16). Distinct from M1 LinkedIn-for-publishing OAuth.
+- ✅ **Removed `WORKSPACE_ID` env fallback** — all 7 remaining production references migrated. User-facing routes (`brand-profiles/seed`, `content-outlines/seed`, `integrations/[platform]/query`, `health`) use `requireWorkspace()`. System-only call sites resolve workspace explicitly: ACE cron iterates `workspace_settings.ace_enabled`, ACE run is dual-mode (session vs. `CRON_SECRET`-gated), inbound webhooks moved to `notifications/webhook/[provider]/[workspaceId]` (legacy path returns 410 Gone), health probe reports Supabase reachability (§3.16).
+- ✅ **LinkedIn token encryption at rest** — pgsodium AEAD-DET via `lib/supabase/schema-linkedin-crypto.sql`; `linkedin_connections_decrypted` view + `upsert_linkedin_connection` RPC + `lib/linkedin/store.ts` wrapper; auto-migrating from M1 plaintext rows (§3.16).
+- 🗓 **Per-workspace billing surface** — **deferred out of Phase 2A**. Stripe plan tiers + customer portal will land in a dedicated billing milestone (TBD) once core product UX stabilises and pricing is finalised.
 
 #### Cross-cutting (still applies across M0–M2)
 - Add `channel` field to `editorial_leads` (for newsletter vs. LinkedIn routing)
 - Add LinkedIn-specific lint patterns (alongside LinkedIn Draft Engine in Phase 3)
-- Migrate existing single-tenant workspace through the onboarding flow once the wizard ships
+- ~~Migrate existing single-tenant workspace through the onboarding flow once the wizard ships~~ — handled in M1 wizard; M2 also seeds the legacy workspace's `ace_enabled` via the in-file backfill
 
 ### Phase 2B — Content products (Issues)
 - **Landed:** Social snippets formatted UI; **podcast-script** + signal URL resolution; **podcast-tts** ElevenLabs MP3 download (human-gated); social snippets **brand profile JSON** + **anti-collapse** generation (temperature / rotation); see §3.11–§3.12.

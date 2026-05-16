@@ -6,16 +6,26 @@
  * when the schema changes.
  */
 
-/** One row in `linkedin_connections`. */
+/**
+ * One row in the `linkedin_connections_decrypted` view — i.e. the shape
+ * application code consumes after M2 encryption-at-rest.
+ *
+ * The underlying `linkedin_connections` table stores `access_token` and
+ * `refresh_token` as pgsodium AEAD-DET `bytea` ciphertext. App code never
+ * touches the raw table; reads go through the `_decrypted` view (which calls
+ * `public.linkedin_decrypt`) and writes go through
+ * `public.upsert_linkedin_connection` (which calls `public.linkedin_encrypt`).
+ * Both are wired in `lib/linkedin/store.ts`.
+ */
 export type LinkedInConnectionRow = {
   id: string;
   workspace_id: string;
   user_id: string;
   /** LinkedIn `sub` (stable per LinkedIn account). */
   provider_user_id: string;
-  /** M1: plaintext. M2 will store this pgsodium-encrypted. */
+  /** Plaintext: decrypted server-side by the `_decrypted` view. */
   access_token: string;
-  /** Optional — only present when `offline_access` scope is granted. */
+  /** Plaintext, or null when `offline_access` scope wasn't granted. */
   refresh_token: string | null;
   /** ISO timestamp string. */
   expires_at: string;

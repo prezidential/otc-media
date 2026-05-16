@@ -7,6 +7,7 @@ import {
   fetchProfile,
   getLinkedInConfig,
 } from "@/lib/linkedin/oauth";
+import { upsertLinkedInConnection } from "@/lib/linkedin/store";
 
 /**
  * GET /api/auth/linkedin/callback
@@ -74,24 +75,20 @@ export async function GET(req: NextRequest) {
 
   const expiresAt = new Date(Date.now() + tokenRes.data.expiresIn * 1000).toISOString();
 
-  const { error: upsertErr } = await ctx.supabase
-    .from("linkedin_connections")
-    .upsert(
-      {
-        workspace_id: ctx.workspaceId,
-        user_id: ctx.userId,
-        provider_user_id: profileRes.data.providerUserId,
-        access_token: tokenRes.data.accessToken,
-        refresh_token: tokenRes.data.refreshToken,
-        expires_at: expiresAt,
-        scope: tokenRes.data.scope,
-        profile_json: profileRes.data.profileJson,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "workspace_id,user_id,provider_user_id" }
-    );
+  // M2: tokens are encrypted at rest. The RPC wraps the upsert and runs
+  // `linkedin_encrypt(...)` server-side; RLS on `linkedin_connections` still
+  // applies (the RPC is SECURITY INVOKER and pins user_id := auth.uid()).
+  const upsertRes = await upsertLinkedInConnection(ctx.supabase, {
+    workspaceId: ctx.workspaceId,
+    providerUserId: profileRes.data.providerUserId,
+    accessToken: tokenRes.data.accessToken,
+    refreshToken: tokenRes.data.refreshToken,
+    expiresAt,
+    scope: tokenRes.data.scope,
+    profileJson: profileRes.data.profileJson,
+  });
 
-  if (upsertErr) {
+  if (!upsertRes.ok) {
     return redirectWithStatus(url.origin, "error", "persist_failed");
   }
 

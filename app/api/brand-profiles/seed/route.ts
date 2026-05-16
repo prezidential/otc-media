@@ -22,12 +22,12 @@ import {
  *   - On insert, returns `{ inserted: 1, brandProfile: { id, name } }` so the
  *     wizard can immediately PATCH `workspace_settings.default_brand_profile_id`.
  *
- * Migration note (RLS wave-2): this route was previously the last brand-profiles
- * route still on `supabaseAdmin()` + `process.env.WORKSPACE_ID`. The M1.2 wizard
- * needs it to write into whatever workspace the caller just created, which
- * `WORKSPACE_ID` cannot represent. Now uses `requireWorkspace()` → `supabaseUser()`
- * and lets RLS (`brand_profiles_workspace_rw`, see `schema-rls-wave1.sql`)
- * enforce scoping.
+ * Migration note (RLS wave-2 → M2): this route was previously the last
+ * brand-profiles route on `supabaseAdmin()` + the legacy `WORKSPACE_ID` env.
+ * It now uses `requireWorkspace()` → `supabaseUser()` and lets RLS
+ * (`brand_profiles_workspace_rw`, see `schema-rls-wave1.sql`) enforce scoping.
+ * The M1.2 wizard relies on this so newly-created workspaces get a brand
+ * profile under their own id (the legacy env var couldn't represent that).
  */
 export async function POST(req: Request) {
   const ctx = await requireWorkspace();
