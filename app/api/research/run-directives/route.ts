@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { runCadenceIngest } from "@/lib/research/runCadenceIngest";
 
 type Cadence = "daily" | "weekly";
@@ -13,8 +13,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "cadence required: 'daily' | 'weekly'" }, { status: 400 });
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const result = await runCadenceIngest(supabase, workspaceId, cadence, limitPerFeed, {
     source: "api_research_run_directives",

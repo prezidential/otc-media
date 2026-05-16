@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
 const mockCallLLM = vi.fn().mockResolvedValue({ text: "{}", provider: "anthropic", model: "claude-test" });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctx),
 }));
 
 vi.mock("@/lib/llm/provider", () => ({

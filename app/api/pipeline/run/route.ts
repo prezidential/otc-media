@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { runAgent, type AgentRunState } from "@/lib/agents/framework";
 import { createResearcherAgent } from "@/lib/agents/researcher";
 import { createWriterAgent } from "@/lib/agents/writer";
@@ -16,8 +16,9 @@ export async function POST(req: Request) {
   const returnDraftId = Boolean(body.returnDraftId);
   const laneBalanceContext = body.laneBalanceContext as BalanceSummary | undefined;
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: brandProfile } = await supabase
     .from("brand_profiles")

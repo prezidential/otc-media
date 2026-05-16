@@ -5,6 +5,14 @@ const mockClaudeCreate = vi.fn();
 const mockLoadDraftContentJson = vi.fn();
 const mockDraftSummaryForContentProducts = vi.fn();
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
+const { requireWorkspaceMock } = vi.hoisted(() => ({
+  requireWorkspaceMock: vi.fn(),
+}));
+
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: requireWorkspaceMock,
+}));
 
 vi.mock("@/lib/llm/claude", () => ({
   claudeClient: () => ({
@@ -25,6 +33,7 @@ vi.mock("@/lib/content-products/promptContext", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
 }));
 
 import { POST as postPodcastOutline } from "@/app/api/content-products/podcast-outline/route";
@@ -34,6 +43,7 @@ import { POST as postSponsorshipAlignment } from "@/app/api/content-products/spo
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("WORKSPACE_ID", "ws-123");
+  requireWorkspaceMock.mockImplementation(async () => ctx);
   mockLoadDraftContentJson.mockResolvedValue({
     ok: true,
     draftId: "draft-1",
@@ -43,18 +53,17 @@ beforeEach(() => {
 });
 
 describe("content-products routes", () => {
-  it("returns 503 when WORKSPACE_ID is missing", async () => {
-    vi.stubEnv("WORKSPACE_ID", "");
+  it("returns auth error response when requireWorkspace rejects", async () => {
+    requireWorkspaceMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 })
+    );
 
     const req = makeJsonRequest(
       "http://localhost:3000/api/content-products/podcast-outline",
       { content_json: { title: "x" } }
     );
     const res = await postPodcastOutline(req);
-    const json = await res.json();
-
-    expect(res.status).toBe(503);
-    expect(json.error).toContain("WORKSPACE_ID is not set");
+    expect(res.status).toBe(401);
   });
 
   it("propagates loadDraftContentJson errors for social snippets", async () => {
@@ -73,7 +82,7 @@ describe("content-products routes", () => {
 
     expect(res.status).toBe(404);
     expect(json.error).toBe("Draft not found");
-    expect(mockLoadDraftContentJson).toHaveBeenCalledWith("missing-draft", "ws-123");
+    expect(mockLoadDraftContentJson).toHaveBeenCalledWith(mockSupabase, "missing-draft", "ws-123");
   });
 
   it("uses content_json override and sanitizes social snippets output", async () => {

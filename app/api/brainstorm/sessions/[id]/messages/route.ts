@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { runBrainstormTurn } from "@/lib/brainstorm/turn";
 import { buildBrandBrainstormBlock } from "@/lib/brainstorm/system-prompt";
 
@@ -7,14 +7,12 @@ type Ctx = { params: Promise<{ id: string }> };
 
 const HISTORY_CAP = 36;
 
-export async function GET(_req: Request, ctx: Ctx) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
+export async function GET(_req: Request, routeCtx: Ctx) {
+  const { id: sessionId } = await routeCtx.params;
 
-  const { id: sessionId } = await ctx.params;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: session, error: sErr } = await supabase
     .from("brainstorm_sessions")
@@ -38,13 +36,8 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ messages: data ?? [] });
 }
 
-export async function POST(req: Request, ctx: Ctx) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
-
-  const { id: sessionId } = await ctx.params;
+export async function POST(req: Request, routeCtx: Ctx) {
+  const { id: sessionId } = await routeCtx.params;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const rawUserContent = typeof body.content === "string" ? body.content.trim() : "";
   let content = rawUserContent;
@@ -55,7 +48,9 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "content is required" }, { status: 400 });
   }
 
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: session, error: sErr } = await supabase
     .from("brainstorm_sessions")

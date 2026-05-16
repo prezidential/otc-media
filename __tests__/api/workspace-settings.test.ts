@@ -2,15 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createMockSupabase, makeJsonRequest } from "./helpers";
 
 const mockSupabase = createMockSupabase();
+const ctx = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
+const { requireWorkspaceMock } = vi.hoisted(() => ({
+  requireWorkspaceMock: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: requireWorkspaceMock,
 }));
 
 import { GET, PATCH } from "@/app/api/workspace/settings/route";
 
 beforeEach(() => {
-  vi.stubEnv("WORKSPACE_ID", "ws-123");
   vi.clearAllMocks();
+  vi.stubEnv("WORKSPACE_ID", "ws-123");
+  requireWorkspaceMock.mockImplementation(async () => ctx);
 });
 
 describe("GET /api/workspace/settings", () => {
@@ -79,11 +88,14 @@ describe("PATCH /api/workspace/settings", () => {
     expect(json.defaultBrandProfileId).toBe("bp-1");
   });
 
-  it("returns 503 without WORKSPACE_ID", async () => {
-    vi.stubEnv("WORKSPACE_ID", "");
+  it("returns auth error when requireWorkspace returns a Response", async () => {
+    requireWorkspaceMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 })
+    );
+
     const res = await PATCH(
       makeJsonRequest("http://x", { defaultBrandProfileId: null })
     );
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(401);
   });
 });

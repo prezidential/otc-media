@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { isBeehiivEnabled, createBeehiivDraft } from "@/lib/publish/beehiiv";
 import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import type { DraftContentJson } from "@/lib/draft/content";
@@ -20,8 +20,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "draftId required" }, { status: 400 });
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: draft, error } = await supabase
     .from("issue_drafts")

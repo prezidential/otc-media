@@ -4,22 +4,21 @@ import {
   type CreatorBrandProfileRow,
   validateCreatorBrandProfilePayload,
 } from "@/lib/brand-profile/creatorBrandProfile";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const SELECT_FULL =
   "id,workspace_id,name,voice_rules_json,formatting_rules_json,forbidden_patterns_json,cta_rules_json,emoji_policy_json,narrative_preferences_json,profile_version,elevenlabs_voice_id,elevenlabs_model_id,created_at";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
-  const { id } = await ctx.params;
+export async function GET(_req: Request, routeCtx: { params: Promise<{ id: string }> }) {
+  const { id } = await routeCtx.params;
   if (!id?.trim()) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
+
   const { data, error } = await supabase
     .from("brand_profiles")
     .select(SELECT_FULL)
@@ -33,12 +32,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   return NextResponse.json({ profile: serializeBrandProfileForApi(data as CreatorBrandProfileRow) });
 }
 
-export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
-  const { id } = await ctx.params;
+export async function PATCH(req: Request, routeCtx: { params: Promise<{ id: string }> }) {
+  const { id } = await routeCtx.params;
   if (!id?.trim()) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
@@ -50,7 +45,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   const v = parsed.value;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const updateRow: Record<string, unknown> = {
     name: v.name,

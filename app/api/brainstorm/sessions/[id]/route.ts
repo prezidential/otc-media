@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
+export async function GET(_req: Request, routeCtx: Ctx) {
+  const { id: sessionId } = await routeCtx.params;
 
-  const { id: sessionId } = await ctx.params;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data, error } = await supabase
     .from("brainstorm_sessions")

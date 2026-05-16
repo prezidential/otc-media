@@ -7,7 +7,7 @@ import {
 } from "@/lib/content-products/brandProfileForContentProducts";
 import { draftSummaryForContentProducts } from "@/lib/content-products/promptContext";
 import { loadDraftContentJson } from "@/lib/content-products/loadDraft";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const MODEL = "claude-sonnet-4-20250514";
 const MAX_TOKENS = 2048;
@@ -37,10 +37,9 @@ export async function POST(req: Request) {
   const draftId = body.draftId as string | undefined;
   const contentJsonOverride = body.content_json as Record<string, unknown> | undefined;
 
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   let contentJson: Record<string, unknown>;
   let draftBrandProfileId: string | null | undefined;
@@ -48,7 +47,7 @@ export async function POST(req: Request) {
     contentJson = contentJsonOverride;
     draftBrandProfileId = undefined;
   } else {
-    const loaded = await loadDraftContentJson(draftId, workspaceId);
+    const loaded = await loadDraftContentJson(supabase, draftId, workspaceId);
     if (!loaded.ok) {
       return NextResponse.json({ error: loaded.error }, { status: loaded.Status });
     }
@@ -66,7 +65,6 @@ export async function POST(req: Request) {
   let brandBlock = "";
   let brandDisplayName = "Identity Jedi";
   if (resolvedProfileId) {
-    const supabase = supabaseAdmin();
     const { data: profileRow, error: profileError } = await supabase
       .from("brand_profiles")
       .select(

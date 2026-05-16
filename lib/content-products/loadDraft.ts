@@ -1,17 +1,17 @@
-import { supabaseAdmin } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type LoadDraftResult =
   | { ok: true; contentJson: Record<string, unknown>; draftId: string; brand_profile_id: string | null }
   | { ok: false; error: string; Status: 400 | 404 | 500 };
 
 export async function loadDraftContentJson(
+  supabase: SupabaseClient,
   draftId: string | undefined,
   workspaceId: string
 ): Promise<LoadDraftResult> {
   if (!draftId?.trim()) {
     return { ok: false, error: "draftId required", Status: 400 };
   }
-  const supabase = supabaseAdmin();
   const { data, error } = await supabase
     .from("issue_drafts")
     .select("id, content_json, brand_profile_id")

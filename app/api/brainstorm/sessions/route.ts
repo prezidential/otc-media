@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function GET() {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
-  const supabase = supabaseAdmin();
   const { data, error } = await supabase
     .from("brainstorm_sessions")
     .select("id,title,brand_profile_id,created_at,updated_at")
@@ -20,16 +18,13 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
-
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : "Brainstorm";
   const brandProfileId = typeof body.brandProfileId === "string" ? body.brandProfileId : null;
 
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   if (brandProfileId) {
     const { data: bp, error: bpErr } = await supabase

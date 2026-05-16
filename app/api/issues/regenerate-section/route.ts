@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { callLLM } from "@/lib/llm/provider";
 import {
   applyDashReplaceMap,
@@ -67,8 +67,9 @@ export async function POST(req: Request) {
     );
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: draftRow, error: draftError } = await supabase
     .from("issue_drafts")

@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
-
-  const { id } = await ctx.params;
+export async function GET(_req: Request, routeCtx: Ctx) {
+  const { id } = await routeCtx.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
+
   const { data, error } = await supabase
     .from("signals")
     .select("id,title,url,publisher,published_at,captured_at,normalized_summary,directive_id")

@@ -1,15 +1,10 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function GET() {
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json(
-      { error: "WORKSPACE_ID is not set. Add it to .env.local." },
-      { status: 503 }
-    );
-  }
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data, error } = await supabase
     .from("issue_drafts")
@@ -29,7 +24,7 @@ export async function GET() {
   if (!data) {
     return NextResponse.json(
       {
-        error: "No draft found. Generate an issue draft first, or ensure the draft's workspace_id matches WORKSPACE_ID in .env.local.",
+        error: "No draft found. Generate an issue draft first.",
       },
       { status: 404 }
     );

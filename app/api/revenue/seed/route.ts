@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 const DEFAULT_ITEMS = [
   {
@@ -25,8 +25,9 @@ const DEFAULT_ITEMS = [
 ];
 
 export async function POST() {
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const { data: existing, error: fetchError } = await supabase
     .from("revenue_items")

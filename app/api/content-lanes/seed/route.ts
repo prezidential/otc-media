@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 import { DEFAULT_LANES } from "@/lib/content-lanes/seed";
 
 export async function POST() {
-  const workspaceId = process.env.WORKSPACE_ID;
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID not configured" }, { status: 500 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
-  const supabase = supabaseAdmin();
   const created: string[] = [];
   const skipped: string[] = [];
 

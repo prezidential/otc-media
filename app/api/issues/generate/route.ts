@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { requireWorkspace } from "@/lib/auth/session";
 import { callLLM } from "@/lib/llm/provider";
 import { DEFAULT_CLOSE, renderDraftMarkdown, validateDraftObject, type DraftObject } from "@/lib/draft/content";
 import { opsLog } from "@/lib/ops/log";
@@ -535,7 +536,7 @@ async function generateInsiderDraft(params: {
 }
 
 async function loadIssueDraftForInsider(
-  supabase: ReturnType<typeof supabaseAdmin>,
+  supabase: SupabaseClient,
   workspaceId: string,
   draftId: string
 ): Promise<DraftObject | null> {
@@ -564,8 +565,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "brandProfileId required" }, { status: 400 });
   }
 
-  const workspaceId = process.env.WORKSPACE_ID!;
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   const contentLaneId =
     typeof body.contentLaneId === "string" && body.contentLaneId.trim().length > 0

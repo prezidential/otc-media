@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function GET() {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
-  const supabase = supabaseAdmin();
   const { data, error } = await supabase
     .from("workspace_settings")
     .select("default_brand_profile_id, updated_at")
@@ -28,11 +26,6 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
-  const workspaceId = process.env.WORKSPACE_ID?.trim();
-  if (!workspaceId) {
-    return NextResponse.json({ error: "WORKSPACE_ID is not set" }, { status: 503 });
-  }
-
   const body = await req.json().catch(() => ({}));
   const raw = body.defaultBrandProfileId;
   const defaultBrandProfileId =
@@ -49,7 +42,9 @@ export async function PATCH(req: Request) {
     );
   }
 
-  const supabase = supabaseAdmin();
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const { supabase, workspaceId } = ctx;
 
   if (defaultBrandProfileId) {
     const { data: bp, error: bpErr } = await supabase

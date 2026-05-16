@@ -42,6 +42,12 @@ const { mockSupabase } = vi.hoisted(() => {
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseAdmin: () => mockSupabase,
+  supabaseUser: async () => mockSupabase,
+}));
+
+const ctxValue = { supabase: mockSupabase, workspaceId: "ws-123", userId: "user-1", role: "owner" as const };
+vi.mock("@/lib/auth/session", () => ({
+  requireWorkspace: vi.fn(async () => ctxValue),
 }));
 
 import { POST } from "@/app/api/brainstorm/sessions/[id]/confirm-manual-signal/route";

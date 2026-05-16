@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { supabaseUser, supabaseAdmin } from "@/lib/supabase/server";
+import { sendWorkspaceInvite } from "@/lib/email/resend";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -63,7 +64,38 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     `${req.nextUrl.protocol}//${req.nextUrl.host}`;
   const url = `${origin}/api/workspaces/invites/${invite.token}`;
 
-  return NextResponse.json({ invite, url }, { status: 201 });
+  // Resolve workspace name for the email body. RLS allows reads to members; if
+  // the lookup fails we still ship the invite with a generic label rather than
+  // failing the whole request.
+  const { data: workspaceRow } = await supabase
+    .from("workspaces")
+    .select("name")
+    .eq("id", workspaceId)
+    .single();
+  const workspaceName = workspaceRow?.name ?? "your workspace";
+
+  // Email delivery is best-effort: a failure here MUST NOT roll back the
+  // invite row. Owners can still copy `url` from the response and share it
+  // manually, and the dedicated resend endpoint can retry later.
+  const emailResult = await sendWorkspaceInvite({
+    to: email,
+    inviteUrl: url,
+    workspaceName,
+    inviterEmail: userData.user.email ?? null,
+    role,
+  });
+
+  return NextResponse.json(
+    {
+      invite,
+      url,
+      email: {
+        sent: emailResult.ok,
+        error: emailResult.ok ? null : emailResult.error,
+      },
+    },
+    { status: 201 }
+  );
 }
 
 /**
