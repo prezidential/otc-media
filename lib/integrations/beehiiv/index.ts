@@ -1,5 +1,5 @@
-import { registerPlugin, type IntegrationPlugin } from "@/lib/integrations/registry";
-import type { IntegrationTool } from "@/lib/integrations/types";
+import { registerPlugin } from "@/lib/integrations/registry";
+import type { IntegrationPlugin, IntegrationTool } from "@/lib/integrations/types";
 
 const BEEHIIV_API_BASE = "https://api.beehiiv.com/v2";
 
