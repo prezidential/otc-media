@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2, MessageSquarePlus, Send, Sparkles } from "lucide-react";
@@ -31,7 +31,7 @@ type MsgRow = {
 
 type BrandRow = { id: string; name: string };
 
-export default function BrainstormPage() {
+function BrainstormPageInner() {
   const searchParams = useSearchParams();
   const urlSignalId = searchParams.get("signalId")?.trim() ?? "";
 
@@ -611,5 +611,29 @@ export default function BrainstormPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function BrainstormPageFallback() {
+  return (
+    <div className={studioInner.pageRoot}>
+      <PageHeader
+        variant="studio"
+        title="Brainstorming"
+        description="Ideate with the Brainstormer: signals, ingest, manual signal proposals, saved artifacts, optional streaming, and promote to Issues (DraftObject)."
+      />
+      <div className={cn(studioInner.card, "flex items-center gap-2 p-6 text-sm text-[#6B5F4E]")}>
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Loading…
+      </div>
+    </div>
+  );
+}
+
+export default function BrainstormPage() {
+  return (
+    <Suspense fallback={<BrainstormPageFallback />}>
+      <BrainstormPageInner />
+    </Suspense>
   );
 }
