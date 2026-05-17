@@ -1,9 +1,9 @@
 -- Research Intent profile (one per workspace)
--- Stores the topic focus, watch entities, and keywords the Researcher Agent
--- uses to discover and score signals.
+-- workspace_id is text to match the legacy pattern in signals, brand_profiles, etc.
+-- RLS casts to uuid to match the user_in_workspace() helper signature.
 CREATE TABLE IF NOT EXISTS research_intent (
   id            uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  workspace_id  text        NOT NULL UNIQUE REFERENCES workspaces(id) ON DELETE CASCADE,
+  workspace_id  text        NOT NULL UNIQUE,
   topic_focus   text[]      NOT NULL DEFAULT '{}',
   watch_entities text[]     NOT NULL DEFAULT '{}',
   keywords      text[]      NOT NULL DEFAULT '{}',
@@ -14,19 +14,19 @@ ALTER TABLE research_intent ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "workspace members can read research_intent"
   ON research_intent FOR SELECT
-  USING (public.user_in_workspace(workspace_id));
+  USING (public.user_in_workspace(workspace_id::uuid));
 
 CREATE POLICY "workspace members can upsert research_intent"
   ON research_intent FOR ALL
-  USING (public.user_in_workspace(workspace_id))
-  WITH CHECK (public.user_in_workspace(workspace_id));
+  USING (public.user_in_workspace(workspace_id::uuid))
+  WITH CHECK (public.user_in_workspace(workspace_id::uuid));
 
 -- Research sources — approved feeds the Researcher Agent ingests from.
 -- Sources can be added by the user (auto-approved) or proposed by the agent
 -- (status=proposed until the user approves).
 CREATE TABLE IF NOT EXISTS research_sources (
   id                uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-  workspace_id      text        NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  workspace_id      text        NOT NULL,
   name              text        NOT NULL,
   feed_url          text        NOT NULL,
   site_url          text,
@@ -44,9 +44,9 @@ ALTER TABLE research_sources ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "workspace members can read research_sources"
   ON research_sources FOR SELECT
-  USING (public.user_in_workspace(workspace_id));
+  USING (public.user_in_workspace(workspace_id::uuid));
 
 CREATE POLICY "workspace members can manage research_sources"
   ON research_sources FOR ALL
-  USING (public.user_in_workspace(workspace_id))
-  WITH CHECK (public.user_in_workspace(workspace_id));
+  USING (public.user_in_workspace(workspace_id::uuid))
+  WITH CHECK (public.user_in_workspace(workspace_id::uuid));
