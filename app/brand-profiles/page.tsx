@@ -5,6 +5,7 @@ import { Loader2, Plus, Save, Star } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 import { studioInner } from "@/lib/studio/inner-classes";
+import { BrandProfileWizard } from "./BrandProfileWizard";
 
 type ListItem = { id: string; name: string; created_at: string };
 
@@ -56,6 +57,7 @@ export default function BrandProfilesPage() {
   const [defaultBrandProfileId, setDefaultBrandProfileId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
   const [isNew, setIsNew] = useState(false);
+  const [wizardMode, setWizardMode] = useState(false);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -106,6 +108,13 @@ export default function BrandProfilesPage() {
     setCtaJson(DEFAULT_OBJECTS.cta_rules_json);
     setEmojiJson(DEFAULT_OBJECTS.emoji_policy_json);
     setNarrativeJson(DEFAULT_OBJECTS.narrative_preferences_json);
+    setWizardMode(true);
+    setMessage("");
+    setError("");
+  }, []);
+
+  const switchToJsonEditor = useCallback(() => {
+    setWizardMode(false);
   }, []);
 
   const loadProfile = useCallback(async (id: string) => {
@@ -317,7 +326,7 @@ export default function BrandProfilesPage() {
           <Plus className="h-4 w-4" />
           New
         </button>
-        {(selectedId || isNew) && (
+        {(selectedId || isNew) && !wizardMode && (
           <button
             type="button"
             onClick={() => void saveProfile()}
@@ -366,7 +375,21 @@ export default function BrandProfilesPage() {
         </div>
       )}
 
-      {(selectedId || isNew) && (
+      {isNew && wizardMode && (
+        <BrandProfileWizard
+          onDone={async (profileId) => {
+            setWizardMode(false);
+            setMessage("Profile created.");
+            setSaveFlash(true);
+            window.setTimeout(() => setSaveFlash(false), 2000);
+            await loadList();
+            await loadProfile(profileId);
+          }}
+          onCancel={switchToJsonEditor}
+        />
+      )}
+
+      {(selectedId || isNew) && !wizardMode && (
         <div className="space-y-6">
           {loadingProfile && !isNew && (
             <div className="flex items-center gap-2 text-sm text-[#6B5F4E]">
