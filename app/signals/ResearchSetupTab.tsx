@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
-import { Plus, X, Loader2, Check, Rss, ExternalLink, Save } from "lucide-react";
+import { Plus, X, Loader2, Check, Rss, ExternalLink, Save, Wand2 } from "lucide-react";
 import { studioInner } from "@/lib/studio/inner-classes";
 import { cn } from "@/lib/utils";
 
@@ -472,6 +472,62 @@ function SourcesList({ refreshKey }: { refreshKey: number }) {
   );
 }
 
+// ─── Seed directives panel ────────────────────────────────────────────────────
+
+function SeedDirectivesPanel() {
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "already" | "err">("idle");
+
+  async function seed() {
+    setStatus("loading");
+    try {
+      const res = await fetch("/api/research/seed-directives", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setStatus("err"); return; }
+      setStatus(data.inserted === 0 ? "already" : "done");
+    } catch {
+      setStatus("err");
+    }
+  }
+
+  return (
+    <div className={cn(studioInner.card, "space-y-3")}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className={studioInner.sectionLabel}>
+            <Wand2 className="h-3.5 w-3.5" />
+            Initialize research directives
+          </div>
+          <p className="mt-1 text-[12px] text-[#9C8E78]">
+            Directives are editorial categories the Writer Agent uses to group signals into leads.
+            Seed them once — they persist across sessions.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void seed()}
+          disabled={status === "loading" || status === "done" || status === "already"}
+          className={cn(studioInner.btnSecondary, "shrink-0")}
+        >
+          {status === "loading" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (status === "done" || status === "already") ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <Wand2 className="h-3.5 w-3.5" />
+          )}
+          {status === "loading" ? "Seeding…"
+            : status === "done" ? "Done"
+            : status === "already" ? "Already seeded"
+            : "Seed directives"}
+        </button>
+      </div>
+      {status === "err" && (
+        <p className="text-[12px] text-[#C0442A]">Something went wrong — try again.</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Main tab export ──────────────────────────────────────────────────────────
 
 export function ResearchSetupTab() {
@@ -482,6 +538,7 @@ export function ResearchSetupTab() {
       <ResearchIntentForm />
       <AddSourceForm onAdded={() => setSourceRefreshKey((k) => k + 1)} />
       <SourcesList refreshKey={sourceRefreshKey} />
+      <SeedDirectivesPanel />
     </div>
   );
 }
