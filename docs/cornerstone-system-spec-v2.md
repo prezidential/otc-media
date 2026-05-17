@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.10
+## System Specification v2.11
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.9 (Phase 2A M1 and M2 shipped: OAuth sign-in providers, `WORKSPACE_ID` env fallback removed, LinkedIn token encryption at rest via pgsodium, per-workspace cron iteration via `workspace_settings.ace_enabled`; per-workspace billing surface deferred to a future milestone)
+Supersedes: v2.10 (Agentic Research Direction: Research Intent profile replaces hardcoded `RSS_FEED_MAP`; `research_sources` table with agent-proposed source queue; Researcher Agent gains `ingest_approved_sources` tool; Signal Setup UI redesigned into Research Setup + Signal Feed tabs; brand profile UX updated to interactive wizard; Vercel Analytics added)
 
 ---
 
@@ -124,16 +124,17 @@ type AgentRunState = {
 ### Agents
 
 #### Researcher Agent
-- **Role:** Ingest fresh signals from RSS feeds and manual sources
+- **Role:** Autonomously discover and ingest signals based on the workspace Research Intent profile. The Researcher finds new content so writers never face an empty queue.
 - **LLM role:** `research`
-- **Trigger:** Scheduled (daily) or manual
-- **Human gate:** No
+- **Trigger:** Scheduled (daily ingest, weekly source discovery) or manual
+- **Human gate:** No — signals flow automatically from approved sources. Newly discovered sources require one-time user approval before their signals enter the pipeline (see §3.3).
 - **Tools:**
-  - `check_signal_freshness` — query signals table to determine staleness per directive
-  - `ingest_directive` — run RSS ingest for a specific directive
-  - `ingest_all` — run all directives (daily + weekly based on schedule)
-  - `report_summary` — log what was ingested, what's new vs. skipped
-- **Decision-making:** Checks which directives have stale signals (>24h for daily, >7d for weekly) and only runs those. Reports what it found.
+  - `check_signal_freshness` — query `research_sources` to determine staleness per approved source (>24h since last ingest)
+  - `ingest_approved_sources` — run RSS ingest across all `research_sources` rows with `status=approved`; updates `last_ingested_at` after each run
+  - `discover_sources` — use web search to find RSS feeds and newsletters relevant to the workspace Research Intent profile; inserts results as `research_sources` rows with `status=proposed` (never auto-approved) *(Phase 2)*
+  - `score_signal_relevance` — score incoming signals against the Research Intent profile (topic, entity, keyword matching) and set `relevance_score` *(Phase 3)*
+  - `report_summary` — log what was ingested, discovered, and skipped
+- **Decision-making:** Reads the workspace `research_intent` profile to understand topic focus, watch entities, and keywords. Only ingests from `status=approved` sources. Proposes new sources via `discover_sources` on a weekly cadence without blocking the daily ingest cycle.
 
 #### Writer Agent
 - **Role:** Generate editorial leads from fresh signals
@@ -141,11 +142,11 @@ type AgentRunState = {
 - **Trigger:** Event (fires after Researcher completes, if new signals were ingested)
 - **Human gate:** No (leads are generated as `pending_review`)
 - **Tools:**
-  - `query_fresh_signals` — get signals from the last 14 days grouped by directive
+  - `query_fresh_signals` — get signals from the last 14 days, ordered by `relevance_score` DESC then `captured_at` DESC
   - `check_existing_leads` — check for duplicate angles before generating
   - `generate_leads` — call LLM to produce leads from signals
   - `save_leads` — persist leads to DB with proper deduplication
-- **Decision-making:** Skips directives that already have sufficient pending leads. Adjusts lead count based on signal volume.
+- **Decision-making:** Skips sources that already have sufficient pending leads. Prioritizes high-`relevance_score` signals when the pool is large. Adjusts lead count based on signal volume.
 
 #### Editor Agent
 - **Role:** Editor-in-Chief. Reviews approved leads, makes all editorial decisions, and produces the newsletter draft.
@@ -291,8 +292,117 @@ getModelForRole(role: AgentRole): { provider: LLMProvider; model: string }
 
 ---
 
-## 3.3 Research Engine
-_Unchanged from v2.0. Will be wrapped by Researcher Agent._
+## 3.3 Research Engine **[REVISED in v2.11]**
+
+### Purpose
+
+The Research Engine is the **input layer** for Cornerstone's content pipeline. It replaces a manual, user-operated RSS management model with an **intent-driven, agent-operated** research loop. The user provides direction once; the Researcher Agent handles ongoing discovery and ingestion.
+
+### Design Principles
+
+- **Intent over sources** — users define what they care about (topics, entities, keywords), not where to find it
+- **Agent discovery, human approval** — the Researcher proposes sources; the user approves them before any signals flow
+- **Trust is explicit** — user-added sources get `trust_score=1.0`; agent-proposed sources get `0.7` once approved
+- **No manual ingestion burden** — the user should never need to paste an RSS URL for routine operation
+
+---
+
+### Research Intent Profile
+
+Each workspace has one **Research Intent profile** — a structured description of what the creator cares about. The Researcher Agent reads this profile as its primary directive.
+
+**Data model (`research_intent` table):**
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | uuid | Primary key |
+| `workspace_id` | text | Foreign key, unique per workspace |
+| `topic_focus` | text[] | e.g. `["identity security", "IAM", "non-human identities"]` |
+| `watch_entities` | text[] | e.g. `["Okta", "CrowdStrike", "CISA"]` |
+| `keywords` | text[] | e.g. `["ITDR", "zero trust", "CIEM"]` |
+| `updated_at` | timestamptz | |
+
+**UI:** Tag-list inputs on the Research Setup tab. Type a value and press Enter to add; click × to remove. Save button upserts the profile.
+
+---
+
+### Research Sources
+
+Approved sources are the only inputs to the signal ingest pipeline. Sources can originate from the user (auto-approved, `trust_score=1.0`) or be proposed by the Researcher Agent (`status=proposed`, `trust_score=0.7` once approved).
+
+**Data model (`research_sources` table):**
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | uuid | Primary key |
+| `workspace_id` | text | Foreign key |
+| `name` | text | Publication or feed name |
+| `feed_url` | text | RSS/Atom feed URL (unique per workspace) |
+| `site_url` | text | Human-readable homepage (optional) |
+| `status` | text | `proposed \| approved \| rejected` |
+| `proposed_by` | text | `agent \| user` |
+| `trust_score` | float | `1.0` for user-added, `0.7` for agent-proposed |
+| `last_ingested_at` | timestamptz | Updated by Researcher after each run |
+| `created_at` | timestamptz | |
+
+**Status lifecycle:**
+```
+proposed → approved → [actively ingested on every daily cycle]
+         → rejected → [ignored]
+```
+
+---
+
+### Signals Page — UI **[REVISED in v2.11]**
+
+The Signals page is organized into two tabs:
+
+**Research Setup tab**
+- Research Intent form — topic focus, watch entities, keywords (tag-list inputs + Save)
+- Add Source form — name, feed URL, site URL; user-added sources are auto-approved
+- Proposed Sources section — agent-proposed sources with Approve / Reject per card *(Phase 2)*
+- Approved Sources list — currently active sources with last-ingested timestamp
+
+**Signal Feed tab**
+- Read-only signal feed (no manual ingest controls)
+- Freshness strip — fresh signal count (14-day window), last ingest time, stale/fresh badge
+- Topic filter buttons
+- Signal list — heat bar, topic tag, publisher, Brainstorm link, Promote to Lead action
+
+**Removed from UI:** RSS URL paste input, manual topic injection form. `POST /api/signals/create` remains available as a developer tool but is not surfaced in the primary UI.
+
+---
+
+### REST API
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/research-intent` | GET | Fetch workspace research intent profile |
+| `/api/research-intent` | PUT | Upsert workspace research intent profile |
+| `/api/research-sources/list` | GET | List sources; optional `?status=proposed\|approved\|rejected` |
+| `/api/research-sources/create` | POST | Add a source (user-added, auto-approved, `trust_score=1.0`) |
+| `/api/research-sources/[id]/approve` | POST | Approve a proposed source |
+| `/api/research-sources/[id]/reject` | POST | Reject a proposed source |
+
+---
+
+### Implementation Phases
+
+**Phase 1 — Foundation (shipped)**
+- `research_intent` table + GET/PUT API
+- `research_sources` table + CRUD API
+- Signals page redesigned: Research Setup + Signal Feed tabs
+- Researcher Agent reads from `research_sources` (status=approved) instead of hardcoded `RSS_FEED_MAP`
+
+**Phase 2 — Autonomous Discovery**
+- `discover_sources()` tool on Researcher Agent (web search → proposed sources)
+- Weekly discovery schedule independent of daily ingest
+- Proposed Sources queue in Research Setup tab
+
+**Phase 3 — Signal Scoring**
+- `score_signal_relevance()` tool scoring signals against Research Intent profile
+- `relevance_score` surfaced in Signal Feed UI
+- Writer Agent orders signals by `relevance_score` DESC
 
 ---
 
@@ -1075,6 +1185,29 @@ Phase 2A is sequenced in three milestones — **M0**, **M1**, **M2** — all shi
 - **M2:** **`BlogDraftObject`** + **`POST /api/content-products/blog-draft`** (name TBD) + Markdown/HTML export UI; persistence table vs `issue_drafts` discriminator — **decision at implementation**.
 - **M3:** Optional **`list_recent_drafts`** tool; full-text / embedding search over signals; eval hooks.
 
+### Phase 2D — Agentic Research Direction **[NEW in v2.11]**
+
+Full spec in §3.3.
+
+**Phase 1 — Foundation (shipped)**
+- ✅ `research_intent` table + `GET`/`PUT /api/research-intent`
+- ✅ `research_sources` table + `/api/research-sources/list|create|[id]/approve|[id]/reject`
+- ✅ Signals page: Research Setup tab (intent form + sources) + Signal Feed tab (read-only)
+- ✅ Researcher Agent reads from `research_sources` (status=approved) — hardcoded `RSS_FEED_MAP` removed
+- ✅ `last_ingested_at` updated on `research_sources` after each ingest run
+
+**Phase 2 — Autonomous Discovery**
+- [ ] `discover_sources()` tool on Researcher Agent (web search → proposed sources)
+- [ ] Weekly discovery schedule (separate from daily ingest)
+- [ ] Proposed Sources queue in Research Setup UI
+
+**Phase 3 — Signal Scoring**
+- [ ] `score_signal_relevance()` tool on Researcher Agent
+- [ ] `relevance_score` surfaced in Signal Feed UI
+- [ ] Writer Agent orders signals by `relevance_score` DESC
+
+---
+
 ## Phase 3 — LinkedIn Draft Engine
 - Build LinkedIn generate / regenerate / list / publish endpoints
 - Add LinkedIn tab to Issues page
@@ -1087,6 +1220,7 @@ Phase 2A is sequenced in three milestones — **M0**, **M1**, **M2** — all shi
 - LinkedIn Marketing API analytics pull
 - Feedback loop: performance data updates benchmarks
 - Scheduled pipeline automation (Vercel cron → Pipeline Orchestrator)
+- **Vercel Analytics** ✅ — `@vercel/analytics` mounted in root layout (`app/layout.tsx`)
 
 ## Phase 5 — Multi-Brand + Platform Expansion
 - Multi-brand orchestration
