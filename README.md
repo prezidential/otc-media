@@ -101,15 +101,15 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### First-Time Setup
 
-1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
-2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
-3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
-4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
-5. **Ingest signals:** Go to Research → click "Run All Directives"
-6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
-7. **Approve leads:** Review and approve leads on the Leads page
-8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
-9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+1. **Create a brand profile:** use `/brand-profiles` → "New Profile" for the guided wizard, or `POST /api/brand-profiles/seed` for the Identity Jedi default.
+2. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items).
+3. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet.
+4. **Configure research:** go to `/signals` → **Research Setup**, save research intent, then add RSS/Atom sources. User-added sources are auto-approved for ingest.
+5. **Ingest signals:** from a signed-in workspace session, run `POST /api/pipeline/run` with `stages:["researcher"]`, or use `/research` → "Run All Directives" for the legacy directives console.
+6. **Generate leads:** go to Leads → select brand profile → click "Generate Leads".
+7. **Approve leads:** review and approve leads on the Leads page.
+8. **Generate draft:** go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft".
+9. **Publish (optional):** use "Export HTML" or enable Beehiiv and use "Push to Beehiiv".
 
 ## Auth + Multi-Tenancy (Phase 2A — M0 → M2)
 
@@ -227,18 +227,25 @@ the workspace explicitly:
 ```
 app/
 ├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
-├── research/page.tsx    # Research console
+├── page.tsx             # Redirects to /dashboard
+├── dashboard/page.tsx   # Studio dashboard
+├── signals/             # Research Setup + Signal Feed tabs
+├── research/page.tsx    # Legacy directives console
 ├── leads/page.tsx       # Editorial leads
 ├── issues/page.tsx      # Issue draft generation
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── brand-profiles/      # Brand profile list, wizard, JSON editor
+├── integrations/        # Integration catalog and platform pages
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
+    ├── research-intent/     # Workspace research intent get/upsert
+    ├── research-sources/    # Source list/create/approve/reject
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
+    ├── brand-profiles/      # List/create/get/update/delete/seed
+    ├── integrations/        # Platform registry, status, query/action APIs
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
@@ -250,17 +257,47 @@ lib/
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
-├── research/            # RSS feed map (8 directives, 13+ sources)
+├── agents/              # Researcher, Writer, Editor agent definitions
+├── integrations/        # Pluggable Beehiiv/Supergrow integration framework
+├── research/            # Legacy RSS feed map and cadence ingest helpers
 ├── supabase/            # Server + browser clients
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # System specification and operator runbooks
 ```
 
 ## Architecture
 
 See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Research Setup + Signal Feed Runbook
+
+`/signals` is the primary research entrypoint. It is split into **Research Setup** for configuration and **Signal Feed** for reviewing captured signals.
+
+### Research Intent
+
+Research intent is workspace-scoped and stored in `research_intent`.
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/research-intent` | `GET` | Fetch the active workspace intent |
+| `/api/research-intent` | `PUT` | Upsert `topic_focus`, `watch_entities`, and `keywords` arrays |
+
+The Research Setup form uses tag-list inputs for topic focus, entities to watch, and keywords. Saving replaces those arrays for the active workspace.
+
+### Research Sources
+
+`research_sources` is the source-of-truth for agent ingest. The Researcher Agent only ingests rows with `status = "approved"`.
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/research-sources/list?status=approved` | `GET` | List approved sources; omit `status` to include all |
+| `/api/research-sources/create` | `POST` | Add a source with `name`, `feed_url`, optional `site_url`; user-created sources are auto-approved with `trust_score: 1.0` |
+| `/api/research-sources/[id]/approve` | `POST` | Mark a proposed source approved |
+| `/api/research-sources/[id]/reject` | `POST` | Mark a proposed source rejected |
+
+The Signal Feed tab lists captured signals, shows freshness from recent ingest runs, filters by inferred topic, links a signal into Brainstorm, and can promote a signal to a lead through `/api/leads/from-signal`.
 
 ## Content Outlines Runbook
 
@@ -359,6 +396,9 @@ Request body (all optional):
 
 - `stages`: array of stages to run. Defaults to `["researcher","writer","editor"]`.
 - `triggered_by`: audit label for run provenance. Defaults to `"manual"`.
+- `returnDraftId`: include the generated editor draft id in the response when available.
+
+The route resolves the active workspace from the authenticated session. CLI calls must include the same app session cookies a browser request would send.
 
 ```bash
 curl -s -X POST http://localhost:3000/api/pipeline/run \
@@ -374,7 +414,7 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
+- The caller must have an authenticated workspace session; `POST /api/pipeline/run` resolves scope with `requireWorkspace()`.
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
 
 ## Publishing Runbook

@@ -124,17 +124,18 @@ type AgentRunState = {
 ### Agents
 
 #### Researcher Agent
-- **Role:** Autonomously discover and ingest signals based on the workspace Research Intent profile. The Researcher finds new content so writers never face an empty queue.
+- **Role:** Keep the signal database fresh by ingesting approved workspace sources. Research Intent stores what the workspace cares about and will drive source discovery/scoring as those tools ship.
 - **LLM role:** `research`
-- **Trigger:** Scheduled (daily ingest, weekly source discovery) or manual
-- **Human gate:** No — signals flow automatically from approved sources. Newly discovered sources require one-time user approval before their signals enter the pipeline (see §3.3).
-- **Tools:**
+- **Trigger:** Manual pipeline run today; scheduled ingest and weekly source discovery remain planned.
+- **Human gate:** No for ingest from approved sources. Agent-proposed sources require one-time user approval before their signals enter the pipeline (see §3.3).
+- **Shipped tools:**
   - `check_signal_freshness` — query `research_sources` to determine staleness per approved source (>24h since last ingest)
   - `ingest_approved_sources` — run RSS ingest across all `research_sources` rows with `status=approved`; updates `last_ingested_at` after each run
+  - `report_summary` — log what was ingested and skipped
+- **Planned tools:**
   - `discover_sources` — use web search to find RSS feeds and newsletters relevant to the workspace Research Intent profile; inserts results as `research_sources` rows with `status=proposed` (never auto-approved) *(Phase 2)*
   - `score_signal_relevance` — score incoming signals against the Research Intent profile (topic, entity, keyword matching) and set `relevance_score` *(Phase 3)*
-  - `report_summary` — log what was ingested, discovered, and skipped
-- **Decision-making:** Reads the workspace `research_intent` profile to understand topic focus, watch entities, and keywords. Only ingests from `status=approved` sources. Proposes new sources via `discover_sources` on a weekly cadence without blocking the daily ingest cycle.
+- **Decision-making:** Only ingests from `research_sources.status = "approved"`. If no approved sources exist, reports that the user should add sources on the Research Setup tab; it does not fabricate sources or content.
 
 #### Writer Agent
 - **Role:** Generate editorial leads from fresh signals
@@ -217,11 +218,12 @@ POST /api/pipeline/run
 Accepts:
 - `stages`: which agents to run (default: all non-gated)
 - `triggered_by`: run provenance label (default: `manual`)
+- `returnDraftId`: optional boolean; when true, includes the generated Editor draft id if available
 
-Workspace scope is taken from `WORKSPACE_ID` environment configuration.
+Workspace scope is resolved from the authenticated request via `requireWorkspace()` and the active workspace cookie. `WORKSPACE_ID` is not read by this route.
 
 Behavior:
-1. Runs Researcher Agent — checks staleness, ingests stale directives
+1. Runs Researcher Agent — checks staleness and ingests approved `research_sources`
 2. Runs Writer Agent — generates leads from fresh signals (skips if queue is full)
 3. Runs Editor Agent — curates leads, selects steering, generates draft (refuses if <3 leads)
 4. Human reviews the finished draft on the Issues page
@@ -303,13 +305,13 @@ The Research Engine is the **input layer** for Cornerstone's content pipeline. I
 - **Intent over sources** — users define what they care about (topics, entities, keywords), not where to find it
 - **Agent discovery, human approval** — the Researcher proposes sources; the user approves them before any signals flow
 - **Trust is explicit** — user-added sources get `trust_score=1.0`; agent-proposed sources get `0.7` once approved
-- **No manual ingestion burden** — the user should never need to paste an RSS URL for routine operation
+- **No manual ingestion burden** — the target state is source discovery without routine RSS pasting. Current shipped UI also allows direct source entry so teams can bootstrap approved sources before autonomous discovery lands.
 
 ---
 
 ### Research Intent Profile
 
-Each workspace has one **Research Intent profile** — a structured description of what the creator cares about. The Researcher Agent reads this profile as its primary directive.
+Each workspace has one **Research Intent profile** — a structured description of what the creator cares about. The shipped UI/API persist this profile; planned source discovery and signal scoring use it as their primary directive.
 
 **Data model (`research_intent` table):**
 
@@ -328,7 +330,7 @@ Each workspace has one **Research Intent profile** — a structured description 
 
 ### Research Sources
 
-Approved sources are the only inputs to the signal ingest pipeline. Sources can originate from the user (auto-approved, `trust_score=1.0`) or be proposed by the Researcher Agent (`status=proposed`, `trust_score=0.7` once approved).
+Approved sources are the only inputs to the signal ingest pipeline. Sources can originate from the user today (auto-approved, `trust_score=1.0`). The `proposed` status and approval UI support agent-discovered sources once the `discover_sources` tool lands.
 
 **Data model (`research_sources` table):**
 
@@ -360,11 +362,11 @@ The Signals page is organized into two tabs:
 **Research Setup tab**
 - Research Intent form — topic focus, watch entities, keywords (tag-list inputs + Save)
 - Add Source form — name, feed URL, site URL; user-added sources are auto-approved
-- Proposed Sources section — agent-proposed sources with Approve / Reject per card *(Phase 2)*
+- Proposed Sources section — displays any `status=proposed` rows with Approve / Reject per card; automated proposal creation is Phase 2
 - Approved Sources list — currently active sources with last-ingested timestamp
 
 **Signal Feed tab**
-- Read-only signal feed (no manual ingest controls)
+- Signal browsing without manual ingest controls
 - Freshness strip — fresh signal count (14-day window), last ingest time, stale/fresh badge
 - Topic filter buttons
 - Signal list — heat bar, topic tag, publisher, Brainstorm link, Promote to Lead action
@@ -397,7 +399,7 @@ The Signals page is organized into two tabs:
 **Phase 2 — Autonomous Discovery**
 - `discover_sources()` tool on Researcher Agent (web search → proposed sources)
 - Weekly discovery schedule independent of daily ingest
-- Proposed Sources queue in Research Setup tab
+- Automated insertion of proposed-source rows consumed by the shipped Research Setup queue
 
 **Phase 3 — Signal Scoring**
 - `score_signal_relevance()` tool scoring signals against Research Intent profile
@@ -1192,14 +1194,15 @@ Full spec in §3.3.
 **Phase 1 — Foundation (shipped)**
 - ✅ `research_intent` table + `GET`/`PUT /api/research-intent`
 - ✅ `research_sources` table + `/api/research-sources/list|create|[id]/approve|[id]/reject`
-- ✅ Signals page: Research Setup tab (intent form + sources) + Signal Feed tab (read-only)
+- ✅ Signals page: Research Setup tab (intent form + source queue) + Signal Feed tab (browse, filter, Brainstorm, Promote to Lead)
 - ✅ Researcher Agent reads from `research_sources` (status=approved) — hardcoded `RSS_FEED_MAP` removed
 - ✅ `last_ingested_at` updated on `research_sources` after each ingest run
 
 **Phase 2 — Autonomous Discovery**
 - [ ] `discover_sources()` tool on Researcher Agent (web search → proposed sources)
 - [ ] Weekly discovery schedule (separate from daily ingest)
-- [ ] Proposed Sources queue in Research Setup UI
+- ✅ Proposed Sources queue in Research Setup UI
+- [ ] Automated population of proposed-source rows from discovery
 
 **Phase 3 — Signal Scoring**
 - [ ] `score_signal_relevance()` tool on Researcher Agent
