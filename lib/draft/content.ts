@@ -8,7 +8,7 @@ export type DraftContentJson = {
   hook_paragraphs: string[];
   fresh_signals: string;
   deep_dive: string;
-  dojo_checklist: string[];
+  last_word: string;
   promo_slot: string;
   close: string;
   sources: string[];
@@ -20,7 +20,7 @@ export type DraftObject = {
   hook_paragraphs: string[];
   fresh_signals: string;
   deep_dive: string;
-  dojo_checklist: string[];
+  last_word: string;
   promo_slot: string;
   close: string;
   sources: string[];
@@ -31,13 +31,13 @@ const DRAFT_STRING_KEYS = [
   "title",
   "fresh_signals",
   "deep_dive",
+  "last_word",
   "promo_slot",
   "close",
 ] as const;
 
 const DRAFT_ARRAY_KEYS = [
   "hook_paragraphs",
-  "dojo_checklist",
   "sources",
 ] as const;
 
@@ -95,7 +95,7 @@ export type DraftContent = {
   getHook(): string[];
   getFreshSignals(): string;
   getDeepDive(): string;
-  getDojoChecklist(): string[];
+  getLastWord(): string;
   getPromoSlot(): string;
   getClose(): string;
   getSources(): string[];
@@ -125,7 +125,7 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
     : [];
   const fresh_signals = ensureString(raw.fresh_signals);
   const deep_dive = ensureString(raw.deep_dive);
-  const dojo_checklist = ensureStringArray(raw.dojo_checklist);
+  const last_word = ensureString(raw.last_word);
   const promo_slot = ensureString(raw.promo_slot);
   const close = ensureString(raw.close);
   const sources = ensureStringArray(raw.sources);
@@ -136,7 +136,7 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
     getHook: () => [...hook_paragraphs],
     getFreshSignals: () => fresh_signals,
     getDeepDive: () => deep_dive,
-    getDojoChecklist: () => [...dojo_checklist],
+    getLastWord: () => last_word,
     getPromoSlot: () => promo_slot,
     getClose: () => close,
     getSources: () => [...sources],
@@ -147,7 +147,7 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
         hook_paragraphs,
         fresh_signals,
         deep_dive,
-        dojo_checklist,
+        last_word,
         promo_slot,
         close,
         sources,
@@ -160,7 +160,7 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
         hook_paragraphs: [...hook_paragraphs],
         fresh_signals,
         deep_dive,
-        dojo_checklist: [...dojo_checklist],
+        last_word,
         promo_slot,
         close,
         sources: [...sources],
@@ -172,7 +172,7 @@ export function createDraftContent(json: Partial<DraftContentJson> | null): Draf
 
 /**
  * Render a DraftContentJson into deterministic markdown with a fixed section order:
- * Title > Hook > Fresh Signals > Deep Dive > From the Dojo > Promo Slot > Close
+ * Title > Hook > Fresh Signals > Deep Dive > The Last Word > Promo Slot > Close
  */
 export function renderDraftMarkdown(draft: DraftContentJson): string {
   const parts: string[] = [];
@@ -181,12 +181,7 @@ export function renderDraftMarkdown(draft: DraftContentJson): string {
   if (draft.hook_paragraphs.length) parts.push(draft.hook_paragraphs.join("\n\n"));
   if (draft.fresh_signals) parts.push(draft.fresh_signals);
   if (draft.deep_dive) parts.push("**Deep Dive**\n\n" + draft.deep_dive);
-  if (draft.dojo_checklist.length) {
-    parts.push(
-      "**From the Dojo**\n\n" +
-        draft.dojo_checklist.map((b) => "• " + b).join("\n")
-    );
-  }
+  if (draft.last_word) parts.push("**The Last Word**\n\n" + draft.last_word);
   if (draft.promo_slot) parts.push("**Promo Slot**\n\n" + draft.promo_slot);
   if (draft.close) parts.push("**Close**\n\n" + draft.close);
 
@@ -206,7 +201,7 @@ export function emptyDraftContentJson(
     hook_paragraphs: [],
     fresh_signals: "",
     deep_dive: "",
-    dojo_checklist: [],
+    last_word: "",
     promo_slot: "",
     close: "",
     sources: [],

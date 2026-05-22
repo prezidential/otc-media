@@ -15,7 +15,7 @@ function makeDraft(overrides: Partial<DraftContentJson> = {}): DraftContentJson 
     hook_paragraphs: ["Hook paragraph one.", "Hook paragraph two."],
     fresh_signals: "**Fresh Signals**\n\n**Signal 1**\n\nTake text.",
     deep_dive: "Deep dive prose goes here.",
-    dojo_checklist: ["Bullet one.", "Bullet two.", "Bullet three.", "Bullet four.", "Bullet five."],
+    last_word: "Bullet one. Bullet two. Bullet three. Bullet four. Bullet five.",
     promo_slot: "Subscribe to premium.",
     close: "Stay sharp.\n\nSubscribe.",
     sources: ["https://example.com/a", "https://example.com/b"],
@@ -30,7 +30,7 @@ function makeDraftObject(overrides: Partial<DraftObject> = {}): DraftObject {
     hook_paragraphs: ["Hook one."],
     fresh_signals: "Signals text",
     deep_dive: "Dive text",
-    dojo_checklist: ["B1", "B2", "B3", "B4", "B5"],
+    last_word: "B1 B2 B3 B4 B5.",
     promo_slot: "Promo",
     close: "Close",
     sources: ["https://example.com"],
@@ -72,9 +72,9 @@ describe("validateDraftObject", () => {
     expect(() => validateDraftObject(obj)).toThrow('"hook_paragraphs" must be an array');
   });
 
-  it("throws when an array contains non-string", () => {
-    const obj = { ...makeDraftObject(), dojo_checklist: ["ok", 42] };
-    expect(() => validateDraftObject(obj)).toThrow('"dojo_checklist" must contain only strings');
+  it("throws when last_word is wrong type", () => {
+    const obj = { ...makeDraftObject(), last_word: 42 as unknown as string };
+    expect(() => validateDraftObject(obj)).toThrow('"last_word" must be a string');
   });
 
   it("throws when metadata is missing", () => {
@@ -101,7 +101,7 @@ describe("validateDraftObject", () => {
   });
 
   it("validates all array keys", () => {
-    for (const key of ["hook_paragraphs", "dojo_checklist", "sources"]) {
+    for (const key of ["hook_paragraphs", "sources"]) {
       const obj = { ...makeDraftObject(), [key]: "not array" };
       expect(() => validateDraftObject(obj)).toThrow(`"${key}" must be an array`);
     }
@@ -119,7 +119,7 @@ describe("renderDraftMarkdown", () => {
     const hookIdx = md.indexOf("Hook paragraph one.");
     const signalsIdx = md.indexOf("**Fresh Signals**");
     const deepIdx = md.indexOf("**Deep Dive**");
-    const dojoIdx = md.indexOf("**From the Dojo**");
+    const dojoIdx = md.indexOf("**The Last Word**");
     const promoIdx = md.indexOf("**Promo Slot**");
     const closeIdx = md.indexOf("**Close**");
 
@@ -142,9 +142,10 @@ describe("renderDraftMarkdown", () => {
     expect(md).toContain("Hook paragraph one.\n\nHook paragraph two.");
   });
 
-  it("formats dojo checklist with bullet markers", () => {
+  it("renders last_word section", () => {
     const md = renderDraftMarkdown(makeDraft());
-    expect(md).toContain("• Bullet one.\n• Bullet two.");
+    expect(md).toContain("Bullet one.");
+    expect(md).toContain("**The Last Word**");
   });
 
   it("omits empty sections", () => {
@@ -158,9 +159,9 @@ describe("renderDraftMarkdown", () => {
     expect(md).not.toContain("****");
   });
 
-  it("handles empty arrays gracefully", () => {
-    const md = renderDraftMarkdown(makeDraft({ hook_paragraphs: [], dojo_checklist: [] }));
-    expect(md).not.toContain("**From the Dojo**");
+  it("handles empty last_word gracefully", () => {
+    const md = renderDraftMarkdown(makeDraft({ hook_paragraphs: [], last_word: "" }));
+    expect(md).not.toContain("**The Last Word**");
   });
 
   it("returns empty string for completely empty draft", () => {
@@ -178,7 +179,7 @@ describe("createDraftContent", () => {
     expect(dc.getTitle()).toBe("Test Title");
     expect(dc.getHook()).toEqual(["Hook paragraph one.", "Hook paragraph two."]);
     expect(dc.getDeepDive()).toBe("Deep dive prose goes here.");
-    expect(dc.getDojoChecklist()).toHaveLength(5);
+    expect(dc.getLastWord()).toContain("Bullet one.");
     expect(dc.getSources()).toEqual(["https://example.com/a", "https://example.com/b"]);
   });
 
@@ -193,7 +194,7 @@ describe("createDraftContent", () => {
     const dc = createDraftContent({ title: "Old Draft" });
     expect(dc.getTitle()).toBe("Old Draft");
     expect(dc.getFreshSignals()).toBe("");
-    expect(dc.getDojoChecklist()).toEqual([]);
+    expect(dc.getLastWord()).toBe("");
   });
 
   it("toFullText delegates to renderDraftMarkdown", () => {
@@ -223,10 +224,10 @@ describe("createDraftContent", () => {
   it("filters non-string items from arrays", () => {
     const dc = createDraftContent({
       hook_paragraphs: ["ok", 42 as unknown as string, "also ok"],
-      dojo_checklist: [null as unknown as string, "valid"],
+      last_word: "valid",
     } as Partial<DraftContentJson>);
     expect(dc.getHook()).toEqual(["ok", "also ok"]);
-    expect(dc.getDojoChecklist()).toEqual(["valid"]);
+    expect(dc.getLastWord()).toBe("valid");
   });
 });
 
@@ -239,7 +240,7 @@ describe("emptyDraftContentJson", () => {
     expect(empty.hook_paragraphs).toEqual([]);
     expect(empty.fresh_signals).toBe("");
     expect(empty.deep_dive).toBe("");
-    expect(empty.dojo_checklist).toEqual([]);
+    expect(empty.last_word).toBe("");
     expect(empty.promo_slot).toBe("");
     expect(empty.close).toBe("");
     expect(empty.sources).toEqual([]);

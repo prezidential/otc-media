@@ -69,7 +69,7 @@ describe("POST /api/publish/export-html", () => {
       hook_paragraphs: [],
       fresh_signals: "",
       deep_dive: "",
-      dojo_checklist: [],
+      last_word: "",
       promo_slot: "",
       close: "",
       sources: [],

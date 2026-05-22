@@ -16,13 +16,13 @@ const SNIPPET_LIMITS = { x_hard: 280, x_target: 260, threads: 500 } as const;
 type BrandProfile = { id: string; name: string; created_at: string };
 type ContentOutline = { id: string; name: string; kind: string; is_default: boolean; created_at: string };
 type DraftSummary = { id: string; content: string; content_json: Record<string, unknown> | null; status?: string; created_at: string };
-type RegeneratableSection = "title" | "hook" | "deep_dive" | "dojo_checklist";
+type RegeneratableSection = "title" | "hook" | "deep_dive" | "last_word";
 
 const SECTION_LABELS: Record<RegeneratableSection, string> = {
   title: "Title",
   hook: "Opening Hook",
   deep_dive: "Deep Dive",
-  dojo_checklist: "From the Dojo",
+  last_word: "The Last Word",
 };
 
 const OUTPUT_MODE_OPTIONS = ["full_issue", "insider_access", "bundle"] as const;
