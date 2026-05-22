@@ -25,12 +25,10 @@ export function renderDraftHtml(draft: DraftContentJson): string {
     );
   }
 
-  if (draft.dojo_checklist.length) {
-    const items = draft.dojo_checklist
-      .map((b) => `<li style="margin:0 0 8px 0;font-size:15px;line-height:1.5;">${esc(b)}</li>`)
-      .join("\n");
+  if (draft.last_word) {
     sections.push(
-      `<h2 style="font-size:22px;font-weight:700;margin:32px 0 16px 0;">From the Dojo</h2>\n<ul style="padding-left:20px;margin:0;">\n${items}\n</ul>`
+      `<h2 style="font-size:22px;font-weight:700;margin:32px 0 16px 0;">The Last Word</h2>\n` +
+      renderProseHtml(draft.last_word)
     );
   }
 

@@ -9,7 +9,7 @@ describe("draftSummaryForContentProducts", () => {
       hook_paragraphs: ["Hook one.", "Hook two."],
       fresh_signals: "Fresh signal paragraph.",
       deep_dive: "Deep dive paragraph.",
-      dojo_checklist: ["Do this", "Do that"],
+      last_word: "Do this Do that.",
     });
 
     expect(summary).toContain("Title: Identity Drift");
@@ -19,7 +19,7 @@ describe("draftSummaryForContentProducts", () => {
     expect(summary).toContain("Opening hook:\nHook one.\n\nHook two.");
     expect(summary).toContain("Fresh signals (excerpt if long):\nFresh signal paragraph.");
     expect(summary).toContain("Deep dive:\nDeep dive paragraph.");
-    expect(summary).toContain("From the Dojo:\n- Do this\n- Do that");
+    expect(summary).toContain("The Last Word:\nDo this Do that.");
   });
 
   it("truncates deep_dive and fresh_signals to prompt-safe limits", () => {
@@ -45,7 +45,7 @@ describe("draftSummaryForContentProducts", () => {
       hook_paragraphs: "not-array",
       fresh_signals: ["not", "string"],
       deep_dive: null,
-      dojo_checklist: "nope",
+      last_word: 42,
     } as unknown as Record<string, unknown>);
 
     expect(summary).toBe("Title: ");

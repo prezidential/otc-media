@@ -20,7 +20,7 @@ const SECTION_HEADERS: Record<RegeneratableSection, string> = {
   title: "1) Title",
   hook: "2) Opening Hook",
   deep_dive: "4) Deep Dive",
-  dojo_checklist: "5) From the Dojo",
+  last_word: "5) The Last Word",
 };
 
 function getSectionBodyFromContent(content: string, section: RegeneratableSection): string {
@@ -40,13 +40,7 @@ function buildSectionOutput(section: RegeneratableSection, newBody: string): Par
     return { hook_paragraphs: paragraphs };
   }
   if (section === "deep_dive") return { deep_dive: newBody.trim() };
-  if (section === "dojo_checklist") {
-    const bullets = newBody
-      .split(/\n/)
-      .map((l) => l.replace(/^[-*]\s*/, "").trim())
-      .filter(Boolean);
-    return { dojo_checklist: bullets };
-  }
+  if (section === "last_word") return { last_word: newBody.trim() };
   return {};
 }
 
@@ -56,13 +50,13 @@ export async function POST(req: Request) {
   const section = body.section as RegeneratableSection | undefined;
   const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
 
-  const validSections: RegeneratableSection[] = ["title", "hook", "deep_dive", "dojo_checklist"];
+  const validSections: RegeneratableSection[] = ["title", "hook", "deep_dive", "last_word"];
   if (!draftId) {
     return NextResponse.json({ error: "draftId required" }, { status: 400 });
   }
   if (!section || !validSections.includes(section)) {
     return NextResponse.json(
-      { error: "section required: one of title, hook, deep_dive, dojo_checklist" },
+      { error: "section required: one of title, hook, deep_dive, last_word" },
       { status: 400 }
     );
   }
@@ -207,7 +201,7 @@ ${currentBody}
 
 User instruction: ${instruction || "Improve or refine this section while keeping the same thesis and voice."}
 
-Return ONLY the new section body. Do not include the section number or title (e.g. do not include "4) Deep Dive"). For "title", return a single line (max 6 words). For "hook", return 2-3 short paragraphs. For "deep_dive", return the full Deep Dive prose (600-900 words). For "dojo_checklist", return exactly 5 bullet lines (plain text, one per line).`;
+Return ONLY the new section body. Do not include the section number or title (e.g. do not include "4) Deep Dive"). For "title", return a single line (max 6 words). For "hook", return 2-3 short paragraphs. For "deep_dive", return the full Deep Dive prose (600-900 words), first person. For "last_word", return one closing paragraph (2-3 sentences, first person, practitioner takeaway).`;
 
   let newBody = "";
   try {

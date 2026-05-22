@@ -15,7 +15,7 @@ const SECTION_MARKERS = [
   /^\s*2\)\s+Opening Hook\b/m,
   /^\s*3\)\s+Fresh Signals\b/m,
   /^\s*4\)\s+Deep Dive\b/m,
-  /^\s*5\)\s+From the Dojo\b/m,
+  /^\s*5\)\s+(?:The Last Word|From the Dojo)\b/m,
   /^\s*6\)\s+Promo Slot\b/m,
   /^\s*7\)\s+Close\b/m,
 ] as const;
@@ -25,7 +25,7 @@ const SECTION_MARKERS_ALT = [
   /^\s*2\.\s+Opening Hook\b/m,
   /^\s*3\.\s+Fresh Signals\b/m,
   /^\s*4\.\s+Deep Dive\b/m,
-  /^\s*5\.\s+From the Dojo\b/m,
+  /^\s*5\.\s+(?:The Last Word|From the Dojo)\b/m,
   /^\s*6\.\s+Promo Slot\b/m,
   /^\s*7\.\s+Close\b/m,
 ] as const;
@@ -75,12 +75,12 @@ function extractBetween(text: string, start: number, nextStart: number): string 
 /** Markdown-style bold section headers (e.g. **Fresh Signals**, **Deep Dive**) */
 const MD_FRESH_SIGNALS = /\*\*Fresh Signals\*\*/i;
 const MD_DEEP_DIVE = /\*\*Deep Dive\*\*/i;
-const MD_FROM_THE_DOJO = /\*\*From the Dojo\*\*/i;
+const MD_LAST_WORD = /\*\*(?:The Last Word|From the Dojo)\*\*/i;
 const MD_PROMO_SLOT = /\*\*Promo Slot\*\*/i;
 const MD_CLOSE = /\*\*Close\*\*/i;
 
 /**
- * Parse draft that uses markdown bold headers: **Title**, **Fresh Signals**, **Deep Dive**, **From the Dojo**, etc.
+ * Parse draft that uses markdown bold headers: **Title**, **Fresh Signals**, **Deep Dive**, **The Last Word** (or legacy **From the Dojo**), etc.
  * Title = first line (often "**...**"); hook = everything after first line until **Fresh Signals**.
  */
 function parseMarkdownFormat(
@@ -89,10 +89,10 @@ function parseMarkdownFormat(
 ): DraftContentJson | null {
   const freshIdx = normalized.search(MD_FRESH_SIGNALS);
   const deepIdx = normalized.search(MD_DEEP_DIVE);
-  const dojoIdx = normalized.search(MD_FROM_THE_DOJO);
+  const lastWordIdx = normalized.search(MD_LAST_WORD);
   const promoIdx = normalized.search(MD_PROMO_SLOT);
   const closeIdx = normalized.search(MD_CLOSE);
-  if (freshIdx < 0 || deepIdx < 0 || dojoIdx < 0) return null;
+  if (freshIdx < 0 || deepIdx < 0 || lastWordIdx < 0) return null;
 
   const beforeFresh = normalized.slice(0, freshIdx).trim();
   const firstLineEnd = beforeFresh.indexOf("\n");
@@ -106,16 +106,10 @@ function parseMarkdownFormat(
     : [];
 
   const fresh_signals = normalized.slice(freshIdx, deepIdx).trim();
-  const deepDiveBody = extractBetween(normalized, deepIdx, dojoIdx);
-  const dojoEnd = promoIdx >= 0 ? promoIdx : closeIdx >= 0 ? closeIdx : normalized.length;
-  const dojoBody = normalized.slice(dojoIdx, dojoEnd);
-  const dojoBodyOnly = getSectionBody(dojoBody);
-  const dojo_checklist = dojoBodyOnly
-    ? dojoBodyOnly
-        .split(/\n/)
-        .map((l) => l.replace(/^[•\-*]\s*/, "").trim())
-        .filter(Boolean)
-    : [];
+  const deepDiveBody = extractBetween(normalized, deepIdx, lastWordIdx);
+  const lastWordEnd = promoIdx >= 0 ? promoIdx : closeIdx >= 0 ? closeIdx : normalized.length;
+  const lastWordSection = normalized.slice(lastWordIdx, lastWordEnd);
+  const last_word = getSectionBody(lastWordSection);
   const sources = extractUrls(fresh_signals);
   const promo_slot =
     promoIdx >= 0 && closeIdx >= 0 ? extractBetween(normalized, promoIdx, closeIdx) : "";
@@ -129,7 +123,7 @@ function parseMarkdownFormat(
     hook_paragraphs,
     fresh_signals,
     deep_dive: deepDiveBody,
-    dojo_checklist,
+    last_word,
     promo_slot,
     close,
     sources,
@@ -161,16 +155,14 @@ export function parseDraftToStructured(
     const hook_paragraphs = hookBody
       ? hookBody.split(/\n\n+/).map((p) => p.trim()).filter(Boolean)
       : [];
-    const dojo_checklist = dojoBody
-      ? dojoBody.split(/\n/).map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean)
-      : [];
+    const last_word = dojoBody ? dojoBody.trim() : "";
     const fresh_signals = normalized.slice(starts[2], starts[3]).trim();
     result = {
       title,
       hook_paragraphs,
       fresh_signals,
       deep_dive: deepDiveBody,
-      dojo_checklist,
+      last_word,
       promo_slot: "",
       close: "",
       sources: extractUrls(signalsBody),
@@ -186,13 +178,13 @@ export function parseDraftToStructured(
 
 export { emptyDraftContentJson as emptyContentJson } from "@/lib/draft/content";
 
-export type RegeneratableSection = "title" | "hook" | "deep_dive" | "dojo_checklist";
+export type RegeneratableSection = "title" | "hook" | "deep_dive" | "last_word";
 
 const SECTION_INDEX: Record<RegeneratableSection, number> = {
   title: 0,
   hook: 1,
   deep_dive: 3,
-  dojo_checklist: 4,
+  last_word: 4,
 };
 
 /**
@@ -201,11 +193,11 @@ const SECTION_INDEX: Record<RegeneratableSection, number> = {
 function getSectionBlocksMarkdown(trimmed: string): string[] | null {
   const freshIdx = trimmed.search(MD_FRESH_SIGNALS);
   const deepIdx = trimmed.search(MD_DEEP_DIVE);
-  const dojoIdx = trimmed.search(MD_FROM_THE_DOJO);
+  const lastWordIdx = trimmed.search(MD_LAST_WORD);
   const promoIdx = trimmed.search(MD_PROMO_SLOT);
   const closeIdx = trimmed.search(MD_CLOSE);
-  if (freshIdx < 0 || deepIdx < 0 || dojoIdx < 0) return null;
-  const dojoEnd = promoIdx >= 0 ? promoIdx : closeIdx >= 0 ? closeIdx : trimmed.length;
+  if (freshIdx < 0 || deepIdx < 0 || lastWordIdx < 0) return null;
+  const lastWordEnd = promoIdx >= 0 ? promoIdx : closeIdx >= 0 ? closeIdx : trimmed.length;
   const beforeFresh = trimmed.slice(0, freshIdx).trim();
   const firstLineEnd = beforeFresh.indexOf("\n");
   const titleBlock = firstLineEnd === -1 ? beforeFresh : beforeFresh.slice(0, firstLineEnd);
@@ -214,8 +206,8 @@ function getSectionBlocksMarkdown(trimmed: string): string[] | null {
     titleBlock,
     hookBlock,
     trimmed.slice(freshIdx, deepIdx).trim(),
-    trimmed.slice(deepIdx, dojoIdx).trim(),
-    trimmed.slice(dojoIdx, dojoEnd).trim(),
+    trimmed.slice(deepIdx, lastWordIdx).trim(),
+    trimmed.slice(lastWordIdx, lastWordEnd).trim(),
   ];
 }
 

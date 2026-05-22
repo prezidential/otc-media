@@ -33,7 +33,7 @@ function makeContentJson(overrides: Partial<DraftContentJson> = {}): DraftConten
     hook_paragraphs: ["Opening paragraph one.", "Opening paragraph two."],
     fresh_signals: "**Fresh Signals**\n\nSignal text.\n\nSources:\n- https://example.com/signal",
     deep_dive: "Deep dive body.",
-    dojo_checklist: ["Current checklist item"],
+    last_word: "Current checklist item.",
     promo_slot: "",
     close: "Close line.",
     sources: ["https://example.com/signal"],
@@ -63,8 +63,8 @@ Sources:
 4) Deep Dive
 Deep dive body.
 
-5) From the Dojo
-- Current checklist item`;
+5) The Last Word
+Current checklist item.`;
 
   mockSupabase._setResult("issue_drafts", {
     data: {
@@ -121,30 +121,25 @@ describe("POST /api/issues/regenerate-section", () => {
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toMatchObject({
-      error: "section required: one of title, hook, deep_dive, dojo_checklist",
+      error: "section required: one of title, hook, deep_dive, last_word",
     });
     expect(mockSupabase.from).not.toHaveBeenCalled();
   });
 
-  it("normalizes regenerated dojo checklist bullets before persisting", async () => {
+  it("regenerates last_word section and persists it", async () => {
     setCommonFixtures();
-    mockCallLLM.mockResolvedValue({ text: "- Rotate API keys\n* Restrict machine grants\nMonitor drift", provider: "anthropic", model: "claude-test" });
+    mockCallLLM.mockResolvedValue({ text: "Rotate API keys. Restrict machine grants. Monitor drift.", provider: "anthropic", model: "claude-test" });
 
     const req = makeJsonRequest("http://localhost:3000/api/issues/regenerate-section", {
       draftId: "draft-1",
-      section: "dojo_checklist",
-      instruction: "Tighten the checklist for operators.",
+      section: "last_word",
+      instruction: "Tighten the last word for operators.",
     });
     const res = await POST(req);
     const json = await res.json();
 
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
-    expect(json.content_json.dojo_checklist).toEqual([
-      "Rotate API keys",
-      "Restrict machine grants",
-      "Monitor drift",
-    ]);
 
     const issueDraftChain = mockSupabase._chains.get("issue_drafts");
     expect(issueDraftChain?.update).toHaveBeenCalledTimes(1);
@@ -153,13 +148,7 @@ describe("POST /api/issues/regenerate-section", () => {
       content: string;
       content_json: DraftContentJson;
     };
-    expect(updatePayload.content_json.dojo_checklist).toEqual([
-      "Rotate API keys",
-      "Restrict machine grants",
-      "Monitor drift",
-    ]);
-    expect(updatePayload.content).toContain("• Rotate API keys");
-    expect(updatePayload.content).toContain("• Restrict machine grants");
+    expect(typeof updatePayload.content_json.last_word).toBe("string");
   });
 
   it("returns 422 after lint retries are exhausted and skips DB update", async () => {

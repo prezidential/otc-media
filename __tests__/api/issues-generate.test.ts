@@ -90,13 +90,7 @@ function setCommonClaudeResponses(editorialAngleText: string) {
     fresh_signals:
       "**Fresh Signals**\n\n**Signal One**\n\nPolicy drift is widening.\n\nSources:\n- https://example.com/signal-1",
     deep_dive: "Identity control fails when policy models lag behind machine behavior.",
-    dojo_checklist: [
-      "Separate machine identity classes.",
-      "Require explicit machine policy.",
-      "Add machine behavior audits.",
-      "Constrain machine lateral movement.",
-      "Review machine grants weekly.",
-    ],
+    last_word: "Separate machine identity classes. Require explicit machine policy. Add machine behavior audits. Constrain machine lateral movement. Review machine grants weekly.",
   };
 
   mockCallLLM
@@ -112,7 +106,7 @@ function makeStoredIssueDraft(overrides: Record<string, unknown> = {}) {
     hook_paragraphs: ["Hook paragraph one.", "Hook paragraph two."],
     fresh_signals: "**Fresh Signals**\n\nSources:\n- https://example.com/source-a",
     deep_dive: "Deep dive section body.",
-    dojo_checklist: ["One", "Two", "Three", "Four", "Five"],
+    last_word: "One. Two. Three. Four. Five.",
     promo_slot: "Subscribe.",
     close: "Close line.",
     sources: ["https://example.com/source-a"],
@@ -148,7 +142,7 @@ describe("POST /api/issues/generate", () => {
   "uncomfortable_truth": "Most identity programs are built for users, not machines.",
   "reframe": "This is a classification failure before it is a tooling failure.",
   "deep_dive_outline": ["Point one", "Point two", "Point three", "Point four", "Point five"],
-  "dojo_checklist": ["Item one", "Item two", "Item three", "Item four", "Item five"]
+  "last_word": "Item one. Item two. Item three. Item four. Item five."
 }
 \`\`\``);
 

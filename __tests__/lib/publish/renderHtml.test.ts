@@ -8,7 +8,7 @@ function makeDraft(overrides: Partial<DraftContentJson> = {}): DraftContentJson 
     hook_paragraphs: ["Hook paragraph"],
     fresh_signals: "",
     deep_dive: "",
-    dojo_checklist: [],
+    last_word: "",
     promo_slot: "",
     close: "",
     sources: [],
@@ -54,17 +54,17 @@ Follow-up note`,
     expect(html).toContain(">Follow-up note</p>");
   });
 
-  it("renders dojo, promo, and close containers", () => {
+  it("renders last word, promo, and close containers", () => {
     const html = renderDraftHtml(
       makeDraft({
-        dojo_checklist: ["First move", "Second move"],
+        last_word: "First move. Second move.",
         promo_slot: "Upgrade for deeper analysis.",
         close: "Stay sharp.\n\nSubscribe.",
       })
     );
 
-    expect(html).toContain(">From the Dojo</h2>");
-    expect(html).toContain("<li style=");
+    expect(html).toContain(">The Last Word</h2>");
+    expect(html).toContain("First move");
     expect(html).toContain("Upgrade for deeper analysis.");
     expect(html).toContain("Stay sharp.");
     expect(html).toContain("Subscribe.");
