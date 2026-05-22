@@ -16,7 +16,7 @@ const draftObject = {
   hook_paragraphs: ["Hook one", "Hook two"],
   fresh_signals: "Signal context",
   deep_dive: "Deep dive body",
-  dojo_checklist: ["Check 1", "Check 2", "Check 3", "Check 4", "Check 5"],
+  last_word: "This is the practitioner takeaway for this issue.",
   promo_slot: "Subscribe for more.",
   close: "See you next week.",
   sources: ["https://example.com/signal"],
