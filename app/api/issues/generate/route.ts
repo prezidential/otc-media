@@ -36,7 +36,7 @@ type EditorialAngle = {
   uncomfortable_truth: string; // 1 sentence
   reframe: string; // 1 sentence
   deep_dive_outline: string[]; // 5-7 bullets
-  dojo_checklist: string[]; // exactly 5 bullets (plain text)
+  last_word_seed: string; // 1-2 sentences: closing position to seed The Last Word
 };
 
 /** Matches `brand_profiles` columns selected in POST below. */
@@ -400,6 +400,7 @@ Rules:
 - Use short sentences.
 - No dashes in sentences (no '-', '—', '–').
 - Avoid "This isn't", "isn't just", "The real problem isn't".
+- last_word_seed: 1-2 sentences that close the editorial with the practitioner takeaway. First person. Direct. No hype.
 `;
 
   const user = `
@@ -424,12 +425,12 @@ Return JSON with this exact shape:
   "uncomfortable_truth": "...",
   "reframe": "...",
   "deep_dive_outline": ["...", "..."],
-  "dojo_checklist": ["...", "...", "...", "...", "..."]
+  "last_word_seed": "..."
 }
 
 Notes:
-- dojo_checklist must be exactly 5 items.
 - deep_dive_outline should be 5-7 bullets.
+- last_word_seed is 1-2 sentences only — the practitioner takeaway. First person.
 - The title MUST be unique and specific to these leads. Do not use generic titles.${previousTitles && previousTitles.length > 0 ? `\n- Do NOT reuse any of these previous titles: ${previousTitles.map((t) => `"${t}"`).join(", ")}` : ""}
 `;
 
@@ -498,8 +499,8 @@ Uncomfortable truth (must appear verbatim in Deep Dive): ${angle.uncomfortable_t
 Reframe (must appear verbatim in Deep Dive): ${angle.reframe}
 Deep dive outline:
 ${angle.deep_dive_outline.map((b) => `- ${b}`).join("\n")}
-From the Dojo checklist (use these ideas, rewrite as needed, exactly 5 bullets):
-${angle.dojo_checklist.map((b) => `- ${b}`).join("\n")}`;
+The Last Word seed (use as the basis for The Last Word closing paragraph):
+${angle.last_word_seed}`;
 }
 
 async function generateInsiderDraft(params: {
@@ -621,7 +622,7 @@ export async function POST(req: Request) {
         hook_paragraphs: draftFromStorage.hook_paragraphs,
         fresh_signals: draftFromStorage.fresh_signals,
         deep_dive: draftFromStorage.deep_dive,
-        dojo_checklist: draftFromStorage.dojo_checklist,
+        last_word: draftFromStorage.last_word,
         metadata: draftFromStorage.metadata,
       },
       null,
@@ -846,8 +847,13 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
       body: JSON.stringify({ brandProfileId }),
     });
     const data = await res.json();
-    if (data?.ok && data.promoText) promoText = data.promoText;
-  } catch {
+    if (data?.ok && data.promoText) {
+      promoText = data.promoText;
+    } else if (!data?.ok) {
+      console.error("[promo] revenue/recommend returned error:", data?.error ?? res.status);
+    }
+  } catch (e) {
+    console.error("[promo] revenue/recommend failed:", e);
     promoText = "Subscribe.";
   }
   if (!promoText.trim()) promoText = "Subscribe.";
@@ -885,48 +891,43 @@ Sources (use these URLs only, do not invent): ${l.sources.join(", ") || "(none)"
         PROMO_TEXT: promoText,
       }) + formatNewsletterAntiRepetitionSuffix(recentHookFirstLines);
 
-    const systemPrompt = `You write in Identity Jedi (IDJ) voice.
+    const systemPrompt = `You write in Identity Jedi (IDJ) voice. You are David Lee — Field CTO, IAM practitioner, and the Identity Jedi. Write as me, not about me.
 
-Editorial Steering (behavior mapping). Change posture based on the steering values provided in the user message:
-- aggressionLevel: 1-2 = measured, careful; 3 = confident, direct; 4-5 = sharp, provocative. Influences Opening Hook and Deep Dive tone.
-- audienceLevel: practitioner = hands-on, tool-aware; ciso = risk and board language, strategic impact; board = business outcomes, minimal jargon. Influences Opening Hook and Deep Dive framing.
-- focusArea: strategic = why and so-what, big picture; tactical = what to do Monday, concrete steps; architecture = systems, design, integration. Influences Deep Dive structure and From the Dojo specificity.
-- toneMode: reflective = consider, weigh; confrontational = challenge, call out; analytical = break down, classify; strategic = position, recommend. Influences Opening Hook posture and Deep Dive argument style.
+BRAND PROFILE JSON:
+${JSON.stringify({
+  voice_rules_json: brandProfile.voice_rules_json,
+  formatting_rules_json: brandProfile.formatting_rules_json,
+  forbidden_patterns_json: brandProfile.forbidden_patterns_json,
+  emoji_policy_json: brandProfile.emoji_policy_json,
+  narrative_preferences_json: brandProfile.narrative_preferences_json,
+}, null, 2)}
 
-  Opening Hook must:
-- Feel like a moment.
-- Build tension or escalation.
-- Not sound journalistic.
-- Not summarize news.
-- Use rhythm with short standalone lines.
-- Never use canned "something shifted / hype-cycle / vendor-demo" framing or parallel "Not …" demo lines unless truly earned by the leads.
+Editorial Steering — shift posture based on the values in the user message:
+- aggressionLevel 1–2: measured, careful. 3: confident, direct. 4–5: sharp, provocative.
+- audienceLevel — practitioner: hands-on, tool-aware. ciso: risk and board language. board: business outcomes, minimal jargon.
+- focusArea — strategic: why and so-what. tactical: what to do Monday. architecture: systems and design.
+- toneMode — reflective: consider, weigh. confrontational: challenge, call out. analytical: break down. strategic: position, recommend.
 
-Deep Dive must:
-- Lead with thesis energy.
-- Maintain authority and posture.
-- Avoid soft advisory tone.
+Opening Hook rules:
+- Declare. Do not explain. Do not summarize news. Do not reference specific articles.
+- Feel like a moment. Build tension or escalation.
+- Use rhythm — short standalone lines or tight 1–2 sentence paragraphs.
+- Never use canned "something shifted / hype-cycle / vendor-demo" framing or parallel "Not …" opener lines unless truly earned by the leads.
 
+Deep Dive rules:
+- Lead with thesis energy. Maintain authority. No soft advisory tone.
+- Write in first person. Use "I" to state positions. Not "organizations should consider."
+- 600–900 words. Exactly 3 bold declarative statements spaced throughout.
 
-    Hook must not sound journalistic.
-Hook must not reference specific articles.
-Hook must read like short decisive statements.
-Avoid explanatory tone in the first section.
+The Last Word rules:
+- One paragraph, 2–3 sentences, first person.
+- State the practitioner takeaway directly. No hedging. No summary rehash.
 
-    Opening Hook:
-- Do not summarize the news.
-- Do not start with article references.
-- Do not explain.
-- Declare.
-    
-    BRAND PROFILE JSON:
-    ${JSON.stringify({
-      voice_rules_json: brandProfile.voice_rules_json,
-      formatting_rules_json: brandProfile.formatting_rules_json,
-      forbidden_patterns_json: brandProfile.forbidden_patterns_json,
-      emoji_policy_json: brandProfile.emoji_policy_json,
-      narrative_preferences_json: brandProfile.narrative_preferences_json,
-    }, null, 2)}
-    
+Voice rules (all sections):
+- No dashes inside sentences (no '-', '—', '–').
+- Avoid "This isn't", "isn't just", "The real problem isn't".
+- Vary sentence starters. Keep paragraphs to 1–2 sentences.
+
 ${newsletterOutlineSpec.systemPromptSuffix}`;
 
 
@@ -935,7 +936,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
     hook_paragraphs?: string[];
     fresh_signals?: string;
     deep_dive?: string;
-    dojo_checklist?: string[];
+    last_word?: string;
   };
 
   let contentJson: DraftObject;
@@ -955,9 +956,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
       : [];
     const fresh_signals = typeof parsed.fresh_signals === "string" ? parsed.fresh_signals.trim() : "";
     const deep_dive = typeof parsed.deep_dive === "string" ? parsed.deep_dive.trim() : "";
-    const dojo_checklist = Array.isArray(parsed.dojo_checklist)
-      ? parsed.dojo_checklist.filter((x): x is string => typeof x === "string").map((s) => s.trim())
-      : [];
+    const last_word = typeof parsed.last_word === "string" ? parsed.last_word.trim() : "";
 
     const sources = (fresh_signals.match(/https?:\/\/[^\s)\]]+/g) ?? []);
     const uniqueSources = [...new Set(sources)];
@@ -967,7 +966,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
       hook_paragraphs,
       fresh_signals,
       deep_dive,
-      dojo_checklist,
+      last_word,
       promo_slot: promoText,
       close: DEFAULT_CLOSE,
       sources: uniqueSources,
@@ -1014,7 +1013,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
 
   contentJson.deep_dive = await lintAndFixSection(contentJson.deep_dive);
   contentJson.fresh_signals = await lintAndFixSection(contentJson.fresh_signals);
-  contentJson.dojo_checklist = contentJson.dojo_checklist.map((b) => applyDashReplaceMap(b));
+  contentJson.last_word = applyDashReplaceMap(contentJson.last_word);
 
   const draftText = renderDraftMarkdown(contentJson);
 
@@ -1068,7 +1067,7 @@ ${newsletterOutlineSpec.systemPromptSuffix}`;
           hook_paragraphs: contentJson.hook_paragraphs,
           fresh_signals: contentJson.fresh_signals,
           deep_dive: contentJson.deep_dive,
-          dojo_checklist: contentJson.dojo_checklist,
+          last_word: contentJson.last_word,
           metadata: contentJson.metadata,
         },
         null,

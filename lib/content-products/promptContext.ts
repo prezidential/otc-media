@@ -16,9 +16,7 @@ export function draftSummaryForContentProducts(contentJson: Record<string, unkno
   let deep = typeof contentJson.deep_dive === "string" ? contentJson.deep_dive : "";
   const maxDeep = 3500;
   if (deep.length > maxDeep) deep = deep.slice(0, maxDeep) + "\n[…truncated for prompt size…]";
-  const dojo = Array.isArray(contentJson.dojo_checklist)
-    ? (contentJson.dojo_checklist as string[]).join("\n- ")
-    : "";
+  const lastWord = typeof contentJson.last_word === "string" ? contentJson.last_word : "";
 
   return [
     `Title: ${title}`,
@@ -26,7 +24,7 @@ export function draftSummaryForContentProducts(contentJson: Record<string, unkno
     hook ? `Opening hook:\n${hook}` : "",
     fresh ? `Fresh signals (excerpt if long):\n${fresh.slice(0, 4000)}${fresh.length > 4000 ? "\n[…]" : ""}` : "",
     deep ? `Deep dive:\n${deep}` : "",
-    dojo ? `From the Dojo:\n- ${dojo}` : "",
+    lastWord ? `The Last Word:\n${lastWord}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");

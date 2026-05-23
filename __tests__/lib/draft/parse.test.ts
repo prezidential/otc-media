@@ -88,7 +88,7 @@ describe("parseDraftToStructured", () => {
     expect(result!.title).toBe("Identity at Machine Speed");
     expect(result!.hook_paragraphs.length).toBeGreaterThanOrEqual(1);
     expect(result!.deep_dive).toContain("classification failure");
-    expect(result!.dojo_checklist.length).toBeGreaterThanOrEqual(5);
+    expect(result!.last_word.length).toBeGreaterThan(0);
     expect(result!.metadata).toEqual({ thesis: "T", model: "M" });
   });
 
@@ -98,7 +98,7 @@ describe("parseDraftToStructured", () => {
     expect(result!.title).toBe("Identity at Machine Speed");
     expect(result!.fresh_signals).toContain("Fresh Signals");
     expect(result!.deep_dive).toContain("failing");
-    expect(result!.dojo_checklist.length).toBe(5);
+    expect(result!.last_word.length).toBeGreaterThan(0);
   });
 
   it("returns null for empty string", () => {
@@ -175,9 +175,9 @@ describe("replaceSectionInContent", () => {
     expect(result).not.toContain("classification failure");
   });
 
-  it("replaces dojo_checklist section", () => {
-    const result = replaceSectionInContent(NUMBERED_DRAFT, "dojo_checklist", "- New bullet 1\n- New bullet 2");
-    expect(result).toContain("New bullet 1");
+  it("replaces last_word section", () => {
+    const result = replaceSectionInContent(NUMBERED_DRAFT, "last_word", "New last word content.");
+    expect(result).toContain("New last word content.");
   });
 
   it("preserves other sections when replacing one", () => {
@@ -200,7 +200,7 @@ describe("emptyContentJson", () => {
     const empty = emptyContentJson({});
     expect(empty.title).toBe("");
     expect(empty.hook_paragraphs).toEqual([]);
-    expect(empty.dojo_checklist).toEqual([]);
+    expect(empty.last_word).toBe("");
     expect(empty.sources).toEqual([]);
   });
 });

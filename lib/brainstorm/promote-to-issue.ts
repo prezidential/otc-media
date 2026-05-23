@@ -79,7 +79,7 @@ DraftObject shape:
 - hook_paragraphs: string[] (2–4 short paragraphs)
 - fresh_signals: string (markdown prose summarizing cited signals / news)
 - deep_dive: string (markdown body)
-- dojo_checklist: string[] (exactly 5 short checklist strings)
+- last_word: string (one closing paragraph, 2-3 sentences, first person, practitioner takeaway)
 - promo_slot: string (one paragraph CTA / subscribe nudge)
 - close: string (sign-off + subscribe reminder)
 - sources: string[] (URLs as plain strings; use signal URLs when available)
