@@ -687,7 +687,23 @@ Phrasing for the product: the agent **finds new findings** by **driving ingest a
 
 ### Handoff: canonical shapes downstream
 
-**Newsletter / derivatives today** expect **`DraftObject`** in `issue_drafts.content_json` (`title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `dojo_checklist`, `metadata`, …). The Hub should converge on either:
+**Newsletter / derivatives today** expect **`DraftObject`** in `issue_drafts.content_json`. The current newsletter contract is:
+
+```typescript
+type DraftObject = {
+  title: string;
+  hook_paragraphs: string[];
+  fresh_signals: string;
+  deep_dive: string;
+  last_word: string;
+  promo_slot: string;
+  close: string;
+  sources: string[];
+  metadata: { model: string; thesis: string };
+};
+```
+
+`last_word` is rendered as **The Last Word** and is the only current structured field for the closing editorial takeaway. Legacy full-text drafts with **From the Dojo** headings may be parsed as a compatibility fallback, but new Hub promotion and downstream derivatives must write `last_word`, not `dojo_checklist`. The Hub should converge on either:
 
 - **Path A — Promote to issue draft:** A **mapping job** (LLM or deterministic template) turns the Hub **artifact** (outline + prose + citations) into **`DraftObject`**, then save to **`issue_drafts`** with **`brand_profile_id`** set from the Hub session or Issues default.
 - **Path B — Ephemeral `content_json`:** User jumps to Issues Phase 2 with **in-memory** `content_json` only (today’s pattern for social/podcast without save)—acceptable for power users; **Promote** should still encourage Path A for persistence.

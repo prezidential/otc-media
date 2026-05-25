@@ -8,7 +8,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, The Last Word, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
@@ -323,6 +323,34 @@ Resolution behavior:
 - If outline id is provided, generation enforces: outline exists, is not disabled, and matches expected kind.
 - If no id is provided, generation resolves workspace default outline for that kind; if none exists, it falls back to built-in defaults from `lib/content-outlines/default-specs.ts`.
 
+### Issue Draft Contract
+
+`issue_drafts.content_json` is the canonical draft object used by issue generation, section regeneration, publishing, content products, and Brainstorm promotion.
+
+```json
+{
+  "title": "Max 6 words",
+  "hook_paragraphs": ["Opening hook paragraph"],
+  "fresh_signals": "**Fresh Signals**\n\n...",
+  "deep_dive": "600-900 words...",
+  "last_word": "One closing paragraph, 2-3 sentences...",
+  "promo_slot": "CTA text...",
+  "close": "Sign-off + subscribe reminder",
+  "sources": ["https://example.com/source"],
+  "metadata": {
+    "model": "provider-model",
+    "thesis": "One-line thesis"
+  }
+}
+```
+
+Operational constraints:
+
+- `last_word` is the current field and UI label for the closing section, rendered as **The Last Word**. New generation, regeneration, publishing, and content-product prompts read/write `last_word`.
+- Legacy text drafts with a **From the Dojo** heading can still be parsed during fallback, but new structured JSON should not use `dojo_checklist`.
+- `POST /api/issues/regenerate-section` accepts only `title`, `hook`, `deep_dive`, or `last_word`; it rewrites one section, validates the full `DraftObject`, then re-renders the stored Markdown.
+- Content products can run from a saved `draftId` or in-memory `content_json`, but both paths expect the same `DraftObject` shape. The prompt summary includes title, thesis, hook, Fresh Signals, Deep Dive, and The Last Word.
+
 ### Output Mode Behavior
 
 | Mode | Result |
@@ -374,8 +402,8 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
-- `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+- The caller must have an authenticated active workspace; `POST /api/pipeline/run` resolves it through `requireWorkspace()`.
+- `writer` and `editor` require an existing brand profile in `brand_profiles` for the active workspace.
 
 ## Publishing Runbook
 
