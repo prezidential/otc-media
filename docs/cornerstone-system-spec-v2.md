@@ -218,7 +218,8 @@ Accepts:
 - `stages`: which agents to run (default: all non-gated)
 - `triggered_by`: run provenance label (default: `manual`)
 
-Workspace scope is taken from `WORKSPACE_ID` environment configuration.
+Workspace scope is taken from the Supabase session and active workspace via
+`requireWorkspace()`; `POST /api/pipeline/run` does not read `WORKSPACE_ID`.
 
 Behavior:
 1. Runs Researcher Agent — checks staleness, ingests stale directives
@@ -533,6 +534,29 @@ Built-in defaults live in code (`lib/content-outlines/default-specs.ts`). They a
 - When an outline **id is provided**, the server **asserts** the row exists, is **not** disabled, and **`kind`** matches; otherwise **400/404** — no silent fallback to the code default for a bad id.
 - When **no** outline id is sent, resolution uses DB default or **code default** spec (same text as seeded defaults).
 
+**Current `DraftObject` contract**
+
+`issue_drafts.content_json` is the canonical source for a saved full issue. The
+rendered `content` field is derived from it through `renderDraftMarkdown()`.
+
+```typescript
+type DraftObject = {
+  title: string;
+  hook_paragraphs: string[];
+  fresh_signals: string;
+  deep_dive: string;
+  last_word: string;
+  promo_slot: string;
+  close: string;
+  sources: string[];
+  metadata: { model: string; thesis: string };
+};
+```
+
+`last_word` backs the public section titled **The Last Word**. The old
+`dojo_checklist` field is no longer part of the saved shape; legacy parsers
+still tolerate older **From the Dojo** headings when loading historical drafts.
+
 **UI**
 
 - **`/outlines`** — Workspace-admin style page: list, create, edit (kind fixed after create), placeholder hints, save warnings, soft disable. Sidebar **Outlines** + **Manage outlines** link from Issues.
@@ -561,7 +585,9 @@ Standalone `insider_access` mode may still run from **approved leads only** (`ne
 
 **Content products** turn a persisted **newsletter draft** (`issue_drafts.content_json` / `DraftObject`) into derivative assets: social posts, podcast-oriented output, and sponsorship alignment copy. They are invoked from the **Issues** page (“Phase 2 — content products”) and use LLM generation over a **compact text summary** of the draft (see `lib/content-products/promptContext.ts`).
 
-Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server loads `content_json`) or an in-memory `content_json` override for the same shape.
+Workspace scope comes from `requireWorkspace()` and RLS. Inputs are either
+`draftId` (server loads `content_json`) or an in-memory `content_json` override
+for the same shape.
 
 ### Social snippets **[REVISED in v2.6]**
 
@@ -687,7 +713,7 @@ Phrasing for the product: the agent **finds new findings** by **driving ingest a
 
 ### Handoff: canonical shapes downstream
 
-**Newsletter / derivatives today** expect **`DraftObject`** in `issue_drafts.content_json` (`title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `dojo_checklist`, `metadata`, …). The Hub should converge on either:
+**Newsletter / derivatives today** expect **`DraftObject`** in `issue_drafts.content_json` (`title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `last_word`, `promo_slot`, `close`, `sources`, `metadata`). The Hub should converge on either:
 
 - **Path A — Promote to issue draft:** A **mapping job** (LLM or deterministic template) turns the Hub **artifact** (outline + prose + citations) into **`DraftObject`**, then save to **`issue_drafts`** with **`brand_profile_id`** set from the Hub session or Issues default.
 - **Path B — Ephemeral `content_json`:** User jumps to Issues Phase 2 with **in-memory** `content_json` only (today’s pattern for social/podcast without save)—acceptable for power users; **Promote** should still encourage Path A for persistence.
@@ -1097,8 +1123,8 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
-| **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
-| **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
+| **Brainstormer Agent (Ideation)** | **Implemented (MVP)** | `lib/brainstorm/turn.ts` + tool loop over `query_signals`, `get_signal`, `list_recent_drafts`, `trigger_signal_ingest`, `propose_manual_signal`, and `save_artifact_draft`; role-routed via `LLM_BRAINSTORM` |
+| **Brainstorming Hub** | **Implemented (MVP)** | `/brainstorm` UI plus `/api/brainstorm/sessions/*`; sessions/messages persist in Supabase, optional streaming, pinned signals, manual-signal confirmation, and promote to `issue_drafts` |
 | **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
 | **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |

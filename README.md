@@ -8,7 +8,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, The Last Word, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
@@ -347,6 +347,56 @@ Resolution behavior:
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
 
+## Issue Draft Runbook
+
+`issue_drafts.content_json` is the canonical draft source. `content` is rendered
+from that object for display, export, and backward-compatible parsing.
+
+Canonical full-issue shape:
+
+```typescript
+type DraftObject = {
+  title: string;
+  hook_paragraphs: string[];
+  fresh_signals: string;
+  deep_dive: string;
+  last_word: string;
+  promo_slot: string;
+  close: string;
+  sources: string[];
+  metadata: { model: string; thesis: string };
+};
+```
+
+### Generation
+
+`POST /api/issues/generate` requires an authenticated active workspace and:
+
+- `brandProfileId`: workspace-scoped brand profile id.
+- `outputMode`: optional `full_issue`, `insider_access`, or `bundle`; defaults to `full_issue`.
+- `contentOutlineId`: optional newsletter outline id for `full_issue` or `bundle`.
+- `insiderContentOutlineId`: optional Insider outline id for `insider_access` or `bundle`.
+- `sourceDraftId`: optional saved issue draft id when generating Insider Access from an existing issue.
+
+Full-issue and bundle generation store `content_json`, set `promo_slot` from
+`/api/revenue/recommend` with a `Subscribe.` fallback, set `close` from
+`DEFAULT_CLOSE`, and mark used leads as `drafted` only after the draft insert
+succeeds. Insider-only generation returns draft text and does not create an
+`issue_drafts` row.
+
+### Regeneration
+
+`POST /api/issues/regenerate-section` accepts:
+
+- `draftId`
+- `section`: `title`, `hook`, `deep_dive`, or `last_word`
+- `instruction`: optional editor instruction
+
+Regeneration updates both `content_json` and rendered `content`, then validates
+the full `DraftObject`. The legacy `dojo_checklist` section is no longer part
+of the saved shape; parsers still tolerate older `From the Dojo` headings when
+loading historical drafts.
+
 ## Autonomous Pipeline Runbook
 
 The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result.
@@ -374,8 +424,8 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
-- `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+- The request must have a Supabase session and active workspace; the route uses `requireWorkspace()` and does not read `WORKSPACE_ID`.
+- `writer` and `editor` require an existing brand profile in `brand_profiles` for the active workspace.
 
 ## Publishing Runbook
 
