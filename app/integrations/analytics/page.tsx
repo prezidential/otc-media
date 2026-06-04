@@ -32,6 +32,88 @@ type BeehiivPostsData = {
   data?: BeehiivPost[];
 };
 
+type HealthMetric = {
+  key: string;
+  label: string;
+  value: number | null;
+  status: "green" | "yellow" | "red";
+  target: number;
+  warn: number;
+  kind: "standard" | "inverted";
+  unit: "percent" | "count";
+  consecutiveWeeksBelow: number;
+  week: number | null;
+  updatedAt: string;
+};
+
+const HEALTH_STATUS_EMOJI: Record<HealthMetric["status"], string> = {
+  green: "✅",
+  yellow: "🟡",
+  red: "🔴",
+};
+
+function SubscriberHealthSection({ metrics }: { metrics: HealthMetric[] }) {
+  const fmtValue = (m: HealthMetric) => {
+    if (m.value == null) return "—";
+    return m.unit === "percent" ? `${Math.round(m.value * 10) / 10}%` : `${Math.round(m.value)}`;
+  };
+  const fmtTarget = (m: HealthMetric) => {
+    const suffix = m.unit === "percent" ? "%" : "";
+    const lead = m.kind === "inverted" ? "<" : "";
+    return `target: ${lead}${m.target}${suffix}`;
+  };
+
+  return (
+    <section className={studioInner.card}>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-[family-name:var(--font-instrument-serif)] text-xl text-[#1F1A14]">
+          Subscriber Health
+        </h2>
+        {metrics[0]?.week != null && (
+          <span className={cn(studioInner.body, "text-[11px] font-[family-name:var(--font-geist-mono)]")}>
+            Week {metrics[0].week}
+          </span>
+        )}
+      </div>
+
+      {metrics.length === 0 ? (
+        <p className={studioInner.body}>No health report yet — this runs weekly.</p>
+      ) : (
+        <div className="space-y-2">
+          {metrics.map((m) => (
+            <div
+              key={m.key}
+              className={cn(
+                studioInner.surfaceNested,
+                "rounded-lg px-4 py-3 flex items-center gap-3",
+                m.status === "red" && "ring-1 ring-[#C8571E]/30"
+              )}
+            >
+              <span className="text-base shrink-0" aria-label={m.status}>
+                {HEALTH_STATUS_EMOJI[m.status]}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-[#1F1A14]">{m.label}</p>
+                {m.consecutiveWeeksBelow >= 3 && (
+                  <p className="text-[11px] text-[#C8571E] mt-0.5">
+                    ⚠️ below threshold for {m.consecutiveWeeksBelow} consecutive weeks
+                  </p>
+                )}
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-lg font-semibold tabular-nums text-[#1F1A14]">{fmtValue(m)}</div>
+                <div className="text-[11px] font-[family-name:var(--font-geist-mono)] text-[#6B5F4E]">
+                  {fmtTarget(m)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StatCard({ label, value, sub, icon }: { label: string; value: string; sub?: string; icon: React.ReactNode }) {
   return (
     <div className={cn(studioInner.card, "flex flex-col gap-1")}>
@@ -82,6 +164,7 @@ function PlatformSection({
 export default function UnifiedAnalyticsPage() {
   const [payload, setPayload] = useState<UnifiedAnalyticsPayload | null>(null);
   const [postsData, setPostsData] = useState<BeehiivPostsData | null>(null);
+  const [healthMetrics, setHealthMetrics] = useState<HealthMetric[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,13 +172,14 @@ export default function UnifiedAnalyticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [analyticsRes, postsRes] = await Promise.all([
+      const [analyticsRes, postsRes, healthRes] = await Promise.all([
         fetch("/api/integrations/analytics"),
         fetch("/api/integrations/beehiiv/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tool: "list_posts", params: { limit: 5, status: "confirmed" } }),
         }),
+        fetch("/api/pipelines/health-report/status"),
       ]);
 
       const analyticsData = await analyticsRes.json() as UnifiedAnalyticsPayload;
@@ -104,6 +188,11 @@ export default function UnifiedAnalyticsPage() {
       if (postsRes.ok) {
         const pd = await postsRes.json() as { ok: boolean; data?: BeehiivPostsData };
         if (pd.ok && pd.data) setPostsData(pd.data);
+      }
+
+      if (healthRes.ok) {
+        const hd = await healthRes.json() as { metrics?: HealthMetric[] };
+        setHealthMetrics(hd.metrics ?? []);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load analytics");
@@ -181,6 +270,9 @@ export default function UnifiedAnalyticsPage() {
       )}
 
       <div className="space-y-6">
+        {/* Subscriber Health (KPI status from the weekly pipeline) */}
+        <SubscriberHealthSection metrics={healthMetrics} />
+
         {/* Beehiiv section */}
         <PlatformSection name="Beehiiv" enabled={beehiiv?.enabled ?? false} platformId="beehiiv">
           {!beehiiv?.enabled ? (

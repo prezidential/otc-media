@@ -89,6 +89,13 @@ Expires in 8 hours.`;
     });
   }
 
+  async sendMessage(text: string): Promise<void> {
+    await this.api("sendMessage", {
+      chat_id: this.cfg.chatId,
+      text,
+    });
+  }
+
   async handleInbound(body: unknown, headers: Record<string, string>): Promise<ApprovalResponse | null> {
     const secret = headers["x-telegram-bot-api-secret-token"] ?? headers["X-Telegram-Bot-Api-Secret-Token"];
     if (secret !== this.cfg.webhookSecret) {

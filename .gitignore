@@ -39,6 +39,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# Runtime pipeline state (initial empty version is committed via -f to keep data/ tracked)
-data/kpi-history.json
