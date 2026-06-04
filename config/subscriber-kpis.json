@@ -1,0 +1,9 @@
+{
+  "weeklyNewSubs": { "target": 10, "warn": 5 },
+  "linkedInSourcedPercent": { "target": 70, "warn": 40 },
+  "boostSourcedPercent": { "target": 0, "warn": 5 },
+  "monthlyChurnRate": { "target": 3, "warn": 6 },
+  "openRate": { "target": 65, "warn": 60 },
+  "clickRate": { "target": 2, "warn": 1 },
+  "paidSubscribers": { "target": 25, "warn": 13 }
+}
