@@ -17,15 +17,8 @@ import {
   type MetricKey,
   type ReportMetric,
 } from "./kpi";
-import {
-  analyzeSubscriptions,
-  averageRates,
-  beehiivGet,
-  extractPostRates,
-  extractPublicationStats,
-  type BeehiivSubscription,
-  type PostRates,
-} from "./beehiiv";
+import { gatherBeehiivMetrics } from "./beehiiv";
+import { isMcpEnabled } from "@/lib/integrations/mcp";
 import { formatReport, type ReportMetrics } from "./report";
 import {
   loadHistory,
@@ -43,18 +36,22 @@ export type SubscriberHealthResult = {
   error?: string;
 };
 
-export type BeehiivConfig = { apiKey: string; publicationId: string };
+export type BeehiivConfig = { apiKey?: string; publicationId: string };
 
 /**
- * Resolve a workspace's Beehiiv credentials. Per-workspace seam: today it returns the
- * global env vars (matching how ACE/publishing resolve Beehiiv); when an encrypted
+ * Resolve a workspace's Beehiiv config. Per-workspace seam: today it returns the global
+ * env vars (matching how ACE/publishing resolve Beehiiv); when an encrypted
  * `workspace_integrations` store lands, swap the body to look up by `workspaceId`.
+ *
+ * Needs a publication ID plus a way to authenticate: either `BEEHIIV_API_KEY` (REST) or
+ * a configured Beehiiv MCP server (`gatherBeehiivMetrics` routes through MCP when set).
  */
 export function resolveBeehiivConfig(workspaceId: string): BeehiivConfig | null {
   void workspaceId;
   const apiKey = process.env.BEEHIIV_API_KEY;
   const publicationId = process.env.BEEHIIV_PUBLICATION_ID;
-  if (!apiKey || !publicationId) return null;
+  if (!publicationId) return null;
+  if (!apiKey && !isMcpEnabled("beehiiv")) return null;
   return { apiKey, publicationId };
 }
 
@@ -77,44 +74,17 @@ export async function runSubscriberHealth(options: {
   }
 
   try {
-    const { apiKey, publicationId: pubId } = beehiiv;
-
-    // 1. Publication stats.
-    const statsJson = await beehiivGet(`/publications/${pubId}/stats`, apiKey);
-    const { paidSubscribers, monthlyChurnRate } = extractPublicationStats(statsJson);
-
-    // 2. Last 3 published posts.
-    const postsJson = await beehiivGet<{ data?: Array<{ id?: string }> }>(
-      `/publications/${pubId}/posts?status=confirmed&limit=3&order_by=publish_date&direction=desc`,
-      apiKey
-    );
-    const postIds = (postsJson.data ?? [])
-      .map((p) => p.id)
-      .filter((id): id is string => typeof id === "string");
-
-    // 3. Per-post open/click rates.
-    const postRates: PostRates[] = [];
-    for (const postId of postIds) {
-      const postStatsJson = await beehiivGet(`/publications/${pubId}/posts/${postId}/stats`, apiKey);
-      postRates.push(extractPostRates(postStatsJson));
-    }
-    const { openRate, clickRate } = averageRates(postRates);
-
-    // 4. Active subscriptions (filter to last 7 days client-side).
-    const subsJson = await beehiivGet<{ data?: BeehiivSubscription[] }>(
-      `/publications/${pubId}/subscriptions?status=active&order_by=created&direction=desc&limit=500`,
-      apiKey
-    );
-    const subAnalysis = analyzeSubscriptions(subsJson.data ?? []);
+    // Gathers via the Beehiiv MCP server when BEEHIIV_MCP_SERVER_URL is set, else REST.
+    const m = await gatherBeehiivMetrics(beehiiv.apiKey, beehiiv.publicationId);
 
     const values: Record<MetricKey, number> = {
-      weeklyNewSubs: subAnalysis.weeklyNewSubs,
-      linkedInSourcedPercent: subAnalysis.linkedInSourcedPercent,
-      boostSourcedPercent: subAnalysis.boostSourcedPercent,
-      monthlyChurnRate,
-      openRate,
-      clickRate,
-      paidSubscribers,
+      weeklyNewSubs: m.weeklyNewSubs,
+      linkedInSourcedPercent: m.linkedInSourcedPercent,
+      boostSourcedPercent: m.boostSourcedPercent,
+      monthlyChurnRate: m.monthlyChurnRate,
+      openRate: m.openRate,
+      clickRate: m.clickRate,
+      paidSubscribers: m.paidSubscribers,
     };
 
     const now = new Date();

@@ -3,9 +3,11 @@ import {
   analyzeSubscriptions,
   averageRates,
   beehiivGet,
+  collectBeehiivViaMcp,
   extractPublicationStats,
   extractPostRates,
 } from "@/lib/subscriber-health/beehiiv";
+import type { McpCall } from "@/lib/integrations/mcp";
 
 describe("Subscription filtering", () => {
   const now = Date.UTC(2026, 5, 4, 12, 0, 0); // 2026-06-04T12:00:00Z
@@ -106,5 +108,75 @@ describe("beehiivGet error handling", () => {
       "https://api.beehiiv.com/v2/publications/pub_1/stats",
       { headers: { Authorization: "Bearer secret" } }
     );
+  });
+});
+
+describe("collectBeehiivViaMcp (uses real MCP response shapes)", () => {
+  // A fake MCP call that returns the shapes captured from the live Beehiiv MCP server.
+  function makeCall(): McpCall {
+    return async (name, args) => {
+      if (name === "get_publication_stats") {
+        if (args.time_period === "last_7_days") {
+          return {
+            current_active_subscribers: 513,
+            last_7_days: {
+              open_rate: 61.84,
+              click_rate: 0.32,
+              new_subscribers: 4,
+              churned_subscribers: 14,
+              acquisition_sources: [
+                { source: "social: linkedin.com / referral", count: 2 },
+                { source: "boost: somepub", count: 1 },
+                { source: "website: google.com / organic", count: 1 },
+              ],
+            },
+          };
+        }
+        return { current_active_subscribers: 500, last_4_weeks: { churned_subscribers: 25 } };
+      }
+      if (name === "list_posts") {
+        return { posts: [{ id: "post_1" }, { id: "post_2" }] };
+      }
+      if (name === "get_post_stats") {
+        const open = args.post_id === "post_1" ? 58 : 62;
+        return { email: { open_rate: open, click_rate: 0.4 } };
+      }
+      if (name === "list_subscriptions") {
+        expect(args.tier).toBe("paid");
+        return { pagination: { total: 30 } };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    };
+  }
+
+  it("maps publication/post/subscription stats into normalized metrics", async () => {
+    const m = await collectBeehiivViaMcp("pub_1", makeCall());
+
+    expect(m.weeklyNewSubs).toBe(4);
+    // 2 of 4 from linkedin, 1 of 4 from boost
+    expect(m.linkedInSourcedPercent).toBe(50);
+    expect(m.boostSourcedPercent).toBe(25);
+    // open rate averages the two posts (58, 62); rates already percentages
+    expect(m.openRate).toBe(60);
+    expect(m.clickRate).toBeCloseTo(0.4);
+    // monthly churn = 25 / 500 * 100
+    expect(m.monthlyChurnRate).toBe(5);
+    expect(m.paidSubscribers).toBe(30);
+  });
+
+  it("handles a week with no new subscribers without dividing by zero", async () => {
+    const call: McpCall = async (name) => {
+      if (name === "get_publication_stats") {
+        return { current_active_subscribers: 100, last_7_days: { new_subscribers: 0, acquisition_sources: [] }, last_4_weeks: { churned_subscribers: 0 } };
+      }
+      if (name === "list_posts") return { posts: [] };
+      if (name === "list_subscriptions") return { pagination: { total: 0 } };
+      return {};
+    };
+    const m = await collectBeehiivViaMcp("pub_1", call);
+    expect(m.weeklyNewSubs).toBe(0);
+    expect(m.linkedInSourcedPercent).toBe(0);
+    expect(m.boostSourcedPercent).toBe(0);
+    expect(m.openRate).toBe(0);
   });
 });
