@@ -1,10 +1,10 @@
 # Cornerstone OS
-## System Specification v2.11
+## System Specification v2.12
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.10 (Agentic Research Direction: Research Intent profile replaces hardcoded `RSS_FEED_MAP`; `research_sources` table with agent-proposed source queue; Researcher Agent gains `ingest_approved_sources` tool; Signal Setup UI redesigned into Research Setup + Signal Feed tabs; brand profile UX updated to interactive wizard; Vercel Analytics added)
+Supersedes: v2.11 (Subscriber Health Pipeline §3.17; Pluggable Integration Framework §3.18; newsletter draft quality — `last_word: string` replaces `dojo_checklist: string[]` across all draft surfaces; Brainstorm Hub MVP/M1 + implementation status corrections; agent execution plan added at `docs/agent-execution-plan-v1.md`)
 
 ---
 
@@ -1007,6 +1007,163 @@ Provider credentials live in the **Supabase dashboard → Authentication → Pro
 
 ---
 
+## 3.17 Subscriber Health Pipeline **[NEW in v2.12]**
+
+### Purpose
+
+A standalone analytics pipeline that evaluates newsletter subscriber health against configurable KPI targets and delivers a structured Telegram report every Monday at 8 AM Eastern. It runs independently of the ACE pipeline — no agent loop, no approval gate — and is the creator's weekly heartbeat for distribution health.
+
+### Architecture
+
+**Type:** Standalone Node/TypeScript script (`pipelines/subscriber-health.ts`), not a Next.js API route.  
+**Trigger:** Railway cron — `0 13 * * 1` (13:00 UTC = 8 AM ET/EST; adjust to `0 12 * * 1` during EDT).  
+**Env vars:** Reuses `BEEHIIV_API_KEY`, `BEEHIIV_PUBLICATION_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — no new vars required.
+
+### KPI Configuration (`config/subscriber-kpis.json`)
+
+```json
+{
+  "weeklyNewSubs":           { "target": 10,  "warn": 5   },
+  "linkedInSourcedPercent":  { "target": 70,  "warn": 40  },
+  "boostSourcedPercent":     { "target": 0,   "warn": 5   },
+  "monthlyChurnRate":        { "target": 3,   "warn": 6   },
+  "openRate":                { "target": 65,  "warn": 60  },
+  "clickRate":               { "target": 2,   "warn": 1   },
+  "paidSubscribers":         { "target": 25,  "warn": 13  }
+}
+```
+
+### Beehiiv Data Sources
+
+| Endpoint | Data extracted |
+|----------|----------------|
+| `GET /publications/{id}/stats` | `total_active_subscriptions`, `paid_subscriptions`, churn signals |
+| `GET /publications/{id}/posts?status=confirmed&limit=3&order_by=publish_date&direction=desc` | Last 3 posts for engagement averages |
+| `GET /publications/{id}/posts/{postId}/stats` | Per-post `open_rate`, `click_rate` |
+| `GET /publications/{id}/subscriptions?status=active&limit=500` | New subs (filter client-side to last 7 days), referral attribution |
+
+### Status Evaluation Logic
+
+**Standard metrics (higher is better):** `weeklyNewSubs`, `linkedInSourcedPercent`, `openRate`, `clickRate`, `paidSubscribers`
+- ✅ `value >= target`
+- 🟡 `warn <= value < target`
+- 🔴 `value < warn`
+
+**Inverted metrics (lower is better):** `boostSourcedPercent`, `monthlyChurnRate`
+- ✅ `value <= target`
+- 🟡 `target < value <= warn`
+- 🔴 `value > warn`
+
+### Consecutive-Week Tracking (`data/kpi-history.json`)
+
+Persistent JSON file stores `{ [metric]: { consecutiveWeeksBelow: number, lastStatus: string } }`. When a metric stays 🔴 for 3+ consecutive weeks, a `⚠️` warning line is appended below that metric in the Telegram message. The file is runtime state — tracked in `.gitignore` but initialized as `{}` in the repo.
+
+### Telegram Report Format
+
+```
+📊 Subscriber Health Report
+YYYY-MM-DD (Week N)
+
+📈 Growth
+New subs (7d): 12 ✅ (target: 10)
+LinkedIn sourced: 68% 🟡 (target: 70%)
+Boost sourced: 3% 🟡 (warn: 5%)
+
+💔 Retention
+Monthly churn: 2.1% ✅ (target: <3%)
+Open rate (last 3): 67% ✅ (target: 65%)
+Click rate (last 3): 1.8% 🟡 (target: 2%)
+
+💰 Monetization
+Paid subscribers: 18 🔴 (target: 25)
+(⚠️ Paid subscribers below warn threshold for 3 consecutive weeks)
+```
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `pipelines/subscriber-health.ts` | Main pipeline script |
+| `config/subscriber-kpis.json` | KPI targets + warn thresholds |
+| `data/kpi-history.json` | Runtime consecutive-week state (gitignored after init) |
+| `__tests__/pipelines/subscriber-health.test.ts` | Unit tests (mocked fetch) |
+
+**Full implementation spec:** `docs/agent-execution-plan-v1.md` §Phase 1.
+
+---
+
+## 3.18 Pluggable Integration Framework **[NEW in v2.12]**
+
+### Purpose
+
+A plugin-based architecture for connecting third-party platforms (Beehiiv, Supergrow, and future platforms) as first-class analytics and scheduling integrations inside the Studio shell. The framework wraps platform REST APIs in an MCP-shaped tool interface. If a real MCP server URL is configured for a platform, the framework routes through `@modelcontextprotocol/sdk` SSE transport instead of REST.
+
+**Landed:** PR #90. All framework files exist in the codebase.
+
+### Architecture
+
+```
+lib/integrations/
+  types.ts          — IntegrationPlugin, IntegrationTool, IntegrationQueryResult
+  registry.ts       — Module-level Map; registerPlugin / getPlugin / listPlugins
+  agent.ts          — runIntegrationQuery() — wraps plugin tools as AgentTool[] → runAgent()
+  beehiiv/
+    index.ts        — BeehiivPlugin (REST: get_publication_stats, list_posts, get_post_stats, list_subscriptions)
+  supergrow/
+    index.ts        — SupergrowPlugin (placeholder slot; stubs until API key + MCP URL available)
+```
+
+### Plugin Contract
+
+```typescript
+export type IntegrationPlugin = {
+  id: string;
+  name: string;
+  description: string;
+  features: ("analytics" | "scheduling" | "publishing" | "audience")[];
+  tools: IntegrationTool[];
+  callTool: (name: string, params: Record<string, unknown>) => Promise<unknown>;
+  isEnabled: () => boolean;
+  analyticsConfig: {
+    systemPrompt: string;
+    defaultQueries: string[];
+  };
+};
+```
+
+### MCP Upgrade Path
+
+Each plugin checks for an optional `{PLATFORM}_MCP_SERVER_URL` env var. When set, `callTool` routes through `@modelcontextprotocol/sdk` `Client` with SSE transport instead of direct REST. This allows zero-code-change adoption of official MCP servers as they become available.
+
+| Platform | REST enabled when | MCP enabled when |
+|----------|-------------------|------------------|
+| Beehiiv | `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID` | `BEEHIIV_MCP_SERVER_URL` |
+| Supergrow | `SUPERGROW_API_KEY` | `SUPERGROW_MCP_SERVER_URL` |
+
+### API Routes
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/integrations` | GET | List all registered plugins with enabled status |
+| `/api/integrations/analytics` | GET | Unified snapshot across all enabled integrations |
+| `/api/integrations/[platform]/status` | GET | Platform connectivity health check |
+| `/api/integrations/[platform]/query` | POST | AI-powered query via integration agent |
+| `/api/integrations/[platform]/action` | POST | Direct tool call (non-AI) |
+
+### UI
+
+| Page | Purpose |
+|------|---------|
+| `/integrations/analytics` | **Unified Analytics** — primary daily destination; metric rail + per-platform sections |
+| `/integrations` | Integration Hub — card per plugin, connection status, management |
+| `/integrations/[platform]` | Platform dashboard — analytics, AI query, scheduling panel (Supergrow) |
+
+### LLM Role
+
+`"integration"` added to `AgentRole` union in `lib/llm/provider.ts`. Configurable via `LLM_INTEGRATION=anthropic:claude-sonnet-4-20250514`.
+
+---
+
 # 4. Brand Profile Schema
 _Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
@@ -1089,7 +1246,7 @@ Stretch:
 | QoL — signals freshness | Implemented | Freshness indicator + stale warning |
 | QoL — bulk lead actions | Implemented | Approve All / Dismiss All |
 | QoL — draft comparison | Implemented | Side-by-side compare view |
-| Test suite | Implemented | 171+ tests |
+| Test suite | Implemented | 338+ tests |
 | UI | Implemented | **Studio** default shell (§3.15): cream chrome, sidebar + command search; feature pages retain shadcn/dark semantic surfaces inside the main column until token unification |
 | **Content products — Social snippets API** | **Implemented** | `POST /api/content-products/social-snippets`; returns structured `snippets` JSON |
 | **Content products — Social snippets UI** | **Implemented** | Issues Phase 2: formatted X / LinkedIn / Threads panels, counts, copy, optional raw JSON — §3.11 |
@@ -1097,12 +1254,19 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
-| **Brainstormer Agent (Ideation)** | **Not started** | §3.1 / §3.13 — Hub tool loop; `LLM_BRAINSTORM` or shared role TBD |
-| **Brainstorming Hub** | **Not started** | §3.13 — sessions/messages, chat UI, streaming, promote to `DraftObject` |
-| **Blog draft (longform)** | **Not started** | §3.13 — `BlogDraftObject`, `POST /api/content-products/blog-draft` (name TBD), export UI |
+| **Brainstormer Agent (Ideation)** | **Implemented** | §3.1 / §3.13 — tool loop: `query_signals`, `get_signal`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`; `brainstorm` LLM role |
+| **Brainstorming Hub** | **Implemented (MVP/M1)** | §3.13 — sessions/messages CRUD; chat UI; streaming; tools as above; Promote to `DraftObject` → `issue_drafts` |
+| **Blog draft (longform)** | **Not started** | §3.13 M2 — `BlogDraftObject`, `POST /api/content-products/blog-draft`, export UI; see agent plan Phase 6 |
 | **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
 | **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
+| **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
+| **Pluggable Integration Framework** | **Implemented (PR #90)** | §3.18 — `lib/integrations/`; Beehiiv plugin (REST); Supergrow placeholder; `/api/integrations/`; `/integrations/analytics`; `/integrations/[platform]` |
+| **Subscriber Health Pipeline** | **Roadmap** | §3.17 — `pipelines/subscriber-health.ts`; `config/subscriber-kpis.json`; Railway cron Mon 8 AM ET; see agent plan Phase 1 |
+| **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
+| **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |
+| **LinkedIn Draft Engine** | **Roadmap** | §3.8 Phase 3 — generate/regenerate/publish endpoints; Issues LinkedIn tab; Leads channel selector; see agent plan Phase 5 |
+| **Blog / Longform** | **Roadmap** | §3.13 M2 — `BlogDraftObject`; blog-draft API; Markdown/HTML export; see agent plan Phase 6 |
 
 **Note (spec vs code, v2.3):** Phase 1 roadmap language originally assumed a greenfield `agent_runs` table. The current codebase **reuses `runs`** for agent persistence and exposes **`/api/pipeline/run`** for development-style orchestration. Remaining Phase 1 work includes a **pipeline status dashboard**, **scheduled automation**, and tighter **human-gated** autonomy — see §8.
 
@@ -1196,15 +1360,36 @@ Full spec in §3.3.
 - ✅ Researcher Agent reads from `research_sources` (status=approved) — hardcoded `RSS_FEED_MAP` removed
 - ✅ `last_ingested_at` updated on `research_sources` after each ingest run
 
-**Phase 2 — Autonomous Discovery**
+**Phase 2 — Autonomous Discovery (agent plan Phase 2)**
 - [ ] `discover_sources()` tool on Researcher Agent (web search → proposed sources)
 - [ ] Weekly discovery schedule (separate from daily ingest)
 - [ ] Proposed Sources queue in Research Setup UI
 
-**Phase 3 — Signal Scoring**
+**Phase 3 — Signal Scoring (agent plan Phase 3)**
 - [ ] `score_signal_relevance()` tool on Researcher Agent
 - [ ] `relevance_score` surfaced in Signal Feed UI
 - [ ] Writer Agent orders signals by `relevance_score` DESC
+
+---
+
+### Phase 2E — Subscriber Health Pipeline **[NEW in v2.12]**
+
+**Spec:** §3.17; **agent plan:** `docs/agent-execution-plan-v1.md` Phase 1.
+
+- **Standalone script** `pipelines/subscriber-health.ts` — no app server dependency
+- Config-driven KPIs in `config/subscriber-kpis.json`; consecutive-week state in `data/kpi-history.json`
+- Railway cron: Monday 8 AM ET
+- Beehiiv REST → 7-day stats → Telegram report with ✅/🟡/🔴 per metric
+
+---
+
+### Phase 2F — Pluggable Integration Framework **[Landed — PR #90]**
+
+**Spec:** §3.18. All files implemented. Next steps:
+
+- [ ] Supergrow REST implementation when `SUPERGROW_API_KEY` + confirmed API is available
+- [ ] Unified Analytics UI polish — ensure live Beehiiv data renders correctly in `/integrations/analytics`
+- [ ] Optional: Supergrow MCP path when `SUPERGROW_MCP_SERVER_URL` is configured
 
 ---
 
@@ -1235,4 +1420,4 @@ _Unchanged from v2.0._
 
 ---
 
-End of Specification v2.9
+End of Specification v2.12
