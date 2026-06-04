@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings, Play } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { studioInner } from "@/lib/studio/inner-classes";
 import { cn } from "@/lib/utils";
@@ -52,7 +52,17 @@ const HEALTH_STATUS_EMOJI: Record<HealthMetric["status"], string> = {
   red: "🔴",
 };
 
-function SubscriberHealthSection({ metrics }: { metrics: HealthMetric[] }) {
+function SubscriberHealthSection({
+  metrics,
+  onRun,
+  running,
+  runError,
+}: {
+  metrics: HealthMetric[];
+  onRun: () => void;
+  running: boolean;
+  runError: string | null;
+}) {
   const fmtValue = (m: HealthMetric) => {
     if (m.value == null) return "—";
     return m.unit === "percent" ? `${Math.round(m.value * 10) / 10}%` : `${Math.round(m.value)}`;
@@ -66,18 +76,33 @@ function SubscriberHealthSection({ metrics }: { metrics: HealthMetric[] }) {
   return (
     <section className={studioInner.card}>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="font-[family-name:var(--font-instrument-serif)] text-xl text-[#1F1A14]">
-          Subscriber Health
-        </h2>
-        {metrics[0]?.week != null && (
-          <span className={cn(studioInner.body, "text-[11px] font-[family-name:var(--font-geist-mono)]")}>
-            Week {metrics[0].week}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          <h2 className="font-[family-name:var(--font-instrument-serif)] text-xl text-[#1F1A14]">
+            Subscriber Health
+          </h2>
+          {metrics[0]?.week != null && (
+            <span className={cn(studioInner.body, "text-[11px] font-[family-name:var(--font-geist-mono)]")}>
+              Week {metrics[0].week}
+            </span>
+          )}
+        </div>
+        <button type="button" onClick={onRun} disabled={running} className={studioInner.btnSecondary}>
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+          Run now
+        </button>
       </div>
 
+      {runError && (
+        <div className="mb-3 flex items-center gap-2 text-[#C8571E] text-sm">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {runError}
+        </div>
+      )}
+
       {metrics.length === 0 ? (
-        <p className={studioInner.body}>No health report yet — this runs weekly.</p>
+        <p className={studioInner.body}>
+          {running ? "Running report…" : "No health report yet — runs weekly, or run it now."}
+        </p>
       ) : (
         <div className="space-y-2">
           {metrics.map((m) => (
@@ -165,8 +190,44 @@ export default function UnifiedAnalyticsPage() {
   const [payload, setPayload] = useState<UnifiedAnalyticsPayload | null>(null);
   const [postsData, setPostsData] = useState<BeehiivPostsData | null>(null);
   const [healthMetrics, setHealthMetrics] = useState<HealthMetric[]>([]);
+  const [healthRunning, setHealthRunning] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshHealth = useCallback(async () => {
+    const res = await fetch("/api/pipelines/health-report/status");
+    if (res.ok) {
+      const hd = (await res.json()) as { metrics?: HealthMetric[] };
+      setHealthMetrics(hd.metrics ?? []);
+    }
+  }, []);
+
+  const runHealth = useCallback(async () => {
+    setHealthRunning(true);
+    setHealthError(null);
+    try {
+      const res = await fetch("/api/pipelines/health-report/run", { method: "POST" });
+      const result = (await res.json().catch(() => ({}))) as {
+        status?: string;
+        summary?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(result.error || result.summary || `Run failed (HTTP ${res.status})`);
+      }
+      if (result.status === "completed") {
+        await refreshHealth();
+      } else {
+        // skipped (e.g. Beehiiv not configured) or failed — surface the reason.
+        setHealthError(result.summary || result.error || "Run did not complete");
+      }
+    } catch (e) {
+      setHealthError(e instanceof Error ? e.message : "Run failed");
+    } finally {
+      setHealthRunning(false);
+    }
+  }, [refreshHealth]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -271,7 +332,12 @@ export default function UnifiedAnalyticsPage() {
 
       <div className="space-y-6">
         {/* Subscriber Health (KPI status from the weekly pipeline) */}
-        <SubscriberHealthSection metrics={healthMetrics} />
+        <SubscriberHealthSection
+          metrics={healthMetrics}
+          onRun={runHealth}
+          running={healthRunning}
+          runError={healthError}
+        />
 
         {/* Beehiiv section */}
         <PlatformSection name="Beehiiv" enabled={beehiiv?.enabled ?? false} platformId="beehiiv">
