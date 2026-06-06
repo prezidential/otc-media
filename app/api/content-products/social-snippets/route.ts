@@ -9,7 +9,7 @@ import { draftSummaryForContentProducts } from "@/lib/content-products/promptCon
 import { loadDraftContentJson } from "@/lib/content-products/loadDraft";
 import { requireWorkspace } from "@/lib/auth/session";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 2048;
 /** Higher than drafting so repeat clicks on the same draft don’t collapse to identical copy. */
 const TEMPERATURE = 0.92;

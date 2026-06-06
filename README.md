@@ -46,15 +46,15 @@ OPENAI_API_KEY=your-openai-key
 # workspace id in the URL path
 # (`/api/notifications/webhook/[provider]/[workspaceId]`).
 LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-20250514
-LLM_RESEARCH=anthropic:claude-sonnet-4-20250514
-LLM_LEADS=anthropic:claude-sonnet-4-20250514
-LLM_EDITOR=anthropic:claude-sonnet-4-20250514
-LLM_DRAFTING=anthropic:claude-sonnet-4-20250514
-LLM_REVISION=anthropic:claude-sonnet-4-20250514
-LLM_LINT=anthropic:claude-sonnet-4-20250514
-LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
-LLM_BRAINSTORM=anthropic:claude-sonnet-4-20250514
+LLM_MODEL=claude-sonnet-4-6
+LLM_RESEARCH=anthropic:claude-sonnet-4-6
+LLM_LEADS=anthropic:claude-sonnet-4-6
+LLM_EDITOR=anthropic:claude-sonnet-4-6
+LLM_DRAFTING=anthropic:claude-sonnet-4-6
+LLM_REVISION=anthropic:claude-sonnet-4-6
+LLM_LINT=anthropic:claude-sonnet-4-6
+LLM_LINKEDIN=anthropic:claude-sonnet-4-6
+LLM_BRAINSTORM=anthropic:claude-sonnet-4-6
 BEEHIIV_ENABLED=false
 BEEHIIV_API_KEY=your-beehiiv-api-key
 BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id

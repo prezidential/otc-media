@@ -10,7 +10,7 @@ import {
 import { requireWorkspace } from "@/lib/auth/session";
 import type { PodcastScript, PodcastScriptSegment } from "@/lib/content-products/podcastScriptTypes";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 8192;
 
 function safeJsonParse<T>(text: string): T | null {
