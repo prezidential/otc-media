@@ -6,10 +6,13 @@ const { parseURLMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("rss-parser", () => {
+  // Vitest 4 requires a real constructor (class/function) for `new Parser()`.
+  // An arrow-function mockImplementation is not constructable and throws
+  // "is not a constructor".
   return {
-    default: vi.fn().mockImplementation(() => ({
-      parseURL: parseURLMock,
-    })),
+    default: class MockParser {
+      parseURL = parseURLMock;
+    },
   };
 });
 
