@@ -10,7 +10,7 @@ describe("getModelForRole", () => {
   it("returns anthropic defaults when no env vars set", () => {
     const config = getModelForRole("drafting");
     expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-20250514");
+    expect(config.model).toBe("claude-sonnet-4-6");
   });
 
   it("uses global LLM_PROVIDER override", () => {

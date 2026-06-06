@@ -244,16 +244,16 @@ All LLM calls route through a unified provider abstraction. Each agent role can 
 ```
 # Global default
 LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-20250514
+LLM_MODEL=claude-sonnet-4-6
 
 # Per-role overrides (format: provider:model)
 LLM_RESEARCH=openai:gpt-4o-mini
-LLM_LEADS=anthropic:claude-sonnet-4-20250514
-LLM_EDITOR=anthropic:claude-sonnet-4-20250514
+LLM_LEADS=anthropic:claude-sonnet-4-6
+LLM_EDITOR=anthropic:claude-sonnet-4-6
 LLM_DRAFTING=openai:gpt-4o
-LLM_REVISION=anthropic:claude-sonnet-4-20250514
+LLM_REVISION=anthropic:claude-sonnet-4-6
 LLM_LINT=openai:gpt-4o-mini
-LLM_LINKEDIN=anthropic:claude-sonnet-4-20250514
+LLM_LINKEDIN=anthropic:claude-sonnet-4-6
 ```
 
 ### API
