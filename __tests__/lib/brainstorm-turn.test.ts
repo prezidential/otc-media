@@ -65,7 +65,7 @@ describe("runBrainstormTurn", () => {
     providerMocks.callLLM.mockResolvedValueOnce({
       text: '{"assistant":"Done"}',
       provider: "anthropic",
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
     });
 
     const result = await runBrainstormTurn({

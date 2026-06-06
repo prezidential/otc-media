@@ -4,7 +4,7 @@ import { requireWorkspace } from "@/lib/auth/session";
 import { draftSummaryForContentProducts } from "@/lib/content-products/promptContext";
 import { loadDraftContentJson } from "@/lib/content-products/loadDraft";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4096;
 
 function safeJsonParse<T>(text: string): T | null {
