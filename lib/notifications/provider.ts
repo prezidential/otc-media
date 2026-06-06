@@ -28,5 +28,8 @@ export interface NotificationProvider {
 
   sendStatusUpdate(message: StatusMessage): Promise<void>;
 
+  /** Send a preformatted message body verbatim (no level emoji / title decoration). */
+  sendMessage(text: string): Promise<void>;
+
   handleInbound?(body: unknown, headers: Record<string, string>): Promise<ApprovalResponse | null>;
 }
