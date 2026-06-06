@@ -8,6 +8,7 @@ export const STUDIO_NAV = [
   { href: "/outlines", label: "Outlines", keywords: "templates" },
   { href: "/brand-profiles", label: "Brand", keywords: "voice profile" },
   { href: "/research", label: "Research", keywords: "directives pipeline" },
+  { href: "/runs", label: "Pipeline", keywords: "runs agent history failures status orchestrator" },
   { href: "/brainstorm", label: "Brainstorm", keywords: "ideation chat signals hub" },
   { href: "/ace", label: "ACE", keywords: "autonomous telegram" },
   { href: "/integrations", label: "Integrations", keywords: "beehiiv supergrow connections plugins api mcp" },
