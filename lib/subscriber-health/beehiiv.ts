@@ -271,9 +271,12 @@ export async function gatherBeehiivMetricsRest(apiKey: string, pubId: string): P
 /** Choose MCP when `BEEHIIV_MCP_SERVER_URL` is configured, otherwise REST. */
 export async function gatherBeehiivMetrics(
   apiKey: string | undefined,
-  pubId: string
+  pubId: string,
+  mcpOverride?: McpConfig
 ): Promise<BeehiivMetrics> {
-  const mcp = getMcpConfig("beehiiv");
+  // Prefer a caller-supplied MCP config (e.g. an OAuth Bearer for the active
+  // workspace); fall back to the env/static MCP config, then REST.
+  const mcp = mcpOverride ?? getMcpConfig("beehiiv");
   if (mcp) return gatherBeehiivMetricsMcp(mcp, pubId);
   if (!apiKey) throw new Error("BEEHIIV_API_KEY is required for Beehiiv REST mode");
   return gatherBeehiivMetricsRest(apiKey, pubId);

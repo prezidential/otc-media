@@ -18,7 +18,7 @@ import {
   type ReportMetric,
 } from "./kpi";
 import { gatherBeehiivMetrics } from "./beehiiv";
-import { isMcpEnabled } from "@/lib/integrations/mcp";
+import { isMcpEnabled, type McpConfig } from "@/lib/integrations/mcp";
 import { formatReport, type ReportMetrics } from "./report";
 import {
   loadHistory,
@@ -60,8 +60,10 @@ const KPIS = defaultKpis as KpiConfigMap;
 export async function runSubscriberHealth(options: {
   workspaceId: string;
   trigger: SubscriberHealthTrigger;
+  /** Optional OAuth-resolved Beehiiv MCP config (overrides the env/static path). */
+  beehiivMcp?: McpConfig;
 }): Promise<SubscriberHealthResult> {
-  const { workspaceId, trigger } = options;
+  const { workspaceId, trigger, beehiivMcp } = options;
   const supabase = supabaseAdmin();
 
   const beehiiv = resolveBeehiivConfig(workspaceId);
@@ -75,7 +77,7 @@ export async function runSubscriberHealth(options: {
 
   try {
     // Gathers via the Beehiiv MCP server when BEEHIIV_MCP_SERVER_URL is set, else REST.
-    const m = await gatherBeehiivMetrics(beehiiv.apiKey, beehiiv.publicationId);
+    const m = await gatherBeehiivMetrics(beehiiv.apiKey, beehiiv.publicationId, beehiivMcp);
 
     const values: Record<MetricKey, number> = {
       weeklyNewSubs: m.weeklyNewSubs,

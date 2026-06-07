@@ -13,6 +13,8 @@ vi.mock("@/lib/subscriber-health/run", () => ({
 
 import { POST } from "@/app/api/pipelines/health-report/run/route";
 
+const makeReq = () => new Request("http://localhost/api/pipelines/health-report/run", { method: "POST" });
+
 beforeEach(() => {
   vi.clearAllMocks();
   requireWorkspace.mockResolvedValue(ctx as unknown);
@@ -22,11 +24,11 @@ describe("POST /api/pipelines/health-report/run", () => {
   it("runs the report for the caller's active workspace as a manual trigger", async () => {
     runSubscriberHealth.mockResolvedValue({ workspaceId: "ws-1", status: "completed", summary: "ok" });
 
-    const res = await POST();
+    const res = await POST(makeReq());
     const json = await res.json();
 
     expect(res.status).toBe(200);
-    expect(runSubscriberHealth).toHaveBeenCalledWith({ workspaceId: "ws-1", trigger: "manual" });
+    expect(runSubscriberHealth).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "ws-1", trigger: "manual" }));
     expect(json).toMatchObject({ status: "completed", summary: "ok" });
   });
 
@@ -37,13 +39,13 @@ describe("POST /api/pipelines/health-report/run", () => {
       summary: "Beehiiv not configured for workspace",
     });
 
-    const res = await POST();
+    const res = await POST(makeReq());
     expect((await res.json()).status).toBe("skipped");
   });
 
   it("propagates auth failures from requireWorkspace", async () => {
     requireWorkspace.mockResolvedValue(new Response(null, { status: 401 }));
-    const res = await POST();
+    const res = await POST(makeReq());
     expect(res.status).toBe(401);
     expect(runSubscriberHealth).not.toHaveBeenCalled();
   });
