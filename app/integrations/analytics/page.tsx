@@ -179,6 +179,7 @@ export default function UnifiedAnalyticsPage() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [oauthMsg, setOauthMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const refreshHealth = useCallback(async () => {
     const res = await fetch("/api/pipelines/health-report/status");
@@ -246,6 +247,21 @@ export default function UnifiedAnalyticsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Surface the Beehiiv OAuth callback result (?beehiiv=connected|error&reason=...).
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const b = sp.get("beehiiv");
+    if (!b) return;
+    if (b === "connected") {
+      setOauthMsg({ ok: true, text: "Beehiiv connected. Analytics now use the live MCP connection." });
+    } else {
+      const reason = sp.get("reason");
+      setOauthMsg({ ok: false, text: `Beehiiv connect failed${reason ? `: ${reason}` : ""}` });
+    }
+    // Clean the URL so the banner doesn't persist on refresh.
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
   const beehiiv = payload?.platforms?.beehiiv;
   const supergrow = payload?.platforms?.supergrow;
   const beehiivStats = beehiiv?.data as BeehiivPublicationStats | undefined;
@@ -285,6 +301,19 @@ export default function UnifiedAnalyticsPage() {
         <div className={cn(studioInner.card, "mb-6 flex items-center gap-2 text-[#C8571E]")}>
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span className="text-sm">{error}</span>
+        </div>
+      )}
+
+      {oauthMsg && (
+        <div
+          className={cn(
+            studioInner.card,
+            "mb-6 flex items-center gap-2",
+            oauthMsg.ok ? "text-[#1F1A14]" : "text-[#C8571E]"
+          )}
+        >
+          {oauthMsg.ok ? "✅" : <AlertCircle className="h-4 w-4 shrink-0" />}
+          <span className="text-sm">{oauthMsg.text}</span>
         </div>
       )}
 

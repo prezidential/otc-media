@@ -140,16 +140,25 @@ async function callTool(
   const pubId = process.env.BEEHIIV_PUBLICATION_ID;
   const mcpUrl = process.env.BEEHIIV_MCP_SERVER_URL;
 
-  // 1) Per-workspace OAuth token (preferred when connected) → MCP.
+  // 1) Per-workspace OAuth token (preferred). When an MCP URL is configured and
+  // we have a workspace ctx, OAuth is the ONLY valid Beehiiv auth — the static
+  // API key is rejected (401) by the MCP server. So if there's no stored token
+  // we surface a clear "connect" error rather than silently falling back to the
+  // known-bad static key (which masked the real state).
   if (ctx && mcpUrl) {
-    const token = await getBeehiivAccessToken({
-      workspaceId: ctx.workspaceId,
-      userId: ctx.userId,
-      supabase: ctx.supabase,
-      origin: ctx.origin,
-    }).catch(() => null);
+    if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
+    let token: string | null = null;
+    try {
+      token = await getBeehiivAccessToken({
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        supabase: ctx.supabase,
+        origin: ctx.origin,
+      });
+    } catch (e) {
+      console.error("[beehiiv] OAuth token lookup failed", e);
+    }
     if (token) {
-      if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
       const cfg: McpConfig = {
         url: mcpUrl,
         headers: { Authorization: `Bearer ${token}` },
@@ -157,9 +166,10 @@ async function callTool(
       };
       return withMcp(cfg, (call) => callMcp(name, params, call, pubId));
     }
+    throw new Error('Beehiiv MCP is not connected for this workspace — click "Connect Beehiiv" to authorize.');
   }
 
-  // 2) Static env token (BEEHIIV_MCP_TOKEN / BEEHIIV_API_KEY) → MCP.
+  // 2) No workspace ctx (e.g. server/cron): static env token (BEEHIIV_MCP_TOKEN / BEEHIIV_API_KEY) → MCP.
   const mcp = getMcpConfig("beehiiv");
   if (mcp) {
     if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");

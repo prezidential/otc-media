@@ -14,7 +14,7 @@ import { upsertBeehiivConnection } from "@/lib/integrations/beehiiv/store";
  * Beehiiv redirects here with ?code&state. Validate state, exchange the code
  * (PKCE), and persist encrypted tokens, then redirect to /integrations/beehiiv.
  */
-const POST_CONNECT_PATH = "/integrations/beehiiv";
+const POST_CONNECT_PATH = "/integrations/analytics";
 
 export async function GET(req: NextRequest) {
   const url = req.nextUrl;
@@ -40,6 +40,7 @@ export async function GET(req: NextRequest) {
   try {
     tokens = await completeAuthorization(url.origin, code, codeVerifier);
   } catch (e) {
+    console.error("[beehiiv oauth] token exchange failed", e);
     return redirect(url.origin, "error", `token_exchange_failed:${e instanceof Error ? e.message : ""}`);
   }
 
@@ -55,7 +56,10 @@ export async function GET(req: NextRequest) {
     scope: tokens.scope ?? "read",
     profileJson: {},
   });
-  if (!res.ok) return redirect(url.origin, "error", "persist_failed");
+  if (!res.ok) {
+    console.error("[beehiiv oauth] persist failed", res.error);
+    return redirect(url.origin, "error", `persist_failed:${res.error}`);
+  }
 
   return redirect(url.origin, "connected");
 }
