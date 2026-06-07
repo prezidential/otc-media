@@ -21,7 +21,12 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { upsertBeehiivConnection, getBeehiivConnection } from "./store";
+import {
+  upsertBeehiivConnection,
+  getBeehiivConnection,
+  getBeehiivConnectionByWorkspace,
+  type BeehiivConnectionRow,
+} from "./store";
 
 /** Beehiiv MCP authorization server (issuer) + resource indicator. */
 export const BEEHIIV_ISSUER = "https://mcp.beehiiv.com";
@@ -138,6 +143,35 @@ export type BeehiivOAuthCtx = {
 };
 
 /**
+ * Given a connection row, return a valid access token — refreshing and persisting
+ * when within 60s of expiry. Shared by the user-scoped and workspace-scoped resolvers.
+ */
+async function freshAccessToken(
+  supabase: SupabaseClient,
+  conn: BeehiivConnectionRow,
+  workspaceId: string,
+  origin: string | undefined
+): Promise<string> {
+  const expMs = Date.parse(conn.expires_at);
+  const fresh = Number.isFinite(expMs) && expMs - Date.now() > 60_000;
+  if (fresh) return conn.access_token;
+
+  if (!conn.refresh_token) return conn.access_token; // can't refresh; try existing
+  const tokens = await refreshTokens(origin ?? BEEHIIV_ISSUER, conn.refresh_token);
+  const expiresAt = new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString();
+  await upsertBeehiivConnection(supabase, {
+    workspaceId,
+    providerUserId: conn.provider_user_id,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token ?? conn.refresh_token,
+    expiresAt,
+    scope: tokens.scope ?? conn.scope,
+    profileJson: conn.profile_json,
+  });
+  return tokens.access_token;
+}
+
+/**
  * Return a valid Beehiiv MCP access token for the workspace/user, refreshing
  * when within 60s of expiry. Returns null when there is no OAuth connection.
  */
@@ -147,23 +181,34 @@ export async function getBeehiivAccessToken(ctx: BeehiivOAuthCtx): Promise<strin
     userId: ctx.userId,
   });
   if (!conn) return null;
+  return freshAccessToken(ctx.supabase, conn, ctx.workspaceId, ctx.origin);
+}
 
-  const expMs = Date.parse(conn.expires_at);
-  const fresh = Number.isFinite(expMs) && expMs - Date.now() > 60_000;
-  if (fresh) return conn.access_token;
+export type BeehiivWorkspaceOAuthCtx = {
+  workspaceId: string;
+  /** Must be a service-role client (`supabaseAdmin()`); bypasses per-user RLS. */
+  supabase: SupabaseClient;
+  /** App origin for the DCR client lookup during refresh (e.g. CORNERSTONE_URL). */
+  origin?: string;
+};
 
-  if (!conn.refresh_token) return conn.access_token; // can't refresh; try existing
-  const origin = ctx.origin ?? BEEHIIV_ISSUER;
-  const tokens = await refreshTokens(origin, conn.refresh_token);
-  const expiresAt = new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString();
-  await upsertBeehiivConnection(ctx.supabase, {
+/**
+ * Workspace-scoped token resolver for session-less jobs (the weekly Subscriber
+ * Health cron). Reads the workspace's most-recent connection regardless of user
+ * and refreshes when stale. Returns null when there is no connection OR when a
+ * refresh fails — callers should fall back to the static env credential path
+ * rather than treat a refresh failure as fatal.
+ */
+export async function getBeehiivAccessTokenForWorkspace(
+  ctx: BeehiivWorkspaceOAuthCtx
+): Promise<string | null> {
+  const conn = await getBeehiivConnectionByWorkspace(ctx.supabase, {
     workspaceId: ctx.workspaceId,
-    providerUserId: conn.provider_user_id,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token ?? conn.refresh_token,
-    expiresAt,
-    scope: tokens.scope ?? conn.scope,
-    profileJson: conn.profile_json,
   });
-  return tokens.access_token;
+  if (!conn) return null;
+  try {
+    return await freshAccessToken(ctx.supabase, conn, ctx.workspaceId, ctx.origin);
+  } catch {
+    return null;
+  }
 }

@@ -68,6 +68,21 @@ export function getMcpConfig(platform: string): McpConfig | null {
   return { url, headers, transport };
 }
 
+/**
+ * Build an MCP config for a platform using an explicit bearer token (e.g. a
+ * per-workspace OAuth access token) instead of the static env token. Returns null
+ * when the platform's MCP server URL is not configured. The token overrides any
+ * `Authorization` header `getMcpConfig` derived from env.
+ */
+export function mcpConfigWithToken(platform: string, token: string): McpConfig | null {
+  const base = getMcpConfig(platform);
+  if (!base) return null;
+  return {
+    ...base,
+    headers: { ...base.headers, Authorization: `Bearer ${token}` },
+  };
+}
+
 type ToolResult = { content?: Array<{ type: string; text?: string }>; isError?: boolean };
 
 export function parseToolResult(result: unknown): unknown {

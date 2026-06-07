@@ -68,3 +68,27 @@ export async function getBeehiivConnection(
   if (error || !data) return null;
   return data as BeehiivConnectionRow;
 }
+
+/**
+ * Most-recently-updated Beehiiv connection for a workspace, regardless of user.
+ * Used by session-less server jobs (e.g. the weekly Subscriber Health cron) that
+ * have no acting user but still need a workspace-scoped OAuth token. Must be called
+ * with a service-role (`supabaseAdmin()`) client since it bypasses per-user RLS.
+ */
+export async function getBeehiivConnectionByWorkspace(
+  supabase: SupabaseClient,
+  opts: { workspaceId: string }
+): Promise<BeehiivConnectionRow | null> {
+  const { data, error } = await supabase
+    .from("beehiiv_oauth_connections_decrypted")
+    .select(
+      "id, workspace_id, user_id, provider_user_id, access_token, refresh_token, expires_at, scope, profile_json, created_at, updated_at"
+    )
+    .eq("workspace_id", opts.workspaceId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as BeehiivConnectionRow;
+}
