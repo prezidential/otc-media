@@ -1,10 +1,11 @@
 # Cornerstone OS
-## System Specification v2.12
+## System Specification v2.13
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.11 (Subscriber Health Pipeline §3.17; Pluggable Integration Framework §3.18; newsletter draft quality — `last_word: string` replaces `dojo_checklist: string[]` across all draft surfaces; Brainstorm Hub MVP/M1 + implementation status corrections; agent execution plan added at `docs/agent-execution-plan-v1.md`)
+Supersedes: v2.12 (§3.18 — Analytics now LIVE via MCP: Beehiiv + Supergrow plugins route through `@modelcontextprotocol/sdk` (HTTP-first, SSE fallback) with per-plugin normalization to stable shapes; Supergrow analytics composed from get_followers + get_metrics + get_linkedin_accounts; `/integrations/analytics` renders both platforms + Subscriber Health)
+Prior: v2.11 (Subscriber Health Pipeline §3.17; Pluggable Integration Framework §3.18; newsletter draft quality — `last_word: string` replaces `dojo_checklist: string[]` across all draft surfaces; Brainstorm Hub MVP/M1 + implementation status corrections; agent execution plan added at `docs/agent-execution-plan-v1.md`)
 
 ---
 
@@ -1096,9 +1097,9 @@ Paid subscribers: 18 🔴 (target: 25)
 
 ### Purpose
 
-A plugin-based architecture for connecting third-party platforms (Beehiiv, Supergrow, and future platforms) as first-class analytics and scheduling integrations inside the Studio shell. The framework wraps platform REST APIs in an MCP-shaped tool interface. If a real MCP server URL is configured for a platform, the framework routes through `@modelcontextprotocol/sdk` SSE transport instead of REST.
+A plugin-based architecture for connecting third-party platforms (Beehiiv, Supergrow, and future platforms) as first-class analytics and scheduling integrations inside the Studio shell. Each plugin exposes an MCP-shaped tool interface. When a platform's MCP server URL is configured, the framework routes tool calls through `@modelcontextprotocol/sdk` (HTTP-first with SSE fallback); otherwise it falls back to the platform REST API. Either path returns the **same normalized shape** per tool (per-plugin `normalize.ts`), so the Analytics UI and agent are source-agnostic.
 
-**Landed:** PR #90. All framework files exist in the codebase.
+**Landed:** PR #90 (framework + Beehiiv REST). MCP routing live for Beehiiv + Supergrow (Analytics MCP work, v2.13).
 
 ### Architecture
 
@@ -1108,9 +1109,12 @@ lib/integrations/
   registry.ts       — Module-level Map; registerPlugin / getPlugin / listPlugins
   agent.ts          — runIntegrationQuery() — wraps plugin tools as AgentTool[] → runAgent()
   beehiiv/
-    index.ts        — BeehiivPlugin (REST: get_publication_stats, list_posts, get_post_stats, list_subscriptions)
+    index.ts        — BeehiivPlugin (MCP or REST: get_publication_stats, list_posts, get_post_stats, list_subscriptions)
+    normalize.ts    — MCP/REST -> stable BeehiivPublicationStats / BeehiivPostSummary (reconciles percent vs fraction rates)
   supergrow/
-    index.ts        — SupergrowPlugin (placeholder slot; stubs until API key + MCP URL available)
+    index.ts        — SupergrowPlugin (MCP: get_linkedin_analytics [composed], get_post_performance, list_scheduled_posts, schedule_post)
+    normalize.ts    — SupergrowAnalytics / SupergrowPostSummary + composeAnalytics()
+    workspace.ts    — resolveWorkspaceId() (SUPERGROW_WORKSPACE_ID env, else list_workspaces; cached)
 ```
 
 ### Plugin Contract
@@ -1133,12 +1137,12 @@ export type IntegrationPlugin = {
 
 ### MCP Upgrade Path
 
-Each plugin checks for an optional `{PLATFORM}_MCP_SERVER_URL` env var. When set, `callTool` routes through `@modelcontextprotocol/sdk` `Client` with SSE transport instead of direct REST. This allows zero-code-change adoption of official MCP servers as they become available.
+Each plugin checks for `{PLATFORM}_MCP_SERVER_URL` via `getMcpConfig()`. When set, `callTool` routes through `@modelcontextprotocol/sdk` `Client` (HTTP-first, SSE fallback) via the shared `withMcp()` helper in `lib/integrations/mcp.ts`; otherwise it uses the platform REST API. Auth: `{PLATFORM}_MCP_TOKEN` (defaults to `{PLATFORM}_API_KEY`) sent as Bearer, unless the URL itself carries auth (Supergrow embeds `?api_key=` — a stray Bearer header is harmless). Because the plugin's tool names/shapes differ from the raw MCP server surface, `callTool` maps params (injecting `publication_id` / `workspace_id`) and normalizes responses to one stable shape per tool.
 
-| Platform | REST enabled when | MCP enabled when |
-|----------|-------------------|------------------|
-| Beehiiv | `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID` | `BEEHIIV_MCP_SERVER_URL` |
-| Supergrow | `SUPERGROW_API_KEY` | `SUPERGROW_MCP_SERVER_URL` |
+| Platform | REST enabled when | MCP enabled when | Notes |
+|----------|-------------------|------------------|-------|
+| Beehiiv | `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID` | `BEEHIIV_MCP_SERVER_URL` (+ `BEEHIIV_PUBLICATION_ID`) | MCP rates are percent; REST are 0–1 (normalizer reconciles) |
+| Supergrow | `SUPERGROW_API_KEY` | `SUPERGROW_MCP_SERVER_URL` | every tool needs `workspace_id` (`SUPERGROW_WORKSPACE_ID`, else `list_workspaces`); overview composes ~5 calls; 500/day rate limit (snapshot cache) |
 
 ### API Routes
 
@@ -1261,7 +1265,7 @@ Stretch:
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
 | **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
 | **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
-| **Pluggable Integration Framework** | **Implemented (PR #90)** | §3.18 — `lib/integrations/`; Beehiiv plugin (REST); Supergrow placeholder; `/api/integrations/`; `/integrations/analytics`; `/integrations/[platform]` |
+| **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv + Supergrow both live via MCP (HTTP/SSE) with REST fallback + per-plugin normalization; `/api/integrations/`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health; `/integrations/[platform]` |
 | **Subscriber Health Pipeline** | **Roadmap** | §3.17 — `pipelines/subscriber-health.ts`; `config/subscriber-kpis.json`; Railway cron Mon 8 AM ET; see agent plan Phase 1 |
 | **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
 | **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |

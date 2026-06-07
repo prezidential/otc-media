@@ -58,6 +58,16 @@ LLM_BRAINSTORM=anthropic:claude-sonnet-4-6
 BEEHIIV_ENABLED=false
 BEEHIIV_API_KEY=your-beehiiv-api-key
 BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
+# Optional — route Beehiiv analytics through its MCP server instead of REST.
+# The MCP bearer token defaults to BEEHIIV_API_KEY.
+BEEHIIV_MCP_SERVER_URL=https://mcp.beehiiv.com/mcp
+
+# Supergrow (LinkedIn analytics) — MCP-based. The MCP URL carries the api_key as a
+# query param, so no Bearer header is needed. SUPERGROW_WORKSPACE_ID avoids an extra
+# list_workspaces call (discover it via the Supergrow list_workspaces MCP tool).
+SUPERGROW_API_KEY=your-supergrow-api-key
+SUPERGROW_MCP_SERVER_URL=https://mcp.supergrow.ai/mcp?api_key=your-supergrow-api-key
+SUPERGROW_WORKSPACE_ID=your-supergrow-workspace-uuid
 
 # Optional — Issues → Phase 2 → Podcast script → Download MP3 (ElevenLabs)
 ELEVENLABS_API_KEY=

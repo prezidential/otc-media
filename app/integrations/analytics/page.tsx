@@ -2,35 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings, Play } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings, Play, Heart, Eye } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { studioInner } from "@/lib/studio/inner-classes";
 import { cn } from "@/lib/utils";
 import type { UnifiedAnalyticsPayload } from "@/lib/integrations/types";
-
-type BeehiivStats = {
-  data?: {
-    total_active_subscriptions?: number;
-    total_subscriptions?: number;
-    average_open_rate?: number;
-    average_click_rate?: number;
-  };
-};
-
-type BeehiivPost = {
-  id?: string;
-  subject?: string;
-  status?: string;
-  stats?: {
-    open_rate?: number;
-    click_rate?: number;
-  };
-  publish_date?: number;
-};
-
-type BeehiivPostsData = {
-  data?: BeehiivPost[];
-};
+import type { BeehiivPublicationStats, BeehiivPostSummary } from "@/lib/integrations/beehiiv/normalize";
+import type { SupergrowAnalytics, SupergrowPostSummary } from "@/lib/integrations/supergrow/normalize";
 
 type HealthMetric = {
   key: string;
@@ -186,9 +164,15 @@ function PlatformSection({
   );
 }
 
+const fmtPct = (n: number | undefined | null) => (n != null ? `${n.toFixed(1)}%` : "—");
+const fmtNum = (n: number | undefined | null) => (n != null ? Math.round(n).toLocaleString() : "—");
+const fmtSigned = (n: number | undefined | null) =>
+  n == null ? "—" : `${n > 0 ? "+" : ""}${Math.round(n).toLocaleString()}`;
+
 export default function UnifiedAnalyticsPage() {
   const [payload, setPayload] = useState<UnifiedAnalyticsPayload | null>(null);
-  const [postsData, setPostsData] = useState<BeehiivPostsData | null>(null);
+  const [posts, setPosts] = useState<BeehiivPostSummary[]>([]);
+  const [sgPosts, setSgPosts] = useState<SupergrowPostSummary[]>([]);
   const [healthMetrics, setHealthMetrics] = useState<HealthMetric[]>([]);
   const [healthRunning, setHealthRunning] = useState(false);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -208,20 +192,10 @@ export default function UnifiedAnalyticsPage() {
     setHealthError(null);
     try {
       const res = await fetch("/api/pipelines/health-report/run", { method: "POST" });
-      const result = (await res.json().catch(() => ({}))) as {
-        status?: string;
-        summary?: string;
-        error?: string;
-      };
-      if (!res.ok) {
-        throw new Error(result.error || result.summary || `Run failed (HTTP ${res.status})`);
-      }
-      if (result.status === "completed") {
-        await refreshHealth();
-      } else {
-        // skipped (e.g. Beehiiv not configured) or failed — surface the reason.
-        setHealthError(result.summary || result.error || "Run did not complete");
-      }
+      const result = (await res.json().catch(() => ({}))) as { status?: string; summary?: string; error?: string };
+      if (!res.ok) throw new Error(result.error || result.summary || `Run failed (HTTP ${res.status})`);
+      if (result.status === "completed") await refreshHealth();
+      else setHealthError(result.summary || result.error || "Run did not complete");
     } catch (e) {
       setHealthError(e instanceof Error ? e.message : "Run failed");
     } finally {
@@ -233,26 +207,33 @@ export default function UnifiedAnalyticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [analyticsRes, postsRes, healthRes] = await Promise.all([
+      const [analyticsRes, postsRes, sgPostsRes, healthRes] = await Promise.all([
         fetch("/api/integrations/analytics"),
         fetch("/api/integrations/beehiiv/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tool: "list_posts", params: { limit: 5, status: "confirmed" } }),
         }),
+        fetch("/api/integrations/supergrow/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: "get_post_performance", params: { limit: 5 } }),
+        }),
         fetch("/api/pipelines/health-report/status"),
       ]);
 
-      const analyticsData = await analyticsRes.json() as UnifiedAnalyticsPayload;
-      setPayload(analyticsData);
+      setPayload((await analyticsRes.json()) as UnifiedAnalyticsPayload);
 
       if (postsRes.ok) {
-        const pd = await postsRes.json() as { ok: boolean; data?: BeehiivPostsData };
-        if (pd.ok && pd.data) setPostsData(pd.data);
+        const pd = (await postsRes.json()) as { ok: boolean; data?: { posts?: BeehiivPostSummary[] } };
+        if (pd.ok) setPosts(pd.data?.posts ?? []);
       }
-
+      if (sgPostsRes.ok) {
+        const sd = (await sgPostsRes.json()) as { ok: boolean; data?: { posts?: SupergrowPostSummary[] } };
+        if (sd.ok) setSgPosts(sd.data?.posts ?? []);
+      }
       if (healthRes.ok) {
-        const hd = await healthRes.json() as { metrics?: HealthMetric[] };
+        const hd = (await healthRes.json()) as { metrics?: HealthMetric[] };
         setHealthMetrics(hd.metrics ?? []);
       }
     } catch (e) {
@@ -266,22 +247,13 @@ export default function UnifiedAnalyticsPage() {
 
   const beehiiv = payload?.platforms?.beehiiv;
   const supergrow = payload?.platforms?.supergrow;
-  const beehiivStats = beehiiv?.data as BeehiivStats | undefined;
-  const activeSubscribers = beehiivStats?.data?.total_active_subscriptions;
-  const totalSubscribers = beehiivStats?.data?.total_subscriptions;
-  const openRate = beehiivStats?.data?.average_open_rate;
-  const clickRate = beehiivStats?.data?.average_click_rate;
+  const beehiivStats = beehiiv?.data as BeehiivPublicationStats | undefined;
+  const sg = supergrow?.data as SupergrowAnalytics | undefined;
 
-  const posts = postsData?.data ?? [];
-  const topPost = posts.reduce<BeehiivPost | null>((best, p) => {
-    const rate = p.stats?.open_rate ?? 0;
-    return rate > (best?.stats?.open_rate ?? 0) ? p : best;
-  }, null);
-
-  const fmt = (n: number | undefined, suffix = "") =>
-    n != null ? `${(n * 100).toFixed(1)}%${suffix}` : "—";
-  const fmtNum = (n: number | undefined) =>
-    n != null ? n.toLocaleString() : "—";
+  const topPost = posts.reduce<BeehiivPostSummary | null>(
+    (best, p) => (p.openRate > (best?.openRate ?? 0) ? p : best),
+    null
+  );
 
   return (
     <div className={studioInner.pageRoot}>
@@ -297,12 +269,7 @@ export default function UnifiedAnalyticsPage() {
               Updated {new Date(payload.fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
             </span>
           )}
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            className={studioInner.btnSecondary}
-          >
+          <button type="button" onClick={() => void load()} disabled={loading} className={studioInner.btnSecondary}>
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Refresh
           </button>
@@ -320,13 +287,23 @@ export default function UnifiedAnalyticsPage() {
         </div>
       )}
 
-      {/* Metric rail */}
-      {beehiiv?.enabled && (
+      {/* Beehiiv metric rail */}
+      {beehiiv?.enabled && !beehiiv?.error && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <StatCard label="Active subscribers" value={fmtNum(beehiivStats?.activeSubscribers)} sub="Beehiiv" icon={<Users className="h-4 w-4" />} />
+          <StatCard label="Net new (4 wks)" value={fmtSigned(beehiivStats?.netSubscribers)} sub="Beehiiv" icon={<TrendingUp className="h-4 w-4" />} />
+          <StatCard label="Open rate (4 wks)" value={fmtPct(beehiivStats?.openRate)} sub="Beehiiv" icon={<Mail className="h-4 w-4" />} />
+          <StatCard label="Click rate (4 wks)" value={fmtPct(beehiivStats?.clickRate)} sub="Beehiiv" icon={<BarChart2 className="h-4 w-4" />} />
+        </div>
+      )}
+
+      {/* Supergrow metric rail */}
+      {supergrow?.enabled && !supergrow?.error && sg && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
-          <StatCard label="Active subscribers" value={fmtNum(activeSubscribers)} sub="Beehiiv" icon={<Users className="h-4 w-4" />} />
-          <StatCard label="Total subscribers" value={fmtNum(totalSubscribers)} sub="Beehiiv" icon={<TrendingUp className="h-4 w-4" />} />
-          <StatCard label="Avg open rate" value={fmt(openRate)} sub="Beehiiv · all time" icon={<Mail className="h-4 w-4" />} />
-          <StatCard label="Avg click rate" value={fmt(clickRate)} sub="Beehiiv · all time" icon={<BarChart2 className="h-4 w-4" />} />
+          <StatCard label="Followers" value={fmtNum(sg.followers?.current)} sub={`LinkedIn · ${fmtSigned(sg.followers?.totalChange)}`} icon={<Users className="h-4 w-4" />} />
+          <StatCard label="Impressions (30d)" value={fmtNum(sg.impressions?.total)} sub={`LinkedIn · ${sg.impressions?.trendDirection || "—"}`} icon={<Eye className="h-4 w-4" />} />
+          <StatCard label="Engagement rate" value={fmtPct(sg.engagement?.rate)} sub="LinkedIn" icon={<Heart className="h-4 w-4" />} />
+          <StatCard label="Reactions (30d)" value={fmtNum(sg.engagement?.reactions)} sub="LinkedIn" icon={<TrendingUp className="h-4 w-4" />} />
         </div>
       )}
 
@@ -352,41 +329,37 @@ export default function UnifiedAnalyticsPage() {
               <AlertCircle className="h-4 w-4 shrink-0" />
               {beehiiv.error}
             </div>
-          ) : (
-            <div>
-              {posts.length > 0 ? (
-                <div className="space-y-2">
-                  <p className={cn(studioInner.sectionLabel, "mb-3")}>Recent posts</p>
-                  {posts.map((post) => (
-                    <div
-                      key={post.id ?? post.subject}
-                      className={cn(
-                        studioInner.surfaceNested,
-                        "rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2",
-                        post.id === topPost?.id && "ring-1 ring-[#C8571E]/30"
-                      )}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-[#1F1A14] truncate">{post.subject ?? "Untitled"}</p>
-                        {post.id === topPost?.id && (
-                          <span className={cn(studioInner.tag, studioInner.tagOrange, "mt-1")}>Top performer</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-4 shrink-0 text-[11px] font-[family-name:var(--font-geist-mono)] text-[#6B5F4E]">
-                        <span>Open {fmt(post.stats?.open_rate)}</span>
-                        <span>Click {fmt(post.stats?.click_rate)}</span>
-                      </div>
-                    </div>
-                  ))}
+          ) : posts.length > 0 ? (
+            <div className="space-y-2">
+              <p className={cn(studioInner.sectionLabel, "mb-3")}>Recent posts</p>
+              {posts.map((post) => (
+                <div
+                  key={post.id || post.title}
+                  className={cn(
+                    studioInner.surfaceNested,
+                    "rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2",
+                    topPost && post.id === topPost.id && "ring-1 ring-[#C8571E]/30"
+                  )}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-[#1F1A14] truncate">{post.title}</p>
+                    {topPost && post.id === topPost.id && (
+                      <span className={cn(studioInner.tag, studioInner.tagOrange, "mt-1")}>Top performer</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4 shrink-0 text-[11px] font-[family-name:var(--font-geist-mono)] text-[#6B5F4E]">
+                    <span>Open {fmtPct(post.openRate)}</span>
+                    <span>Click {fmtPct(post.clickRate)}</span>
+                  </div>
                 </div>
-              ) : loading ? (
-                <div className="flex items-center gap-2 text-[#6B5F4E] text-sm py-4">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading posts…
-                </div>
-              ) : (
-                <p className={studioInner.body}>No published posts found.</p>
-              )}
+              ))}
             </div>
+          ) : loading ? (
+            <div className="flex items-center gap-2 text-[#6B5F4E] text-sm py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading posts…
+            </div>
+          ) : (
+            <p className={studioInner.body}>No published posts found.</p>
           )}
         </PlatformSection>
 
@@ -394,7 +367,8 @@ export default function UnifiedAnalyticsPage() {
         <PlatformSection name="Supergrow" enabled={supergrow?.enabled ?? false} platformId="supergrow">
           {!supergrow?.enabled ? (
             <p className={studioInner.body}>
-              Set <code className="font-mono text-[11px] bg-[#EBDFC5] px-1 rounded">SUPERGROW_API_KEY</code> to connect LinkedIn analytics.{" "}
+              Set <code className="font-mono text-[11px] bg-[#EBDFC5] px-1 rounded">SUPERGROW_MCP_SERVER_URL</code> (and{" "}
+              <code className="font-mono text-[11px] bg-[#EBDFC5] px-1 rounded">SUPERGROW_WORKSPACE_ID</code>) to connect LinkedIn analytics.{" "}
               <Link href="/integrations" className={studioInner.link}>Manage integrations →</Link>
             </p>
           ) : supergrow?.error ? (
@@ -403,7 +377,50 @@ export default function UnifiedAnalyticsPage() {
               {supergrow.error}
             </div>
           ) : (
-            <p className={studioInner.body}>LinkedIn data loaded. <Link href="/integrations/supergrow" className={studioInner.link}>View full dashboard →</Link></p>
+            <div className="space-y-4">
+              {sg?.profile?.profileUrl && (
+                <a href={sg.profile.profileUrl} target="_blank" rel="noopener noreferrer" className={cn(studioInner.body, "flex items-center gap-1 text-[11px] hover:underline")}>
+                  {sg.profile.name ?? "LinkedIn profile"} <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+              {sgPosts.length > 0 ? (
+                <div className="space-y-2">
+                  <p className={cn(studioInner.sectionLabel, "mb-3")}>Top posts by impressions</p>
+                  {sgPosts.map((post, i) => (
+                    <div
+                      key={post.id || i}
+                      className={cn(
+                        studioInner.surfaceNested,
+                        "rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2",
+                        i === 0 && "ring-1 ring-[#C8571E]/30"
+                      )}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-[#1F1A14] line-clamp-2">{post.content || "(no text)"}</p>
+                        {i === 0 && <span className={cn(studioInner.tag, studioInner.tagOrange, "mt-1")}>Top performer</span>}
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0 text-[11px] font-[family-name:var(--font-geist-mono)] text-[#6B5F4E]">
+                        <span className="inline-flex items-center gap-1"><Eye className="h-3 w-3" />{fmtNum(post.impressions)}</span>
+                        <span className="inline-flex items-center gap-1"><Heart className="h-3 w-3" />{fmtNum(post.reactions)}</span>
+                        <span>{fmtNum(post.comments)} comments</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : loading ? (
+                <div className="flex items-center gap-2 text-[#6B5F4E] text-sm py-4">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading LinkedIn posts…
+                </div>
+              ) : sg ? (
+                <p className={studioInner.body}>
+                  {sg.followers?.current != null
+                    ? `${fmtNum(sg.followers.current)} followers · ${fmtNum(sg.impressions?.total)} impressions (30d).`
+                    : "LinkedIn analytics loaded."}
+                </p>
+              ) : (
+                <p className={studioInner.body}>LinkedIn analytics loaded.</p>
+              )}
+            </div>
           )}
         </PlatformSection>
       </div>
