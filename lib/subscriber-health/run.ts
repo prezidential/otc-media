@@ -17,8 +17,9 @@ import {
   type MetricKey,
   type ReportMetric,
 } from "./kpi";
-import { gatherBeehiivMetrics } from "./beehiiv";
-import { isMcpEnabled } from "@/lib/integrations/mcp";
+import { gatherBeehiivMetrics, gatherBeehiivMetricsMcp, type BeehiivMetrics } from "./beehiiv";
+import { isMcpEnabled, mcpConfigWithToken } from "@/lib/integrations/mcp";
+import { getBeehiivAccessTokenForWorkspace } from "@/lib/integrations/beehiiv/oauth";
 import { formatReport, type ReportMetrics } from "./report";
 import {
   loadHistory,
@@ -57,6 +58,34 @@ export function resolveBeehiivConfig(workspaceId: string): BeehiivConfig | null 
 
 const KPIS = defaultKpis as KpiConfigMap;
 
+/**
+ * Gather Beehiiv metrics for a workspace, preferring its per-workspace OAuth token.
+ *
+ * The cron has no user session, so it resolves a service-role workspace token from
+ * `beehiiv_oauth_connections` (refreshing when stale) and routes the MCP call through
+ * it. When no OAuth connection exists (or refresh fails), it falls back to the static
+ * env credential path (`gatherBeehiivMetrics`), preserving prior behavior.
+ */
+export async function gatherWorkspaceBeehiivMetrics(
+  workspaceId: string,
+  supabase: ReturnType<typeof supabaseAdmin>,
+  beehiiv: BeehiivConfig
+): Promise<BeehiivMetrics> {
+  if (isMcpEnabled("beehiiv")) {
+    const token = await getBeehiivAccessTokenForWorkspace({
+      workspaceId,
+      supabase,
+      origin: process.env.CORNERSTONE_URL || undefined,
+    });
+    if (token) {
+      const config = mcpConfigWithToken("beehiiv", token);
+      if (config) return gatherBeehiivMetricsMcp(config, beehiiv.publicationId);
+    }
+  }
+  // No workspace OAuth token (or MCP off): static env path (MCP-with-env-token or REST).
+  return gatherBeehiivMetrics(beehiiv.apiKey, beehiiv.publicationId);
+}
+
 export async function runSubscriberHealth(options: {
   workspaceId: string;
   trigger: SubscriberHealthTrigger;
@@ -74,8 +103,8 @@ export async function runSubscriberHealth(options: {
   }
 
   try {
-    // Gathers via the Beehiiv MCP server when BEEHIIV_MCP_SERVER_URL is set, else REST.
-    const m = await gatherBeehiivMetrics(beehiiv.apiKey, beehiiv.publicationId);
+    // Prefer the workspace's OAuth token (cron has no session); fall back to env creds.
+    const m = await gatherWorkspaceBeehiivMetrics(workspaceId, supabase, beehiiv);
 
     const values: Record<MetricKey, number> = {
       weeklyNewSubs: m.weeklyNewSubs,
