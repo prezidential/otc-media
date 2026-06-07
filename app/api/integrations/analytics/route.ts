@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 import { getRegisteredPlugins } from "@/lib/integrations/registry";
 import type { UnifiedAnalyticsPayload, PlatformAnalyticsSnapshot } from "@/lib/integrations/types";
+import { requireWorkspace } from "@/lib/auth/session";
 
 // Side-effect: registers all plugins
 import "@/lib/integrations/beehiiv";
 import "@/lib/integrations/supergrow";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
+  const toolCtx = {
+    workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
+    supabase: ctx.supabase,
+    origin: new URL(req.url).origin,
+  };
+
   const plugins = getRegisteredPlugins();
   const platforms: Record<string, PlatformAnalyticsSnapshot> = {};
 
@@ -21,7 +31,7 @@ export async function GET() {
       // For Beehiiv: get_publication_stats. For Supergrow: get_linkedin_analytics.
       const overviewTool = plugin.tools[0];
       try {
-        const data = await plugin.callTool(overviewTool.name, {});
+        const data = await plugin.callTool(overviewTool.name, {}, toolCtx);
         platforms[plugin.id] = { enabled: true, name: plugin.name, data: data as Record<string, unknown> };
       } catch (err) {
         platforms[plugin.id] = {

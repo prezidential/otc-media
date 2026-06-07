@@ -1,6 +1,7 @@
 import { registerPlugin } from "@/lib/integrations/registry";
-import type { IntegrationPlugin, IntegrationTool } from "@/lib/integrations/types";
-import { getMcpConfig, withMcp, type McpCall } from "@/lib/integrations/mcp";
+import type { IntegrationPlugin, IntegrationTool, IntegrationToolContext } from "@/lib/integrations/types";
+import { getMcpConfig, withMcp, type McpCall, type McpConfig, type McpTransportMode } from "@/lib/integrations/mcp";
+import { getBeehiivAccessToken } from "./oauth";
 import {
   normalizePublicationStatsMcp,
   normalizePublicationStatsRest,
@@ -131,10 +132,36 @@ async function callRest(name: string, params: Record<string, unknown>): Promise<
   }
 }
 
-async function callTool(name: string, params: Record<string, unknown>): Promise<unknown> {
+async function callTool(
+  name: string,
+  params: Record<string, unknown>,
+  ctx?: IntegrationToolContext
+): Promise<unknown> {
+  const pubId = process.env.BEEHIIV_PUBLICATION_ID;
+  const mcpUrl = process.env.BEEHIIV_MCP_SERVER_URL;
+
+  // 1) Per-workspace OAuth token (preferred when connected) → MCP.
+  if (ctx && mcpUrl) {
+    const token = await getBeehiivAccessToken({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      supabase: ctx.supabase,
+      origin: ctx.origin,
+    }).catch(() => null);
+    if (token) {
+      if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
+      const cfg: McpConfig = {
+        url: mcpUrl,
+        headers: { Authorization: `Bearer ${token}` },
+        transport: (process.env.BEEHIIV_MCP_TRANSPORT as McpTransportMode) ?? "auto",
+      };
+      return withMcp(cfg, (call) => callMcp(name, params, call, pubId));
+    }
+  }
+
+  // 2) Static env token (BEEHIIV_MCP_TOKEN / BEEHIIV_API_KEY) → MCP.
   const mcp = getMcpConfig("beehiiv");
   if (mcp) {
-    const pubId = process.env.BEEHIIV_PUBLICATION_ID;
     if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
     return withMcp(mcp, (call) => callMcp(name, params, call, pubId));
   }

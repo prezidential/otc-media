@@ -142,7 +142,14 @@ async function callRest(name: string, params: Record<string, unknown>): Promise<
   }
 }
 
-async function callTool(name: string, params: Record<string, unknown>): Promise<unknown> {
+async function callTool(
+  name: string,
+  params: Record<string, unknown>,
+  _ctx?: import("@/lib/integrations/types").IntegrationToolContext
+): Promise<unknown> {
+  // Supergrow auth is the query-param api_key in SUPERGROW_MCP_SERVER_URL; no
+  // per-workspace OAuth, so ctx is currently unused.
+  void _ctx;
   if (!isEnabled()) throw new Error("Supergrow is not configured (set SUPERGROW_MCP_SERVER_URL or SUPERGROW_API_KEY)");
   const mcp = getMcpConfig("supergrow");
   if (mcp) return withMcp(mcp, (call) => callMcp(name, params, call));

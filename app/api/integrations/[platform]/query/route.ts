@@ -19,7 +19,7 @@ export async function POST(
 
   const ctx = await requireWorkspace();
   if (ctx instanceof Response) return ctx;
-  const { workspaceId } = ctx;
+  const { workspaceId, userId, supabase } = ctx;
 
   let body: Record<string, unknown>;
   try {
@@ -33,7 +33,12 @@ export async function POST(
     return NextResponse.json({ error: "query is required" }, { status: 400 });
   }
 
-  const result = await runIntegrationQuery(platform, query, workspaceId);
+  const result = await runIntegrationQuery(platform, query, workspaceId, {
+    workspaceId,
+    userId,
+    supabase,
+    origin: new URL(req.url).origin,
+  });
 
   if (!result.ok) {
     return NextResponse.json(result, { status: result.error?.includes("not found") ? 404 : 400 });

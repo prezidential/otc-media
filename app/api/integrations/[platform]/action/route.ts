@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { callIntegrationTool } from "@/lib/integrations/agent";
+import { requireWorkspace } from "@/lib/auth/session";
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ platform: string }> }
 ) {
   const { platform } = await params;
+
+  const ctx = await requireWorkspace();
+  if (ctx instanceof Response) return ctx;
 
   let body: Record<string, unknown>;
   try {
@@ -21,7 +25,12 @@ export async function POST(
     return NextResponse.json({ error: "tool is required" }, { status: 400 });
   }
 
-  const result = await callIntegrationTool(platform, tool, toolParams);
+  const result = await callIntegrationTool(platform, tool, toolParams, {
+    workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
+    supabase: ctx.supabase,
+    origin: new URL(req.url).origin,
+  });
 
   if (!result.ok) {
     return NextResponse.json(result, { status: result.error?.includes("not found") ? 404 : 400 });

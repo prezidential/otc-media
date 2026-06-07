@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { UnifiedAnalyticsPayload } from "@/lib/integrations/types";
 import type { BeehiivPublicationStats, BeehiivPostSummary } from "@/lib/integrations/beehiiv/normalize";
 import type { SupergrowAnalytics, SupergrowPostSummary } from "@/lib/integrations/supergrow/normalize";
+import { AskPanel, type AskPlatform } from "../_components/ask-panel";
 
 type HealthMetric = {
   key: string;
@@ -308,6 +309,16 @@ export default function UnifiedAnalyticsPage() {
       )}
 
       <div className="space-y-6">
+        {/* Ask your data — conversational, runs the MCP tools per platform */}
+        <AskPanel
+          platforms={(
+            [
+              { id: "beehiiv", name: "Beehiiv", suggested: ["Give me a performance overview", "What are my top posts by open rate?", "How many active subscribers do I have?"] },
+              { id: "supergrow", name: "Supergrow", suggested: ["Give me a LinkedIn performance overview", "What are my top posts by impressions?", "How are my followers trending?"] },
+            ] as AskPlatform[]
+          ).filter((p) => payload?.platforms?.[p.id]?.enabled)}
+        />
+
         {/* Subscriber Health (KPI status from the weekly pipeline) */}
         <SubscriberHealthSection
           metrics={healthMetrics}
@@ -325,9 +336,14 @@ export default function UnifiedAnalyticsPage() {
               <Link href="/integrations" className={studioInner.link}>Manage integrations →</Link>
             </p>
           ) : beehiiv?.error ? (
-            <div className="flex items-center gap-2 text-[#C8571E] text-sm">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {beehiiv.error}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-[#C8571E] text-sm">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {beehiiv.error}
+              </div>
+              <a href="/api/integrations/beehiiv/oauth/start" className={cn(studioInner.btnPrimary, "inline-flex w-fit")}>
+                Connect Beehiiv
+              </a>
             </div>
           ) : posts.length > 0 ? (
             <div className="space-y-2">
