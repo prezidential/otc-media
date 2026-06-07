@@ -64,6 +64,9 @@ BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
 # (DCR + PKCE) and stores per-workspace tokens. BEEHIIV_MCP_TOKEN/BEEHIIV_API_KEY
 # remain a static-Bearer fallback for servers that accept it.
 BEEHIIV_MCP_SERVER_URL=https://mcp.beehiiv.com/mcp
+# Required for Beehiiv MCP OAuth — app-layer key that encrypts stored tokens.
+# Any non-empty secret (a random 32+ byte value is best): openssl rand -base64 32
+BEEHIIV_TOKEN_ENC_KEY=your-random-token-encryption-key
 
 # Supergrow (LinkedIn analytics) — MCP-based. The MCP URL carries the api_key as a
 # query param, so no Bearer header is needed. SUPERGROW_WORKSPACE_ID avoids an extra
@@ -100,7 +103,7 @@ Notes:
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
 - **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin-crypto.sql` first (M2: bootstraps the pgsodium key + `linkedin_encrypt`/`linkedin_decrypt` helpers), then `lib/supabase/schema-linkedin.sql` (creates `linkedin_connections` + `linkedin_drafts`, the `linkedin_connections_decrypted` view, and the `upsert_linkedin_connection` RPC) in the Supabase SQL editor before connecting an account.
-- **Beehiiv MCP OAuth** — the Beehiiv MCP server uses OAuth 2.1 (DCR + PKCE), so a static API key is rejected (401). Apply `lib/supabase/schema-beehiiv-crypto.sql` first (pgsodium key + `beehiiv_encrypt`/`beehiiv_decrypt`), then `lib/supabase/schema-beehiiv-oauth.sql` (creates `beehiiv_oauth_connections` + decrypted view + `upsert_beehiiv_connection` RPC + the `mcp_oauth_clients` DCR registry) in the Supabase SQL editor. Then set `BEEHIIV_MCP_SERVER_URL` + `BEEHIIV_PUBLICATION_ID` and click **Connect Beehiiv** on `/integrations/beehiiv` (or the Analytics dashboard) to authorize. Tokens are encrypted at rest and auto-refreshed.
+- **Beehiiv MCP OAuth** — the Beehiiv MCP server uses OAuth 2.1 (DCR + PKCE), so a static API key is rejected (401). Apply `lib/supabase/schema-beehiiv-oauth.sql` in the Supabase SQL editor (creates `beehiiv_oauth_connections` + the `mcp_oauth_clients` DCR registry; idempotent). Set a random `BEEHIIV_TOKEN_ENC_KEY` (app-layer AES-256-GCM key for tokens at rest — e.g. `openssl rand -base64 32`), plus `BEEHIIV_MCP_SERVER_URL` + `BEEHIIV_PUBLICATION_ID`. Then click **Connect Beehiiv** on the Analytics dashboard to authorize; tokens are encrypted in the app layer and auto-refreshed.
 - **LinkedIn tokens are encrypted at rest (M2).** `access_token` and `refresh_token` in `linkedin_connections` are pgsodium AEAD-DET ciphertext (`bytea`); the `pgsodium` extension must be enabled in the Supabase project. App code only ever sees plaintext (via the `linkedin_connections_decrypted` view and the `upsert_linkedin_connection` RPC, wrapped by `lib/linkedin/store.ts`). Pre-M2 deploys auto-migrate on re-running `schema-linkedin.sql` — see the file header for ordering.
 - **OAuth sign-in providers (M2) are not configured in `.env.local`.** Google and LinkedIn-as-auth (`linkedin_oidc`) client IDs and secrets are stored in the Supabase dashboard under **Authentication → Providers**. See `docs/m2-oauth-runbook.md` for setup steps. These are separate from the M1 publishing-OAuth `LINKEDIN_*` env vars above.
 

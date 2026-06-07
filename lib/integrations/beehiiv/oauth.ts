@@ -158,6 +158,7 @@ export async function getBeehiivAccessToken(ctx: BeehiivOAuthCtx): Promise<strin
   const expiresAt = new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString();
   await upsertBeehiivConnection(ctx.supabase, {
     workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
     providerUserId: conn.provider_user_id,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? conn.refresh_token,

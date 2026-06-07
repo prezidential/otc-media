@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
 
   const res = await upsertBeehiivConnection(ctx.supabase, {
     workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
     providerUserId,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? null,

@@ -1,16 +1,17 @@
-// Persistence for beehiiv_oauth_connections (mirrors lib/linkedin/store.ts).
-// Tokens are encrypted at rest; this layer works in plaintext at the
-// upsert_beehiiv_connection RPC + beehiiv_oauth_connections_decrypted view boundary.
+// Persistence for beehiiv_oauth_connections.
+// Tokens are encrypted in the app layer (AES-256-GCM, lib/integrations/beehiiv/crypto.ts);
+// the DB stores opaque text ciphertext. RLS scopes rows to (workspace, user).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { encryptToken, decryptToken } from "./crypto";
 
 export type BeehiivConnectionRow = {
   id: string;
   workspace_id: string;
   user_id: string;
   provider_user_id: string;
-  access_token: string;
-  refresh_token: string | null;
+  access_token: string; // decrypted
+  refresh_token: string | null; // decrypted
   expires_at: string;
   scope: string;
   profile_json: Record<string, unknown>;
@@ -20,6 +21,7 @@ export type BeehiivConnectionRow = {
 
 export type UpsertBeehiivConnectionInput = {
   workspaceId: string;
+  userId: string;
   /** Beehiiv publication id (pub_...). */
   providerUserId: string;
   accessToken: string;
@@ -35,27 +37,37 @@ export async function upsertBeehiivConnection(
   supabase: SupabaseClient,
   input: UpsertBeehiivConnectionInput
 ): Promise<UpsertResult> {
-  const { data, error } = await supabase.rpc("upsert_beehiiv_connection", {
-    p_workspace_id: input.workspaceId,
-    p_provider_user_id: input.providerUserId,
-    p_access_token: input.accessToken,
-    p_refresh_token: input.refreshToken,
-    p_expires_at: input.expiresAt,
-    p_scope: input.scope,
-    p_profile_json: input.profileJson,
-  });
+  const { data, error } = await supabase
+    .from("beehiiv_oauth_connections")
+    .upsert(
+      {
+        workspace_id: input.workspaceId,
+        user_id: input.userId,
+        provider_user_id: input.providerUserId,
+        access_token: encryptToken(input.accessToken),
+        refresh_token: input.refreshToken ? encryptToken(input.refreshToken) : null,
+        expires_at: input.expiresAt,
+        scope: input.scope,
+        profile_json: input.profileJson,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "workspace_id,user_id,provider_user_id" }
+    )
+    .select("id")
+    .maybeSingle();
+
   if (error) return { ok: false, error: error.message };
-  if (typeof data !== "string") return { ok: false, error: "upsert_beehiiv_connection returned no id" };
-  return { ok: true, id: data };
+  if (!data?.id) return { ok: false, error: "beehiiv connection upsert returned no id" };
+  return { ok: true, id: data.id as string };
 }
 
-/** Most-recently-updated Beehiiv connection for (workspace, user), decrypted. */
+/** Most-recently-updated Beehiiv connection for (workspace, user), tokens decrypted. */
 export async function getBeehiivConnection(
   supabase: SupabaseClient,
   opts: { workspaceId: string; userId: string }
 ): Promise<BeehiivConnectionRow | null> {
   const { data, error } = await supabase
-    .from("beehiiv_oauth_connections_decrypted")
+    .from("beehiiv_oauth_connections")
     .select(
       "id, workspace_id, user_id, provider_user_id, access_token, refresh_token, expires_at, scope, profile_json, created_at, updated_at"
     )
@@ -66,5 +78,15 @@ export async function getBeehiivConnection(
     .maybeSingle();
 
   if (error || !data) return null;
-  return data as BeehiivConnectionRow;
+  try {
+    const row = data as BeehiivConnectionRow;
+    return {
+      ...row,
+      access_token: decryptToken(row.access_token),
+      refresh_token: row.refresh_token ? decryptToken(row.refresh_token) : null,
+    };
+  } catch (e) {
+    console.error("[beehiiv] token decrypt failed", e);
+    return null;
+  }
 }
