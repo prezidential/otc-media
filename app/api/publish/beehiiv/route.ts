@@ -1,20 +1,20 @@
 import { NextResponse } from "next/server";
 import { requireWorkspace } from "@/lib/auth/session";
-import { isBeehiivEnabled, createBeehiivDraft } from "@/lib/publish/beehiiv";
-import { renderDraftHtml } from "@/lib/publish/renderHtml";
-import type { DraftContentJson } from "@/lib/draft/content";
-import { getProviderFromEnv } from "@/lib/notifications/factory";
+import { runPublisher, type PublisherFailureCode } from "@/lib/agents/publisher";
+import { saveAgentRun } from "@/lib/agents/persistence";
+import type { AgentRunState } from "@/lib/agents/framework";
+
+const STATUS_BY_CODE: Record<PublisherFailureCode, number> = {
+  disabled: 403,
+  not_found: 404,
+  no_content: 400,
+  publish_failed: 500,
+};
 
 export async function POST(req: Request) {
-  if (!isBeehiivEnabled()) {
-    return NextResponse.json(
-      { error: "Beehiiv integration is not enabled. Set BEEHIIV_ENABLED=true in your environment." },
-      { status: 403 }
-    );
-  }
-
   const body = await req.json().catch(() => ({}));
   const draftId = (body.draftId ?? body.id) as string | undefined;
+  const triggeredBy = (body.triggered_by as string) ?? "manual";
 
   if (!draftId) {
     return NextResponse.json({ error: "draftId required" }, { status: 400 });
@@ -24,84 +24,44 @@ export async function POST(req: Request) {
   if (ctx instanceof Response) return ctx;
   const { supabase, workspaceId } = ctx;
 
-  const { data: draft, error } = await supabase
-    .from("issue_drafts")
-    .select("id, content_json")
-    .eq("id", draftId)
-    .eq("workspace_id", workspaceId)
-    .maybeSingle();
+  const startedAt = new Date().toISOString();
+  const result = await runPublisher({ workspaceId, supabase, draftId });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!draft) return NextResponse.json({ error: "Draft not found" }, { status: 404 });
-
-  const contentJson = draft.content_json as DraftContentJson | null;
-  if (!contentJson) {
-    return NextResponse.json({ error: "Draft has no structured content" }, { status: 400 });
-  }
-
-  const htmlContent = renderDraftHtml(contentJson);
-  const title = contentJson.title || "Untitled Issue";
-  const thesis = contentJson.metadata?.thesis;
-
-  try {
-    const result = await createBeehiivDraft({
-      title,
-      subtitle: thesis || undefined,
-      htmlContent,
-    });
-
-    const json = {
-      ok: true,
-      beehiiv: {
-        id: result.id,
-        title: result.title,
-        status: result.status,
-        web_url: result.web_url,
-      },
+  // Persist the Publisher stage to the runs dashboard (completes the
+  // Researcher → Writer → Editor → Publisher chain shown in /runs).
+  if (result.loggable) {
+    const runState: AgentRunState = {
+      agent_id: "publisher",
+      workspace_id: workspaceId,
+      run_id: crypto.randomUUID(),
+      status: result.ok ? "completed" : "failed",
+      context: { draft_id: draftId, ...(result.ok ? { beehiiv: result.beehiiv } : {}) },
+      decisions: result.decisions,
+      output_summary: result.summary,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      triggered_by: triggeredBy,
     };
-
-    const { data: approvalRow } = await supabase
-      .from("notification_approvals")
-      .select("id")
-      .eq("entity_id", draftId)
-      .eq("entity_type", "newsletter_draft")
-      .eq("status", "approved")
-      .maybeSingle();
-
-    if (approvalRow?.id) {
-      const { data: aceRun } = await supabase
-        .from("ace_runs")
-        .select("id")
-        .eq("approval_id", approvalRow.id)
-        .maybeSingle();
-
-      if (aceRun?.id) {
-        await supabase
-          .from("ace_runs")
-          .update({
-            status: "completed",
-            completed_at: new Date().toISOString(),
-            summary: `Published to Beehiiv: ${result.title}`,
-          })
-          .eq("id", aceRun.id as string);
-
-        try {
-          const provider = getProviderFromEnv();
-          await provider.sendStatusUpdate({
-            level: "success",
-            title: "Published",
-            body: result.title,
-            url: result.web_url || undefined,
-          });
-        } catch {
-          /* notifications optional */
-        }
-      }
-    }
-
-    return NextResponse.json(json);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    await saveAgentRun(runState);
   }
+
+  if (!result.ok) {
+    const status = STATUS_BY_CODE[result.code];
+    // Preserve legacy response shapes: pre-flight errors use { error },
+    // publish failures use { ok: false, error }.
+    if (result.code === "publish_failed") {
+      return NextResponse.json({ ok: false, error: result.error }, { status });
+    }
+    return NextResponse.json({ error: result.error }, { status });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    beehiiv: {
+      id: result.beehiiv.id,
+      title: result.beehiiv.title,
+      status: result.beehiiv.status,
+      web_url: result.beehiiv.web_url,
+    },
+  });
 }
