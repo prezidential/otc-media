@@ -117,12 +117,24 @@ export async function runSubscriberHealth(options: {
       cornerstoneUrl: process.env.CORNERSTONE_URL || undefined,
     });
 
-    await getNotificationProvider().sendMessage(message);
+    // Notification is best-effort — a missing/misconfigured channel (e.g. no
+    // TELEGRAM_* env) must NOT fail the run. Metrics are already persisted above.
+    let notified = true;
+    try {
+      await getNotificationProvider().sendMessage(message);
+    } catch (notifyErr) {
+      notified = false;
+      opsLog(
+        "subscriber_health.notify_skipped",
+        { workspaceId, error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr) },
+        "warn"
+      );
+    }
 
     const redCount = (Object.keys(metrics) as MetricKey[]).filter(
       (k) => metrics[k].status === "red"
     ).length;
-    const summary = `Week ${weekNumber}: ${redCount} red / ${Object.keys(metrics).length} metrics`;
+    const summary = `Week ${weekNumber}: ${redCount} red / ${Object.keys(metrics).length} metrics${notified ? "" : " (notification skipped — TELEGRAM_* not configured)"}`;
 
     await recordRun(supabase, workspaceId, trigger, "completed", summary);
     return { workspaceId, status: "completed", summary };
