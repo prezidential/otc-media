@@ -1,11 +1,11 @@
 # Cornerstone OS
-## System Specification v2.13
+## System Specification v2.14
 
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Supersedes: v2.12 (§3.18 — Analytics now LIVE via MCP: Beehiiv + Supergrow plugins route through `@modelcontextprotocol/sdk` (HTTP-first, SSE fallback) with per-plugin normalization to stable shapes; Supergrow analytics composed from get_followers + get_metrics + get_linkedin_accounts; `/integrations/analytics` renders both platforms + Subscriber Health)
-Prior: v2.11 (Subscriber Health Pipeline §3.17; Pluggable Integration Framework §3.18; newsletter draft quality — `last_word: string` replaces `dojo_checklist: string[]` across all draft surfaces; Brainstorm Hub MVP/M1 + implementation status corrections; agent execution plan added at `docs/agent-execution-plan-v1.md`)
+Supersedes: v2.13 (§3.17 — Subscriber Health is now implemented as a Vercel Cron / Next.js API pipeline with per-workspace opt-in, Supabase-backed KPI history, in-app manual run/status routes, and Beehiiv MCP OAuth token preference with static credential fallback)
+Prior: v2.12 (§3.18 — Analytics now LIVE via MCP: Beehiiv + Supergrow plugins route through `@modelcontextprotocol/sdk` (HTTP-first, SSE fallback) with per-plugin normalization to stable shapes; Supergrow analytics composed from get_followers + get_metrics + get_linkedin_accounts; `/integrations/analytics` renders both platforms + Subscriber Health)
 
 ---
 
@@ -1008,17 +1008,49 @@ Provider credentials live in the **Supabase dashboard → Authentication → Pro
 
 ---
 
-## 3.17 Subscriber Health Pipeline **[NEW in v2.12]**
+## 3.17 Subscriber Health Pipeline **[IMPLEMENTED in v2.14]**
 
 ### Purpose
 
-A standalone analytics pipeline that evaluates newsletter subscriber health against configurable KPI targets and delivers a structured Telegram report every Monday at 8 AM Eastern. It runs independently of the ACE pipeline — no agent loop, no approval gate — and is the creator's weekly heartbeat for distribution health.
+A standalone analytics pipeline that evaluates newsletter subscriber health against configurable KPI targets, stores the latest per-workspace KPI snapshot, and delivers a structured Telegram report every Monday. It runs independently of the ACE pipeline — no agent loop, no approval gate — and is the creator's weekly heartbeat for distribution health.
 
 ### Architecture
 
-**Type:** Standalone Node/TypeScript script (`pipelines/subscriber-health.ts`), not a Next.js API route.  
-**Trigger:** Railway cron — `0 13 * * 1` (13:00 UTC = 8 AM ET/EST; adjust to `0 12 * * 1` during EDT).  
-**Env vars:** Reuses `BEEHIIV_API_KEY`, `BEEHIIV_PUBLICATION_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — no new vars required.
+**Type:** Next.js API pipeline in `lib/subscriber-health/*`, not a standalone filesystem script.  
+**Scheduled trigger:** Vercel Cron calls `GET /api/pipelines/health-report` on `0 13 * * 1` (configured in `vercel.json`).  
+**Manual trigger:** Authenticated users can run the active workspace only through `POST /api/pipelines/health-report/run` (the "Run now" control on `/integrations/analytics`).  
+**Status read:** `GET /api/pipelines/health-report/status` returns the latest persisted KPI rows for the active workspace.  
+**Workspace scope:** The cron route uses `supabaseAdmin()` to fan out over `workspace_settings.subscriber_health_enabled = true`; the manual/status routes use `requireWorkspace()` and RLS.
+
+### Setup Runbook
+
+1. Apply `lib/supabase/schema-subscriber-health.sql` after the base `workspace_settings` table and `public.user_in_workspace(uuid)` helper exist. It adds `workspace_settings.subscriber_health_enabled` and `subscriber_health_history`.
+2. Opt in each workspace that should receive the weekly report:
+
+```sql
+INSERT INTO workspace_settings (workspace_id, subscriber_health_enabled)
+VALUES ('<workspace-uuid>', true)
+ON CONFLICT (workspace_id) DO UPDATE
+  SET subscriber_health_enabled = true;
+```
+
+3. Configure route/auth/env:
+   - `CRON_SECRET` — required by `GET|POST /api/pipelines/health-report`.
+   - `BEEHIIV_PUBLICATION_ID` — required for both MCP and REST metric collection.
+   - Beehiiv auth, in preference order:
+     1. `BEEHIIV_MCP_SERVER_URL` plus a workspace connection created by **Connect Beehiiv** (`/api/integrations/beehiiv/oauth/start`). The session-less cron reads the latest encrypted `beehiiv_oauth_connections` row for each workspace and refreshes near-expiry tokens.
+     2. `BEEHIIV_MCP_SERVER_URL` plus static `BEEHIIV_MCP_TOKEN` or `BEEHIIV_API_KEY` fallback.
+     3. `BEEHIIV_API_KEY` REST fallback when MCP is not configured.
+   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET` for `getNotificationProvider()`.
+   - Optional `CORNERSTONE_URL`; red reports include `/integrations/analytics` when set.
+4. Verify with a signed-in workspace by clicking **Run now** on `/integrations/analytics`, or by calling `POST /api/pipelines/health-report/run` with the browser's Supabase session cookies. Unauthenticated requests are rejected by `requireWorkspace()`.
+
+5. Verify the scheduled path with the cron secret:
+
+```bash
+curl -s -X POST https://<app>/api/pipelines/health-report \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
 
 ### KPI Configuration (`config/subscriber-kpis.json`)
 
@@ -1036,12 +1068,15 @@ A standalone analytics pipeline that evaluates newsletter subscriber health agai
 
 ### Beehiiv Data Sources
 
-| Endpoint | Data extracted |
-|----------|----------------|
-| `GET /publications/{id}/stats` | `total_active_subscriptions`, `paid_subscriptions`, churn signals |
-| `GET /publications/{id}/posts?status=confirmed&limit=3&order_by=publish_date&direction=desc` | Last 3 posts for engagement averages |
-| `GET /publications/{id}/posts/{postId}/stats` | Per-post `open_rate`, `click_rate` |
-| `GET /publications/{id}/subscriptions?status=active&limit=500` | New subs (filter client-side to last 7 days), referral attribution |
+`runSubscriberHealth()` resolves Beehiiv config per workspace, then `gatherWorkspaceBeehiivMetrics()` chooses the data path:
+
+| Mode | Source | Data extracted |
+|------|--------|----------------|
+| MCP + workspace OAuth | `mcpConfigWithToken("beehiiv", token)` then `gatherBeehiivMetricsMcp()` | `get_publication_stats(last_7_days)` for new subs/acquisition, `list_posts` + `get_post_stats` for last-3 engagement, `get_publication_stats(last_4_weeks)` for churn, `list_subscriptions(tier=paid)` for paid count |
+| MCP + static env token | `getMcpConfig("beehiiv")` via `gatherBeehiivMetrics()` | Same normalized metric contract as the OAuth MCP path |
+| REST fallback | Beehiiv API v2 with `BEEHIIV_API_KEY` | Publication stats, last 3 confirmed post stats, and the latest 500 active subscriptions filtered client-side to the last 7 days |
+
+All paths normalize rates to percentages and produce the same seven `BeehiivMetrics` values: `weeklyNewSubs`, `linkedInSourcedPercent`, `boostSourcedPercent`, `monthlyChurnRate`, `openRate`, `clickRate`, and `paidSubscribers`.
 
 ### Status Evaluation Logic
 
@@ -1055,9 +1090,9 @@ A standalone analytics pipeline that evaluates newsletter subscriber health agai
 - 🟡 `target < value <= warn`
 - 🔴 `value > warn`
 
-### Consecutive-Week Tracking (`data/kpi-history.json`)
+### Consecutive-Week Tracking (`subscriber_health_history`)
 
-Persistent JSON file stores `{ [metric]: { consecutiveWeeksBelow: number, lastStatus: string } }`. When a metric stays 🔴 for 3+ consecutive weeks, a `⚠️` warning line is appended below that metric in the Telegram message. The file is runtime state — tracked in `.gitignore` but initialized as `{}` in the repo.
+`subscriber_health_history` stores one row per `(workspace_id, metric)` with the latest value, ISO week, status, and `consecutive_weeks_below`. The cron writes through the service-role client; workspace members can read their own rows through RLS for the analytics panel. When a metric stays 🔴 for 3+ consecutive weeks, a `⚠️` warning line is appended below that metric in the Telegram message.
 
 ### Telegram Report Format
 
@@ -1084,12 +1119,31 @@ Paid subscribers: 18 🔴 (target: 25)
 
 | File | Purpose |
 |------|---------|
-| `pipelines/subscriber-health.ts` | Main pipeline script |
+| `app/api/pipelines/health-report/route.ts` | CRON_SECRET-guarded Vercel Cron entrypoint; iterates opted-in workspaces |
+| `app/api/pipelines/health-report/run/route.ts` | User-session manual run for the active workspace |
+| `app/api/pipelines/health-report/status/route.ts` | Active-workspace KPI snapshot for `/integrations/analytics` |
+| `lib/subscriber-health/run.ts` | Orchestrator: config resolution, metric collection, KPI evaluation, persistence, Telegram send, run audit |
+| `lib/subscriber-health/beehiiv.ts` | Beehiiv MCP/REST metric collectors and normalizers |
+| `lib/subscriber-health/history.ts` | Supabase-backed KPI history load/save helpers |
+| `lib/subscriber-health/kpi.ts` | Pure KPI status logic, metric labels, units, ISO week helper |
+| `lib/subscriber-health/report.ts` | Plain-text Telegram report formatter |
 | `config/subscriber-kpis.json` | KPI targets + warn thresholds |
-| `data/kpi-history.json` | Runtime consecutive-week state (gitignored after init) |
-| `__tests__/pipelines/subscriber-health.test.ts` | Unit tests (mocked fetch) |
+| `lib/supabase/schema-subscriber-health.sql` | Workspace opt-in flag, KPI history table, read policy |
+| `__tests__/api/health-report-*.test.ts` | Cron, manual-run, and status route tests |
+| `__tests__/lib/subscriber-health/*.test.ts` | Metric, history, report, Beehiiv, and OAuth-token preference tests |
 
-**Full implementation spec:** `docs/agent-execution-plan-v1.md` §Phase 1.
+### Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---------|--------------------|
+| `401 Unauthorized` from `/api/pipelines/health-report` | `CRON_SECRET` is missing or the request did not include `Authorization: Bearer $CRON_SECRET`. |
+| Cron returns `count: 0` | No rows have `workspace_settings.subscriber_health_enabled = true`, or the settings row does not exist for the workspace. |
+| Result status is `skipped` with `Beehiiv not configured for workspace` | `BEEHIIV_PUBLICATION_ID` is missing, or neither `BEEHIIV_API_KEY` nor `BEEHIIV_MCP_SERVER_URL` is configured. |
+| Beehiiv MCP returns auth errors in cron | Reconnect Beehiiv for the workspace. The cron prefers encrypted workspace OAuth tokens, but falls back to static env credentials if no token is available or refresh fails. |
+| Telegram send fails | Confirm `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET`; failures are recorded as `pipeline:subscriber-health` rows with `status = failed`. |
+| Analytics panel is empty | The pipeline has not successfully written `subscriber_health_history` for the active workspace yet; run the manual endpoint and then reload `/integrations/analytics`. |
+
+**Original planning spec:** `docs/agent-execution-plan-v1.md` §Phase 1. The shipped implementation supersedes the old standalone-script/Railway assumptions.
 
 ---
 
@@ -1270,7 +1324,7 @@ Stretch:
 | **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
 | **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
 | **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv (per-workspace OAuth: DCR+PKCE, pgsodium-encrypted tokens, auto-refresh) + Supergrow both live via MCP with REST fallback + per-plugin normalization; ctx-threaded `callTool`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health + a conversational Ask panel; `/integrations/[platform]` |
-| **Subscriber Health Pipeline** | **Roadmap** | §3.17 — `pipelines/subscriber-health.ts`; `config/subscriber-kpis.json`; Railway cron Mon 8 AM ET; see agent plan Phase 1 |
+| **Subscriber Health Pipeline** | **Implemented** | §3.17 — Vercel Cron `GET /api/pipelines/health-report`; manual/status routes under `/api/pipelines/health-report/*`; `lib/subscriber-health/*`; Supabase KPI history; Beehiiv OAuth/MCP preferred with static fallback |
 | **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
 | **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |
 | **LinkedIn Draft Engine** | **Roadmap** | §3.8 Phase 3 — generate/regenerate/publish endpoints; Issues LinkedIn tab; Leads channel selector; see agent plan Phase 5 |
@@ -1380,14 +1434,15 @@ Full spec in §3.3.
 
 ---
 
-### Phase 2E — Subscriber Health Pipeline **[NEW in v2.12]**
+### Phase 2E — Subscriber Health Pipeline **[Implemented in v2.14]**
 
 **Spec:** §3.17; **agent plan:** `docs/agent-execution-plan-v1.md` Phase 1.
 
-- **Standalone script** `pipelines/subscriber-health.ts` — no app server dependency
-- Config-driven KPIs in `config/subscriber-kpis.json`; consecutive-week state in `data/kpi-history.json`
-- Railway cron: Monday 8 AM ET
-- Beehiiv REST → 7-day stats → Telegram report with ✅/🟡/🔴 per metric
+- Vercel Cron `GET /api/pipelines/health-report` guarded by `CRON_SECRET`
+- Workspace opt-in via `workspace_settings.subscriber_health_enabled`
+- Config-driven KPIs in `config/subscriber-kpis.json`; consecutive-week state in `subscriber_health_history`
+- Beehiiv MCP/OAuth preferred with static MCP or REST fallback → 7-day stats → Telegram report with ✅/🟡/🔴 per metric
+- `/integrations/analytics` can run the active workspace manually and read the latest KPI snapshot
 
 ---
 
