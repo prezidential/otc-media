@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runCadenceIngest } from "@/lib/research/runCadenceIngest";
+import { summarizeHealth, type HealthRow } from "@/lib/dashboard/stats";
 
 const MAX_LIMIT = 50;
 
@@ -87,6 +88,59 @@ export async function brainstormListRecentDrafts(
   return { drafts: rows };
 }
 
+/**
+ * Audience health for the Brainstormer (§3.19 P1c) — grounds ideation in how the
+ * audience is actually responding. Reads the stored subscriber_health_history
+ * (written by the weekly health pipeline); no live API calls.
+ */
+export async function brainstormGetAudienceHealth(
+  supabase: SupabaseClient,
+  workspaceId: string
+): Promise<unknown> {
+  const { data, error } = await supabase
+    .from("subscriber_health_history")
+    .select("metric,last_value,last_status,consecutive_weeks_below,updated_at")
+    .eq("workspace_id", workspaceId);
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Array<{
+    metric: string;
+    last_value: number | null;
+    last_status: "green" | "yellow" | "red";
+    consecutive_weeks_below: number | null;
+    updated_at: string | null;
+  }>;
+  if (rows.length === 0) {
+    return {
+      available: false,
+      note: "No subscriber-health history yet. The weekly health report has not run for this workspace.",
+    };
+  }
+
+  const summary = summarizeHealth(
+    rows.map(
+      (r): HealthRow => ({
+        metric: r.metric,
+        last_status: r.last_status,
+        last_value: r.last_value,
+        updated_at: r.updated_at,
+      })
+    )
+  );
+  const metrics = rows.map((r) => ({
+    metric: r.metric,
+    value: r.last_value,
+    status: r.last_status,
+    weeks_below_target: r.consecutive_weeks_below ?? 0,
+  }));
+  return {
+    available: true,
+    summary,
+    metrics,
+    hint: "Ground ideas in how the audience is responding. Favor angles that could lift the red/yellow metrics (e.g. low click or rising churn).",
+  };
+}
+
 async function mergeSessionArtifact(
   supabase: SupabaseClient,
   workspaceId: string,
@@ -129,6 +183,9 @@ export async function executeBrainstormTool(
   }
   if (tool === "list_recent_drafts") {
     return brainstormListRecentDrafts(supabase, workspaceId, params);
+  }
+  if (tool === "get_audience_health") {
+    return brainstormGetAudienceHealth(supabase, workspaceId);
   }
 
   if (tool === "trigger_signal_ingest") {
