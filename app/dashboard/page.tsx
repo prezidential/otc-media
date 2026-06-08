@@ -3,12 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  Activity,
   ExternalLink,
+  FileText,
   Loader2,
+  MessageSquare,
   Plus,
   PenLine,
   Rss,
   Search,
+  Send,
   Sparkles,
 } from "lucide-react";
 import type { DashboardStatsPayload } from "@/lib/dashboard/stats";
@@ -328,6 +332,125 @@ export default function DashboardPage() {
               </div>
             </Link>
           ))}
+        </section>
+      )}
+
+      {/* Newsroom — the whole loop at a glance (§3.19 P1a) */}
+      {stats?.newsroom && (
+        <section className="mb-8">
+          <h2 className="font-[family-name:var(--font-instrument-serif)] text-2xl mb-4">Newsroom</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Brainstorms */}
+            <Link
+              href="/brainstorm"
+              className="rounded-xl border p-4 flex flex-col gap-2 transition-colors hover:bg-[#F5EFE4]/80"
+              style={{ borderColor: LINE, backgroundColor: PANEL, boxShadow: CARD_SHADOW }}
+            >
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-[family-name:var(--font-geist-mono)]" style={{ color: SUB }}>
+                <MessageSquare className="h-3.5 w-3.5" style={{ color: ACCENT }} />
+                Brainstorms
+              </div>
+              <div className="text-2xl font-semibold tabular-nums">{stats.newsroom.brainstorms.active}</div>
+              <div className="text-xs truncate" style={{ color: SUB }}>
+                {stats.newsroom.brainstorms.latest
+                  ? `Resume: ${stats.newsroom.brainstorms.latest.title}`
+                  : "Start a new session →"}
+              </div>
+            </Link>
+
+            {/* Drafts by status */}
+            <Link
+              href="/issues"
+              className="relative rounded-xl border p-4 flex flex-col gap-2 transition-colors hover:bg-[#F5EFE4]/80"
+              style={{ borderColor: LINE, backgroundColor: PANEL, boxShadow: CARD_SHADOW }}
+            >
+              {stats.newsroom.drafts.reviewed > 0 && (
+                <span
+                  className="absolute -top-2 right-2 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white"
+                  style={{ backgroundColor: ACCENT }}
+                >
+                  Needs you
+                </span>
+              )}
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-[family-name:var(--font-geist-mono)]" style={{ color: SUB }}>
+                <FileText className="h-3.5 w-3.5" style={{ color: ACCENT }} />
+                Drafts
+              </div>
+              <div className="text-2xl font-semibold tabular-nums">
+                {stats.newsroom.drafts.draft + stats.newsroom.drafts.reviewed}
+              </div>
+              <div className="text-xs" style={{ color: SUB }}>
+                {stats.newsroom.drafts.draft} draft · {stats.newsroom.drafts.reviewed} reviewed
+              </div>
+            </Link>
+
+            {/* Last published */}
+            <Link
+              href="/issues"
+              className="rounded-xl border p-4 flex flex-col gap-2 transition-colors hover:bg-[#F5EFE4]/80"
+              style={{ borderColor: LINE, backgroundColor: PANEL, boxShadow: CARD_SHADOW }}
+            >
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-[family-name:var(--font-geist-mono)]" style={{ color: SUB }}>
+                <Send className="h-3.5 w-3.5" style={{ color: ACCENT2 }} />
+                Last published
+              </div>
+              {stats.newsroom.lastPublished ? (
+                <>
+                  <div className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: INK }}>
+                    {stats.newsroom.lastPublished.title}
+                  </div>
+                  <div className="text-xs" style={{ color: SUB }}>
+                    {formatIngestAt(stats.newsroom.lastPublished.at)}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-2xl font-semibold tabular-nums">—</div>
+                  <div className="text-xs" style={{ color: SUB }}>Nothing published yet</div>
+                </>
+              )}
+            </Link>
+
+            {/* Subscriber health */}
+            <Link
+              href="/integrations/analytics"
+              className="rounded-xl border p-4 flex flex-col gap-2 transition-colors hover:bg-[#F5EFE4]/80"
+              style={{ borderColor: LINE, backgroundColor: PANEL, boxShadow: CARD_SHADOW }}
+            >
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-[family-name:var(--font-geist-mono)]" style={{ color: SUB }}>
+                <Activity className="h-3.5 w-3.5" style={{ color: ACCENT }} />
+                Subscriber health
+              </div>
+              {stats.newsroom.health ? (
+                <>
+                  <div className="flex items-center gap-2.5 text-sm font-semibold tabular-nums">
+                    <span className="inline-flex items-center gap-1" style={{ color: "#3F6B45" }}>
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#3F6B45" }} />
+                      {stats.newsroom.health.green}
+                    </span>
+                    <span className="inline-flex items-center gap-1" style={{ color: "#B7851B" }}>
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#D6A327" }} />
+                      {stats.newsroom.health.yellow}
+                    </span>
+                    <span className="inline-flex items-center gap-1" style={{ color: ACCENT }}>
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: ACCENT }} />
+                      {stats.newsroom.health.red}
+                    </span>
+                  </div>
+                  <div className="text-xs truncate" style={{ color: SUB }}>
+                    {stats.newsroom.health.worst && stats.newsroom.health.worst.status !== "green"
+                      ? `Watch: ${stats.newsroom.health.worst.metric}`
+                      : "All metrics healthy"}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-2xl font-semibold tabular-nums">—</div>
+                  <div className="text-xs" style={{ color: SUB }}>No health data yet</div>
+                </>
+              )}
+            </Link>
+          </div>
         </section>
       )}
 

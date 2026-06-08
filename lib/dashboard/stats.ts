@@ -1,6 +1,28 @@
 export type DashboardNeedsYou = "research" | "leads" | "issues" | "outlines" | null;
 
+/** Health rollup for the newsroom home (from subscriber_health_history). */
+export type NewsroomHealth = {
+  metrics: number;
+  red: number;
+  yellow: number;
+  green: number;
+  worst: { metric: string; status: "green" | "yellow" | "red"; value: number | null } | null;
+  updatedAt: string | null;
+};
+
+/**
+ * Newsroom status rollup (§3.19 P1a) — the whole creator loop at a glance:
+ * brainstorms in flight, drafts by status, last publish, and health.
+ */
+export type NewsroomSummary = {
+  brainstorms: { active: number; latest: { id: string; title: string; updatedAt: string } | null };
+  drafts: { draft: number; reviewed: number; published: number };
+  lastPublished: { id: string; title: string; at: string } | null;
+  health: NewsroomHealth | null;
+};
+
 export type DashboardStatsPayload = {
+  newsroom: NewsroomSummary;
   pipeline: {
     research: { count: number; sublabel: string };
     leads: { count: number; sublabel: string };
@@ -110,6 +132,49 @@ export function buildNudge(params: {
     primaryCta: { label: "Research console →", href: "/research" },
     secondaryLabel: "Snooze",
   };
+}
+
+/** A subscriber_health_history row (subset the dashboard needs). */
+export type HealthRow = {
+  metric: string;
+  last_status: "green" | "yellow" | "red";
+  last_value: number | null;
+  updated_at: string | null;
+};
+
+/**
+ * Summarize per-metric health rows into a single newsroom health rollup.
+ * `worst` is the lowest-status metric (red beats yellow beats green) so the
+ * home can surface the one thing most worth acting on. Returns null when there
+ * is no health history yet (the weekly cron has not run for this workspace).
+ */
+export function summarizeHealth(rows: HealthRow[]): NewsroomHealth | null {
+  if (!rows || rows.length === 0) return null;
+  const rank = { red: 0, yellow: 1, green: 2 } as const;
+  let red = 0;
+  let yellow = 0;
+  let green = 0;
+  let worst: NewsroomHealth["worst"] = null;
+  let updatedAt: string | null = null;
+  for (const r of rows) {
+    if (r.last_status === "red") red++;
+    else if (r.last_status === "yellow") yellow++;
+    else green++;
+    if (!worst || rank[r.last_status] < rank[worst.status]) {
+      worst = { metric: r.metric, status: r.last_status, value: r.last_value ?? null };
+    }
+    if (r.updated_at && (!updatedAt || r.updated_at > updatedAt)) updatedAt = r.updated_at;
+  }
+  return { metrics: rows.length, red, yellow, green, worst, updatedAt };
+}
+
+/** Pull a human title out of an issue draft's content_json, with a fallback. */
+export function draftTitle(contentJson: unknown, fallback = "Untitled issue"): string {
+  if (contentJson && typeof contentJson === "object" && "title" in contentJson) {
+    const t = (contentJson as { title?: unknown }).title;
+    if (typeof t === "string" && t.trim()) return t.trim();
+  }
+  return fallback;
 }
 
 export function lastIngestStale(finishedAt: string | null, startedAt: string | null): boolean {
