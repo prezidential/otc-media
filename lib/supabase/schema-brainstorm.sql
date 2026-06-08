@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS brainstorm_sessions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- §3.19 P1b: provenance for seeded sessions (signals → brainstorm, health → brainstorm).
+ALTER TABLE brainstorm_sessions
+  ADD COLUMN IF NOT EXISTS seed_signal_id uuid,
+  ADD COLUMN IF NOT EXISTS seed_source text;
+
 CREATE TABLE IF NOT EXISTS brainstorm_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,

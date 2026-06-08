@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings, Play, Heart, Eye } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, TrendingUp, Users, Mail, BarChart2, AlertCircle, Settings, Play, Heart, Eye, MessageSquare, FileText } from "lucide-react";
 import { PageHeader } from "../../components/page-header";
 import { studioInner } from "@/lib/studio/inner-classes";
 import { cn } from "@/lib/utils";
@@ -277,6 +277,15 @@ export default function UnifiedAnalyticsPage() {
           <Link href="/integrations" className={studioInner.btnSecondary}>
             <Settings className="h-3.5 w-3.5" />
             Manage
+          </Link>
+          {/* Close the loop: act on what the numbers say (§3.19 P1b). */}
+          <Link href="/brainstorm" className={studioInner.btnSecondary}>
+            <MessageSquare className="h-3.5 w-3.5" />
+            Brainstorm
+          </Link>
+          <Link href="/issues" className={studioInner.btnSecondary}>
+            <FileText className="h-3.5 w-3.5" />
+            Issues
           </Link>
         </div>
       </div>

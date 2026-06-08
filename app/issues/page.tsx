@@ -201,6 +201,20 @@ export default function IssuesPage() {
     }
   }
 
+  /** Load a specific draft by id (backs the ?draft=<id> deep link from Brainstorm). */
+  async function loadDraftById(id: string): Promise<boolean> {
+    const res = await fetch(`/api/issues/${encodeURIComponent(id)}`);
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => ({}));
+    if (data.id && (data.draft || data.content_json)) {
+      setDraftId(data.id);
+      setDraft(data.draft ?? "");
+      setContentJson(data.content_json ?? null);
+      return true;
+    }
+    return false;
+  }
+
   async function updateDraftStatus(id: string, status: string) {
     await fetch("/api/issues/update-status", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -445,10 +459,20 @@ export default function IssuesPage() {
 
   useEffect(() => {
     void loadBrandProfiles();
-    void loadLatestDraft();
     void loadDraftHistory();
     void loadPublishStatus();
     void loadContentOutlines();
+    // Deep link from Brainstorm: ?draft=<id> loads that specific draft; else latest.
+    const deepLinkId =
+      typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("draft") : null;
+    if (deepLinkId) {
+      void loadDraftById(deepLinkId).then((ok) => {
+        if (ok) setMessage("Loaded the draft you promoted from Brainstorm.");
+        else void loadLatestDraft();
+      });
+    } else {
+      void loadLatestDraft();
+    }
     // Intentional mount-only load; loaders close over latest setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
