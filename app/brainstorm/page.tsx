@@ -3,10 +3,13 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2, MessageSquarePlus, Send, Sparkles } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquarePlus, Sparkles } from "lucide-react";
 import { PageHeader } from "../components/page-header";
+import { Markdown } from "../components/markdown";
 import { cn } from "@/lib/utils";
 import { studioInner } from "@/lib/studio/inner-classes";
+
+type Pending = { user: string; assistant: string; phase: "thinking" | "streaming" };
 
 type SessionRow = {
   id: string;
@@ -31,6 +34,65 @@ type MsgRow = {
 
 type BrandRow = { id: string; name: string };
 
+function AssistantAvatar() {
+  return (
+    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#C8571E]/12">
+      <Sparkles className="h-4 w-4 text-[#C8571E]" />
+    </div>
+  );
+}
+
+function MessageBubble({
+  role,
+  content,
+  streaming,
+  toolUsed,
+}: {
+  role: string;
+  content: string;
+  streaming?: boolean;
+  toolUsed?: boolean;
+}) {
+  if (role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[#F0E7D4] px-4 py-2.5 text-[14px] leading-relaxed text-[#1F1A14]">
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-3">
+      <AssistantAvatar />
+      <div className="min-w-0 flex-1 pt-0.5 text-[14px] text-[#1F1A14]">
+        <Markdown text={content} />
+        {streaming && (
+          <span className="ml-0.5 inline-block h-[15px] w-[2px] translate-y-[3px] animate-pulse bg-[#C8571E]" />
+        )}
+        {toolUsed && (
+          <p className="mt-2 font-[family-name:var(--font-geist-mono)] text-[10px] text-[#9C8E78]">
+            used tools this turn
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantTyping() {
+  return (
+    <div className="flex gap-3">
+      <AssistantAvatar />
+      <div className="flex items-center gap-1 pt-2.5">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#9C8E78] [animation-delay:-0.3s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#9C8E78] [animation-delay:-0.15s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#9C8E78]" />
+      </div>
+    </div>
+  );
+}
+
 function BrainstormPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -48,12 +110,14 @@ function BrainstormPageInner() {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
-  const [streamEnabled, setStreamEnabled] = useState(false);
-  const [streamPreview, setStreamPreview] = useState("");
+  // Streaming is the default experience (smooth, Claude-like); non-stream is the fallback.
+  const [streamEnabled] = useState(true);
+  const [pending, setPending] = useState<Pending | null>(null);
   const [hubBusy, setHubBusy] = useState<"confirm" | "promote" | null>(null);
   const [promoteNotice, setPromoteNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const loadSessions = useCallback(async () => {
     setLoadingList(true);
@@ -169,7 +233,15 @@ function BrainstormPageInner() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending, streamPreview]);
+  }, [messages, sending, pending]);
+
+  // Auto-grow the composer with its content (up to the max-height in CSS).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [input]);
 
   async function newSession() {
     setError(null);
@@ -203,7 +275,7 @@ function BrainstormPageInner() {
     setInput("");
     setSending(true);
     setError(null);
-    setStreamPreview("");
+    setPending({ user: text, assistant: "", phase: "thinking" });
     try {
       if (streamEnabled) {
         const res = await fetch(`/api/brainstorm/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -218,15 +290,18 @@ function BrainstormPageInner() {
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
           setError((errBody as { error?: string }).error ?? `Error ${res.status}`);
+          setPending(null);
           return;
         }
         if (!res.body) {
           setError("Streaming response had no body");
+          setPending(null);
           return;
         }
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
+        let gotDone = false;
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -244,17 +319,21 @@ function BrainstormPageInner() {
               continue;
             }
             if (ev.type === "delta" && typeof ev.text === "string") {
-              setStreamPreview((p) => p + ev.text);
+              const t = ev.text;
+              setPending((p) => (p ? { ...p, assistant: p.assistant + t, phase: "streaming" } : p));
             }
             if (ev.type === "error") {
               setError(typeof ev.message === "string" ? ev.message : "Stream error");
             }
             if (ev.type === "done" && Array.isArray(ev.messages)) {
+              gotDone = true;
               setMessages(ev.messages);
-              setStreamPreview("");
+              setPending(null);
             }
           }
         }
+        if (!gotDone) await loadMessages(sessionId);
+        setPending(null);
         await loadSessions();
         await loadSessionDetail(sessionId);
       } else {
@@ -269,12 +348,17 @@ function BrainstormPageInner() {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setError((data as { error?: string }).error ?? `Error ${res.status}`);
+          setPending(null);
           return;
         }
         setMessages((data as { messages?: MsgRow[] }).messages ?? []);
+        setPending(null);
         await loadSessions();
         await loadSessionDetail(sessionId);
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Send failed");
+      setPending(null);
     } finally {
       setSending(false);
     }
@@ -349,7 +433,7 @@ function BrainstormPageInner() {
       <PageHeader
         variant="studio"
         title="Brainstorming"
-        description="Ideate with the Brainstormer: signals, ingest, manual signal proposals, saved artifacts, optional streaming, and promote to Issues (DraftObject)."
+        description="Think out loud with the Brainstormer. It draws on your signals, can pull in fresh research, and promotes the result straight to a draft."
       />
 
       {error && (
@@ -498,8 +582,7 @@ function BrainstormPageInner() {
             </div>
             {!pendingManual && !workingArtifact ? (
               <p className="mt-2 text-[11px] text-[#6B5F4E]">
-                Use tools <code className="font-mono text-[10px]">propose_manual_signal</code> and{" "}
-                <code className="font-mono text-[10px]">save_artifact_draft</code> in chat, then act here.
+                Save an outline in the chat, then promote it to a draft here.
               </p>
             ) : null}
             {promoteNotice ? (
@@ -526,68 +609,58 @@ function BrainstormPageInner() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-1 pr-2">
             {loadingMsgs ? (
               <div className="flex items-center gap-2 text-sm text-[#6B5F4E]">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading messages…
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
               </div>
-            ) : messages.length === 0 ? (
-              <p className="text-sm text-[#6B5F4E]">
-                Ask about angles, summarize signals, or explore a headline. Tools include{" "}
-                <code className="rounded bg-[#EBDFC5] px-1 font-mono text-[11px]">query_signals</code>,{" "}
-                <code className="rounded bg-[#EBDFC5] px-1 font-mono text-[11px]">get_signal</code>,{" "}
-                <code className="rounded bg-[#EBDFC5] px-1 font-mono text-[11px]">trigger_signal_ingest</code>, and more.
-              </p>
+            ) : messages.length === 0 && !pending ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 py-12 text-center">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#C8571E]/12">
+                  <Sparkles className="h-5 w-5 text-[#C8571E]" />
+                </div>
+                <p className="text-[15px] font-medium text-[#1F1A14]">What do you want to explore?</p>
+                <p className="max-w-sm text-[13px] leading-relaxed text-[#6B5F4E]">
+                  Riff on an angle, summarize your signals, or pull a thread. I can search your signals and pull in fresh research as we go.
+                </p>
+              </div>
             ) : (
-              messages
-                .filter((m) => m.role === "user" || m.role === "assistant")
-                .map((m) => (
-                  <div
-                    key={m.id}
-                    className={cn(
-                      "max-w-[min(100%,52rem)] rounded-xl border px-4 py-3 text-[14px] leading-relaxed",
-                      m.role === "user"
-                        ? "ml-auto border-[#E4D9C2] bg-[#F5EFE4] text-[#1F1A14]"
-                        : "border-[#E4D9C2] bg-[#FBF7EE] text-[#1F1A14]"
+              <>
+                {messages
+                  .filter((m) => m.role === "user" || m.role === "assistant")
+                  .map((m) => (
+                    <MessageBubble
+                      key={m.id}
+                      role={m.role}
+                      content={m.content}
+                      toolUsed={m.role === "assistant" && m.tool_calls != null}
+                    />
+                  ))}
+                {pending && (
+                  <>
+                    <MessageBubble role="user" content={pending.user} />
+                    {pending.phase === "thinking" ? (
+                      <AssistantTyping />
+                    ) : (
+                      <MessageBubble role="assistant" content={pending.assistant} streaming />
                     )}
-                  >
-                    <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">
-                      {m.role === "user" ? "You" : "Brainstormer"}
-                    </div>
-                    <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{m.content}</div>
-                    {m.role === "assistant" && m.tool_calls != null && (
-                      <p className="mt-2 border-t border-[#E4D9C2] pt-2 font-mono text-[10px] text-[#6B5F4E]">Tools used in this turn</p>
-                    )}
-                  </div>
-                ))
+                  </>
+                )}
+              </>
             )}
-            {streamPreview ? (
-              <div className="max-w-[min(100%,52rem)] rounded-xl border border-dashed border-[#C8571E]/40 bg-[#FFFCF5] px-4 py-3 text-[13px] leading-relaxed text-[#1F1A14]">
-                <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">Streaming…</div>
-                <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{streamPreview}</div>
-              </div>
-            ) : null}
             <div ref={bottomRef} />
           </div>
 
-          <div className="mt-4 border-t border-[#E4D9C2] pt-4">
-            <label className="mb-2 flex cursor-pointer items-center gap-2 text-[12px] text-[#6B5F4E]">
-              <input
-                type="checkbox"
-                checked={streamEnabled}
-                onChange={(e) => setStreamEnabled(e.target.checked)}
-                className="rounded border-[#E4D9C2]"
-              />
-              Stream assistant tokens (NDJSON; uses markdown finals)
-            </label>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="mt-4">
+            <div className="flex items-end gap-2 rounded-2xl border border-[#E4D9C2] bg-[#FFFCF6] px-3 py-2 transition-colors focus-within:border-[#C8571E]/50 focus-within:ring-1 focus-within:ring-[#C8571E]/25">
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Message… (Shift+Enter for newline)"
-                rows={3}
-                disabled={!sessionId || sending}
-                className={cn(studioInner.textarea, "min-h-[88px] flex-1")}
+                placeholder="Message the Brainstormer…"
+                rows={1}
+                disabled={!sessionId}
+                className="max-h-[200px] min-h-[28px] flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-[#1F1A14] outline-none placeholder:text-[#9C8E78]"
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -599,19 +672,13 @@ function BrainstormPageInner() {
                 type="button"
                 disabled={!sessionId || sending || !input.trim()}
                 onClick={() => void sendMessage()}
-                className={cn(studioInner.btnPrimary, "shrink-0 self-stretch sm:self-auto")}
+                aria-label="Send"
+                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#C8571E] text-white transition-opacity disabled:opacity-40"
               >
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                Send
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
               </button>
             </div>
-            <p className="mt-2 text-[11px] text-[#6B5F4E]">
-              Configure <code className="font-mono text-[10px]">LLM_BRAINSTORM</code> like other roles in README.{" "}
-              <Link href="/issues" className={studioInner.link}>
-                Issues
-              </Link>{" "}
-              lists promoted drafts.
-            </p>
+            <p className="mt-1.5 px-1 text-[11px] text-[#9C8E78]">Enter to send · Shift+Enter for a new line</p>
           </div>
         </div>
       </div>
@@ -625,7 +692,7 @@ function BrainstormPageFallback() {
       <PageHeader
         variant="studio"
         title="Brainstorming"
-        description="Ideate with the Brainstormer: signals, ingest, manual signal proposals, saved artifacts, optional streaming, and promote to Issues (DraftObject)."
+        description="Think out loud with the Brainstormer. It draws on your signals, can pull in fresh research, and promotes the result straight to a draft."
       />
       <div className={cn(studioInner.card, "flex items-center gap-2 p-6 text-sm text-[#6B5F4E]")}>
         <Loader2 className="h-5 w-5 animate-spin" />
