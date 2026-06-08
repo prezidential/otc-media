@@ -680,6 +680,16 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center">
+                  {s.id && pState !== "ok" && (
+                    <Link
+                      href={`/brainstorm?signalId=${encodeURIComponent(s.id)}`}
+                      className="rounded-lg border px-3 py-2 text-xs font-semibold inline-flex items-center gap-1 transition-colors hover:bg-[#F5EFE4]/80"
+                      style={{ borderColor: LINE, color: SUB }}
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      Brainstorm
+                    </Link>
+                  )}
                   {pState === "ok" && (
                     <span className="text-xs font-medium" style={{ color: ACCENT2 }}>
                       Added to leads ·{" "}

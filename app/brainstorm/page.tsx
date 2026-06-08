@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, MessageSquarePlus, Send, Sparkles } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
@@ -33,6 +33,7 @@ type BrandRow = { id: string; name: string };
 
 function BrainstormPageInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const urlSignalId = searchParams.get("signalId")?.trim() ?? "";
 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -178,6 +179,7 @@ function BrainstormPageInner() {
       body: JSON.stringify({
         title: "Brainstorm",
         ...(brandId ? { brandProfileId: brandId } : {}),
+        ...(urlSignalId ? { seedSignalId: urlSignalId, seedSource: "signal" } : {}),
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -332,7 +334,10 @@ function BrainstormPageInner() {
       const draftId = (data as { draftId?: string }).draftId;
       await loadSessionDetail(sessionId);
       if (draftId) {
-        setPromoteNotice(`Draft saved. Pick it from history on Issues (id starts with ${draftId.slice(0, 8)}…).`);
+        setPromoteNotice("Draft created. Opening it in Issues…");
+        router.push(`/issues?draft=${encodeURIComponent(draftId)}`);
+      } else {
+        setPromoteNotice("Draft saved. Find it in history on Issues.");
       }
     } finally {
       setHubBusy(null);
