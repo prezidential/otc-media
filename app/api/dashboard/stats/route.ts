@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { requireWorkspace } from "@/lib/auth/session";
 import {
   buildNudge,
+  draftTitle,
   greetingParts,
   lastIngestStale,
   pickNeedsYou,
+  summarizeHealth,
   type DashboardStatsPayload,
+  type HealthRow,
+  type NewsroomSummary,
 } from "@/lib/dashboard/stats";
 
 export async function GET() {
@@ -106,7 +110,90 @@ export async function GET() {
     staleResearch,
   });
 
+  // --- Newsroom rollup (§3.19 P1a): the whole loop at a glance. ---
+  const since14d = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const [
+    brainstormActiveRes,
+    brainstormLatestRes,
+    draftOnlyRes,
+    reviewedRes,
+    publishedCountRes,
+    lastPublishedRes,
+    healthRes,
+  ] = await Promise.all([
+    supabase
+      .from("brainstorm_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", workspaceId)
+      .gte("updated_at", since14d),
+    supabase
+      .from("brainstorm_sessions")
+      .select("id,title,updated_at")
+      .eq("workspace_id", workspaceId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("issue_drafts")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", workspaceId)
+      .or("status.is.null,status.eq.draft"),
+    supabase
+      .from("issue_drafts")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", workspaceId)
+      .eq("status", "reviewed"),
+    supabase
+      .from("issue_drafts")
+      .select("id", { count: "exact", head: true })
+      .eq("workspace_id", workspaceId)
+      .eq("status", "published"),
+    supabase
+      .from("issue_drafts")
+      .select("id,content_json,created_at")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "published")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("subscriber_health_history")
+      .select("metric,last_status,last_value,updated_at")
+      .eq("workspace_id", workspaceId),
+  ]);
+
+  const latestBrainstorm = brainstormLatestRes.data;
+  const lastPublished = lastPublishedRes.data;
+  const newsroom: NewsroomSummary = {
+    brainstorms: {
+      active: brainstormActiveRes.error ? 0 : brainstormActiveRes.count ?? 0,
+      latest:
+        latestBrainstorm && typeof latestBrainstorm.id === "string"
+          ? {
+              id: latestBrainstorm.id,
+              title: (latestBrainstorm.title as string) || "Brainstorm",
+              updatedAt: latestBrainstorm.updated_at as string,
+            }
+          : null,
+    },
+    drafts: {
+      draft: draftOnlyRes.error ? 0 : draftOnlyRes.count ?? 0,
+      reviewed: reviewedRes.error ? 0 : reviewedRes.count ?? 0,
+      published: publishedCountRes.error ? 0 : publishedCountRes.count ?? 0,
+    },
+    lastPublished:
+      lastPublished && typeof lastPublished.id === "string"
+        ? {
+            id: lastPublished.id,
+            title: draftTitle(lastPublished.content_json),
+            at: lastPublished.created_at as string,
+          }
+        : null,
+    health: healthRes.error ? null : summarizeHealth((healthRes.data ?? []) as HealthRow[]),
+  };
+
   const payload: DashboardStatsPayload = {
+    newsroom,
     pipeline: {
       research: { count: researchCount, sublabel: "signals" },
       leads: { count: leadsPending, sublabel: "to approve" },
