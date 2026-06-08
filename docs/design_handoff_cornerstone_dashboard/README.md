@@ -1,6 +1,6 @@
 # Handoff: Cornerstone OS — Dashboard (Studio Direction)
 
-**Canonical product spec:** [`../cornerstone-system-spec-v2.md`](../cornerstone-system-spec-v2.md) **§3.15** (v2.8) — Studio dashboard UX contract. This folder remains the **visual and interaction reference** (tokens, layout, components, mock flows).
+**Canonical product spec:** [`../cornerstone-system-spec.md`](../cornerstone-system-spec.md) **§3.15** (v2.8) — Studio dashboard UX contract. This folder remains the **visual and interaction reference** (tokens, layout, components, mock flows).
 
 ## Overview
 

@@ -3,7 +3,7 @@
 ### For Cursor Agent Execution
 
 **Owner:** OnTheCorner Media  
-**Base system (canonical narrative):** Cornerstone OS **v2.8** — [`docs/cornerstone-system-spec-v2.md`](cornerstone-system-spec-v2.md) **§3.14**  
+**Base system (canonical narrative):** Cornerstone OS **v2.8** — [`docs/cornerstone-system-spec.md`](cornerstone-system-spec.md) **§3.14**  
 **This document:** step-by-step build order, TypeScript sketches, Telegram behavior, env vars, and test matrix — use alongside the system spec.  
 **Status:** Ready for implementation  
 **Deployment target:** Railway (cron + webhook URLs)
@@ -785,4 +785,4 @@ The following architectural decisions ensure Phase 1 does not create SaaS migrat
 ---
 
 *Cornerstone OS ACE Phase 1 Spec — OnTheCorner Media*  
-*System spec: Cornerstone OS v2.8 (`docs/cornerstone-system-spec-v2.md`)*
+*System spec: Cornerstone OS v2.8 (`docs/cornerstone-system-spec.md`)*
