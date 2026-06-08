@@ -2,7 +2,7 @@
 
 **Owner:** OnTheCorner Media  
 **Audience:** Claude Code agents executing autonomous build phases  
-**System spec:** `docs/cornerstone-system-spec-v2.md`  
+**System spec:** `docs/cornerstone-system-spec.md`  
 **Status:** Active  
 **Last updated:** 2026-06-04  
 
@@ -13,7 +13,7 @@
 Each phase is a standalone, agent-executable unit of work. An agent assigned to a phase should:
 
 1. Read this section **in full** before writing any code
-2. Read the referenced spec sections (`§3.x`) in `docs/cornerstone-system-spec-v2.md`
+2. Read the referenced spec sections (`§3.x`) in `docs/cornerstone-system-spec.md`
 3. Run the listed pre-flight commands to understand current state
 4. Implement in the exact file order listed (dependencies matter)
 5. Run the verification commands before declaring done
@@ -949,4 +949,4 @@ __tests__/lib/blog-content.test.ts
 ---
 
 *Cornerstone OS Agent Execution Plan v1 — OnTheCorner Media*  
-*System spec: Cornerstone OS v2.12 (`docs/cornerstone-system-spec-v2.md`)*
+*System spec: Cornerstone OS v2.12 (`docs/cornerstone-system-spec.md`)*

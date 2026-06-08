@@ -274,7 +274,7 @@ docs/                    # System specification (v2.3)
 
 ## Architecture
 
-See [`docs/cornerstone-system-spec-v2.md`](docs/cornerstone-system-spec-v2.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
 
 ## Content Outlines Runbook
 

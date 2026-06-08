@@ -16,7 +16,7 @@ import { cookies } from "next/headers";
  *
  * The ESLint rule `no-restricted-imports` (see `eslint.config.mjs`) forbids importing
  * `supabaseAdmin` from anywhere outside the allowlist documented in
- * `docs/cornerstone-system-spec-v2.md` §3.16.
+ * `docs/cornerstone-system-spec.md` §3.16.
  */
 
 export function supabaseAdmin(): SupabaseClient {
