@@ -120,6 +120,9 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadStats();
     void loadSignals();
+    // Refresh the post-performance cache in the background (§3.19 P1c) so the
+    // Brainstormer's "themes that resonated" stays current. Fire-and-forget.
+    void fetch("/api/analytics/sync-posts", { method: "POST" }).catch(() => {});
   }, [loadStats, loadSignals]);
 
   async function runIngest() {
