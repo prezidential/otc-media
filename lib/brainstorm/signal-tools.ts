@@ -141,6 +141,49 @@ export async function brainstormGetAudienceHealth(
   };
 }
 
+/**
+ * Top-performing recent posts for the Brainstormer (§3.19 P1c) — grounds ideation
+ * in what actually converted. Reads the post_performance cache (refreshed by the
+ * sync route), ranked by click rate (the action signal). No live API call.
+ */
+export async function brainstormGetTopThemes(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
+  const limit = Math.min(10, Math.max(1, Number(params.limit) || 5));
+  const { data, error } = await supabase
+    .from("post_performance")
+    .select("external_post_id,title,open_rate,click_rate,published_at")
+    .eq("workspace_id", workspaceId)
+    .order("click_rate", { ascending: false, nullsFirst: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Array<{
+    title: string;
+    open_rate: number | null;
+    click_rate: number | null;
+    published_at: string | null;
+  }>;
+  if (rows.length === 0) {
+    return {
+      available: false,
+      note: "No post performance cached yet. Open Analytics or the dashboard to refresh it, then try again.",
+    };
+  }
+  return {
+    available: true,
+    top_posts: rows.map((r) => ({
+      title: r.title,
+      open_rate: r.open_rate,
+      click_rate: r.click_rate,
+      published_at: r.published_at,
+    })),
+    hint: "These are the creator's best-performing recent posts by click rate. Pull on the angles/formats that worked; avoid repeating ones that didn't.",
+  };
+}
+
 async function mergeSessionArtifact(
   supabase: SupabaseClient,
   workspaceId: string,
@@ -186,6 +229,9 @@ export async function executeBrainstormTool(
   }
   if (tool === "get_audience_health") {
     return brainstormGetAudienceHealth(supabase, workspaceId);
+  }
+  if (tool === "get_top_performing_themes") {
+    return brainstormGetTopThemes(supabase, workspaceId, params);
   }
 
   if (tool === "trigger_signal_ingest") {
