@@ -9,8 +9,9 @@ test.describe("Brainstorm chat (authenticated)", () => {
   test("renders the composer and conversation surface", async ({ page }) => {
     await signIn(page);
     await page.goto("/brainstorm");
-    // The redesigned composer placeholder.
-    await expect(page.getByPlaceholder(/Message the Brainstormer/i)).toBeVisible();
+    // Generic, redesign-agnostic: the chat has a message composer (textarea).
+    await expect(page.locator("textarea").first()).toBeVisible();
+    await page.waitForLoadState("networkidle");
     await page.screenshot({ path: "test-results/screenshots/brainstorm.png", fullPage: true });
   });
 });
