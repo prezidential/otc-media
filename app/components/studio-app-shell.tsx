@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DashboardStatsPayload } from "@/lib/dashboard/stats";
-import { STUDIO_NAV } from "@/lib/studio/nav";
+import { STUDIO_NAV, STUDIO_NAV_SECTIONS } from "@/lib/studio/nav";
 import { StudioUIProvider } from "./studio-ui-context";
 import { StudioCommandPalette } from "./studio-command-palette";
 
@@ -24,19 +24,31 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-const BADGE_KEYS = ["signalsIngested24h", "leadsToApprove", "issuesDrafting"] as const;
+type BadgeKey = "signalsIngested24h" | "leadsToApprove" | "issuesDrafting";
 
-const NAV: { href: string; label: string; badgeKey?: (typeof BADGE_KEYS)[number] }[] = STUDIO_NAV.map((item) => {
-  const badgeKey: (typeof BADGE_KEYS)[number] | undefined =
-    item.href === "/signals"
-      ? "signalsIngested24h"
-      : item.href === "/leads"
-        ? "leadsToApprove"
-        : item.href === "/issues"
-          ? "issuesDrafting"
-          : undefined;
+type NavLink = { href: string; label: string; badgeKey?: BadgeKey };
+
+function badgeKeyFor(href: string): BadgeKey | undefined {
+  return href === "/signals"
+    ? "signalsIngested24h"
+    : href === "/leads"
+      ? "leadsToApprove"
+      : href === "/issues"
+        ? "issuesDrafting"
+        : undefined;
+}
+
+function toNavLink(item: { href: string; label: string }): NavLink {
+  const badgeKey = badgeKeyFor(item.href);
   return { href: item.href, label: item.label, ...(badgeKey ? { badgeKey } : {}) };
-});
+}
+
+// Flat (loop spine first) for the mobile pill nav; sectioned for the sidebar.
+const NAV: NavLink[] = STUDIO_NAV.map(toNavLink);
+const NAV_SECTIONS: { label: string | null; items: NavLink[] }[] = STUDIO_NAV_SECTIONS.map((sec) => ({
+  label: sec.label,
+  items: sec.items.map(toNavLink),
+}));
 
 type MeWorkspace = {
   id: string;
@@ -149,44 +161,55 @@ export function StudioAppShell({ children }: { children: React.ReactNode }) {
             </div>
           </Link>
         </div>
-        <nav className="flex-1 p-4 space-y-1">
-          {NAV.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-            const isAceItem = item.href === "/ace";
-            const badge =
-              item.badgeKey && s && typeof s[item.badgeKey] === "number" && s[item.badgeKey] > 0
-                ? (s[item.badgeKey] as number)
-                : null;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors",
-                  isAceItem && active
-                    ? "bg-[#1F1A14] text-[#F5EFE4] border border-[#2C2318] relative"
-                    : active
-                      ? "bg-[#EBDFC5] text-[#1A1A1A] font-medium border border-[#E4D9C2]"
-                      : "text-[#6B6B6B] hover:bg-[#FBF7EE]/60 hover:text-[#1A1A1A]"
-                )}
-              >
-                <span className="flex items-center gap-2">
-                  {isAceItem && active && (
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E8A24A] opacity-60" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E8A24A]" />
-                    </span>
-                  )}
-                  {item.label}
-                </span>
-                {badge != null && !isAceItem && (
-                  <span className="font-[family-name:var(--font-geist-mono)] text-[11px] text-[#6B5F4E] tabular-nums">
-                    {badge > 99 ? "99+" : badge}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 overflow-y-auto p-4">
+          {NAV_SECTIONS.map((section, si) => (
+            <div key={section.label ?? `spine-${si}`} className={si > 0 ? "mt-4" : ""}>
+              {section.label && (
+                <div className="px-3 pb-1.5 text-[10px] font-[family-name:var(--font-geist-mono)] uppercase tracking-widest text-[#9C8E78]">
+                  {section.label}
+                </div>
+              )}
+              <div className="space-y-1">
+                {section.items.map((item) => {
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  const isAceItem = item.href === "/ace";
+                  const badge =
+                    item.badgeKey && s && typeof s[item.badgeKey] === "number" && s[item.badgeKey] > 0
+                      ? (s[item.badgeKey] as number)
+                      : null;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        "flex items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors",
+                        isAceItem && active
+                          ? "bg-[#1F1A14] text-[#F5EFE4] border border-[#2C2318] relative"
+                          : active
+                            ? "bg-[#EBDFC5] text-[#1A1A1A] font-medium border border-[#E4D9C2]"
+                            : "text-[#6B6B6B] hover:bg-[#FBF7EE]/60 hover:text-[#1A1A1A]"
+                      )}
+                    >
+                      <span className="flex items-center gap-2">
+                        {isAceItem && active && (
+                          <span className="relative flex h-2 w-2">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E8A24A] opacity-60" />
+                            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E8A24A]" />
+                          </span>
+                        )}
+                        {item.label}
+                      </span>
+                      {badge != null && !isAceItem && (
+                        <span className="font-[family-name:var(--font-geist-mono)] text-[11px] text-[#6B5F4E] tabular-nums">
+                          {badge > 99 ? "99+" : badge}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
         <div className="p-4 border-t border-[#E8E0D4] space-y-1">
           <div className="text-[10px] font-[family-name:var(--font-geist-mono)] uppercase tracking-widest text-[#6B6B6B]">

@@ -517,83 +517,80 @@ function BrainstormPageInner() {
             Chat
           </div>
 
-          <div className="mb-4 rounded-lg border border-[#E4D9C2] bg-[#FBF7EE] px-3 py-3 text-[12px] text-[#1F1A14]">
-            <div className="font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">Session hub</div>
-            {pendingManual && (
-              <div className="mt-2 rounded-md border border-[#C8571E]/20 bg-[#F5EFE4] px-2 py-2">
-                <p className="font-medium">{pendingManual.title ?? "(untitled)"}</p>
-                {pendingManual.url ? <p className="mt-1 text-[11px] text-[#6B5F4E]">{pendingManual.url}</p> : null}
-                {pendingManual.notes ? (
-                  <p className="mt-1 whitespace-pre-wrap text-[11px] text-[#6B5F4E]">{pendingManual.notes}</p>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={hubBusy !== null}
-                  onClick={() => void confirmManualSignal()}
-                  className={cn(studioInner.btnPrimary, "mt-2 px-3 py-1.5 text-xs")}
-                >
-                  {hubBusy === "confirm" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                  Insert signal
-                </button>
-              </div>
-            )}
-            {workingArtifact && (
-              <div className="mt-2 text-[11px] text-[#6B5F4E]">
-                <span className="font-medium text-[#1F1A14]">Saved artifact</span>
-                {typeof workingArtifact.thesis === "string" ? (
-                  <p className="mt-1 line-clamp-2">{workingArtifact.thesis}</p>
-                ) : null}
-                {typeof workingArtifact.working_outline === "string" ? (
-                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap">{workingArtifact.working_outline}</p>
-                ) : null}
-              </div>
-            )}
-            <div className="mt-3 flex flex-col gap-2 border-t border-[#E4D9C2] pt-3 sm:flex-row sm:items-end">
-              <div className="min-w-0 flex-1">
-                <label className="mb-1 block font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">
-                  Brand for promote
-                </label>
-                <select
-                  value={promoteBrandId}
-                  onChange={(e) => setPromoteBrandId(e.target.value)}
-                  className={cn(studioInner.select, "w-full text-[12px]")}
-                >
-                  <option value="">Default: session brand</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button
-                type="button"
-                disabled={
-                  hubBusy !== null ||
-                  !workingArtifact ||
-                  (!promoteBrandId.trim() && !sessionDetail?.brand_profile_id)
-                }
-                onClick={() => void promoteToIssue()}
-                className={cn(studioInner.btnSecondary, "shrink-0 px-3 py-2 text-xs")}
-              >
-                {hubBusy === "promote" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Promote to Issues
-              </button>
+          {(pendingManual || workingArtifact || promoteNotice) && (
+            <div className="mb-4 rounded-lg border border-[#E4D9C2] bg-[#FBF7EE] px-3 py-3 text-[12px] text-[#1F1A14]">
+              {pendingManual && (
+                <div className="rounded-md border border-[#C8571E]/20 bg-[#F5EFE4] px-2 py-2">
+                  <p className="font-medium">{pendingManual.title ?? "(untitled)"}</p>
+                  {pendingManual.url ? <p className="mt-1 text-[11px] text-[#6B5F4E]">{pendingManual.url}</p> : null}
+                  {pendingManual.notes ? (
+                    <p className="mt-1 whitespace-pre-wrap text-[11px] text-[#6B5F4E]">{pendingManual.notes}</p>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={hubBusy !== null}
+                    onClick={() => void confirmManualSignal()}
+                    className={cn(studioInner.btnPrimary, "mt-2 px-3 py-1.5 text-xs")}
+                  >
+                    {hubBusy === "confirm" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                    Insert signal
+                  </button>
+                </div>
+              )}
+              {workingArtifact && (
+                <>
+                  <div className="text-[11px] text-[#6B5F4E]">
+                    <span className="font-medium text-[#1F1A14]">Saved outline</span>
+                    {typeof workingArtifact.thesis === "string" ? (
+                      <p className="mt-1 line-clamp-2">{workingArtifact.thesis}</p>
+                    ) : null}
+                    {typeof workingArtifact.working_outline === "string" ? (
+                      <p className="mt-1 line-clamp-3 whitespace-pre-wrap">{workingArtifact.working_outline}</p>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 border-t border-[#E4D9C2] pt-3 sm:flex-row sm:items-end">
+                    <div className="min-w-0 flex-1">
+                      <label className="mb-1 block font-mono text-[9px] uppercase tracking-wider text-[#6B5F4E]">
+                        Brand for promote
+                      </label>
+                      <select
+                        value={promoteBrandId}
+                        onChange={(e) => setPromoteBrandId(e.target.value)}
+                        className={cn(studioInner.select, "w-full text-[12px]")}
+                      >
+                        <option value="">Default: session brand</option>
+                        {brands.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={
+                        hubBusy !== null ||
+                        (!promoteBrandId.trim() && !sessionDetail?.brand_profile_id)
+                      }
+                      onClick={() => void promoteToIssue()}
+                      className={cn(studioInner.btnSecondary, "shrink-0 px-3 py-2 text-xs")}
+                    >
+                      {hubBusy === "promote" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      Promote to Issues
+                    </button>
+                  </div>
+                </>
+              )}
+              {promoteNotice ? (
+                <p className="mt-2 text-[12px] text-[#2D6A4F]">
+                  {promoteNotice}{" "}
+                  <Link href="/issues" className={studioInner.link}>
+                    Open Issues
+                  </Link>
+                </p>
+              ) : null}
             </div>
-            {!pendingManual && !workingArtifact ? (
-              <p className="mt-2 text-[11px] text-[#6B5F4E]">
-                Save an outline in the chat, then promote it to a draft here.
-              </p>
-            ) : null}
-            {promoteNotice ? (
-              <p className="mt-2 text-[12px] text-[#2D6A4F]">
-                {promoteNotice}{" "}
-                <Link href="/issues" className={studioInner.link}>
-                  Open Issues
-                </Link>
-              </p>
-            ) : null}
-          </div>
+          )}
 
           {pinnedSignal && (
             <div className="mb-3 rounded-lg border border-[#C8571E]/25 bg-[#C8571E]/08 px-3 py-2 text-[12px] text-[#1F1A14]">
