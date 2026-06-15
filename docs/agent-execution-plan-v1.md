@@ -4,7 +4,7 @@
 **Audience:** Claude Code agents executing autonomous build phases  
 **System spec:** `docs/cornerstone-system-spec.md`  
 **Status:** Active  
-**Last updated:** 2026-06-04  
+**Last updated:** 2026-06-15  
 
 ---
 
@@ -37,7 +37,7 @@ Each phase is a standalone, agent-executable unit of work. An agent assigned to 
 | Content products (social, podcast, TTS, sponsorship) | ✅ Implemented | — |
 | Integrations framework (Beehiiv + Supergrow) | ✅ Implemented | — |
 | Dashboard / Studio shell | ✅ Implemented | — |
-| **Subscriber Health Pipeline** | 🔲 Not started | **Phase 1** |
+| **Subscriber Health Pipeline** | ✅ Implemented; Phase 1 text superseded by system spec §3.17 | **Phase 1** |
 | **Source Discovery (Phase 2D-P2)** | 🔲 Not started | **Phase 2** |
 | **Signal Scoring (Phase 2D-P3)** | 🔲 Not started | **Phase 3** |
 | **Content Products Polish** | 🔲 Not started | **Phase 4** |
@@ -61,6 +61,8 @@ Phase 6 (Blog) ——— depends on Brainstorm Hub M1 being merged (✅ already 
 ---
 
 ## Phase 1 — Subscriber Health Pipeline
+
+> **Superseded implementation note (2026-06):** Phase 1 shipped as an in-app Next.js pipeline, not the standalone Railway script described below. Use `docs/cornerstone-system-spec.md` §3.17 as the current runbook: Vercel Cron calls `GET /api/pipelines/health-report`, the route fans out over `workspace_settings.subscriber_health_enabled`, Beehiiv auth prefers per-workspace MCP OAuth with env fallback, and KPI history lives in `subscriber_health_history`.
 
 **Spec section:** §3.17 (to be added to system spec)  
 **Priority:** High — immediate operational need  
