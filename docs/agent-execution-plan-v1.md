@@ -4,7 +4,7 @@
 **Audience:** Claude Code agents executing autonomous build phases  
 **System spec:** `docs/cornerstone-system-spec.md`  
 **Status:** Active  
-**Last updated:** 2026-06-15  
+**Last updated:** 2026-06-15
 
 ---
 
