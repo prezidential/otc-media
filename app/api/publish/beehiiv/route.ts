@@ -22,10 +22,11 @@ export async function POST(req: Request) {
 
   const ctx = await requireWorkspace();
   if (ctx instanceof Response) return ctx;
-  const { supabase, workspaceId } = ctx;
+  const { supabase, workspaceId, userId } = ctx;
+  const origin = new URL(req.url).origin;
 
   const startedAt = new Date().toISOString();
-  const result = await runPublisher({ workspaceId, supabase, draftId });
+  const result = await runPublisher({ workspaceId, supabase, draftId, userId, origin });
 
   // Persist the Publisher stage to the runs dashboard (completes the
   // Researcher → Writer → Editor → Publisher chain shown in /runs).
@@ -57,6 +58,10 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     ok: true,
+    // Additive fields (action / paywallReminder) extend the legacy shape without
+    // changing it — the Issues publish button still reads `ok` + `beehiiv.web_url`.
+    action: result.action,
+    ...(result.paywallReminder ? { paywallReminder: result.paywallReminder } : {}),
     beehiiv: {
       id: result.beehiiv.id,
       title: result.beehiiv.title,

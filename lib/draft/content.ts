@@ -12,7 +12,23 @@ export type DraftContentJson = {
   promo_slot: string;
   close: string;
   sources: string[];
-  metadata: { thesis?: string; model?: string };
+  /**
+   * Optional marker for where the premium paywall break should go (e.g. a
+   * section name like "deep_dive"). Beehiiv has NO API/MCP to insert the break,
+   * so this is a reminder/marker only — the human inserts it in the Beehiiv
+   * editor. Absent on most drafts; see definition-of-done.md §4 (P1-1/honesty).
+   */
+  paywall_after_section?: string;
+  metadata: {
+    thesis?: string;
+    model?: string;
+    /** Beehiiv post id stored after first publish, for create-once-edit-many. */
+    beehiiv_post_id?: string;
+    /** Optional email preview text (inbox snippet) pushed to Beehiiv on publish. */
+    preview_text?: string;
+    /** Optional SEO/social card overrides pushed to Beehiiv on publish. */
+    seo?: Record<string, unknown>;
+  };
 };
 
 export type DraftObject = {

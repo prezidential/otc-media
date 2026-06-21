@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isBeehiivEnabled, type BeehiivPostResult } from "@/lib/publish/beehiiv";
 import {
-  isBeehiivEnabled,
-  createBeehiivDraft,
-  type BeehiivPostResult,
-} from "@/lib/publish/beehiiv";
+  publishBeehiivPost,
+  type BeehiivPublishOutcome,
+} from "@/lib/integrations/beehiiv/write";
 import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import type { DraftContentJson } from "@/lib/draft/content";
 import { getProviderFromEnv } from "@/lib/notifications/factory";
@@ -34,6 +34,13 @@ export type PublisherResult =
   | {
       ok: true;
       beehiiv: BeehiivPostResult;
+      /** Whether the Beehiiv draft was created fresh or updated in place. */
+      action: "create" | "update";
+      /**
+       * Set when the draft is marked as needing a paywall break. Beehiiv has no
+       * API to insert it, so this reminds the human to set it in the editor.
+       */
+      paywallReminder?: string;
       decisions: string[];
       summary: string;
       /** Whether this outcome should be logged as an agent run in /runs. */
@@ -54,18 +61,47 @@ export type PublisherInput = {
   /** Workspace-scoped (RLS) client from requireWorkspace(). */
   supabase: SupabaseClient;
   draftId: string;
+  /** Current user id — lets the Beehiiv write path use the per-workspace OAuth token. */
+  userId?: string;
+  /** App origin for OAuth client/token lookups during MCP write. */
+  origin?: string;
 };
 
-/** render_html — convert a structured draft into newsletter-ready HTML. */
+/** Visible placeholder rendered into the HTML at the paywall break point. */
+const PAYWALL_MARKER = "<!-- PAYWALL BREAK HERE -->";
+
+/**
+ * render_html — convert a structured draft into newsletter-ready HTML.
+ *
+ * If the issue is marked as needing a paywall (`paywall_after_section`), insert a
+ * VISIBLE marker comment into the HTML and return a reminder. We do NOT attempt
+ * to create the real Beehiiv paywall block — there is no API/MCP primitive for
+ * it; the human sets it in the editor. Mark, don't fake.
+ */
 function renderHtmlStep(contentJson: DraftContentJson): {
   html: string;
   title: string;
   subtitle?: string;
+  seo?: Record<string, unknown>;
+  previewText?: string;
+  paywallReminder?: string;
 } {
-  const html = renderDraftHtml(contentJson);
+  let html = renderDraftHtml(contentJson);
   const title = contentJson.title || "Untitled Issue";
   const subtitle = contentJson.metadata?.thesis || undefined;
-  return { html, title, subtitle };
+  const seo = contentJson.metadata?.seo;
+  const previewText = contentJson.metadata?.preview_text || undefined;
+
+  let paywallReminder: string | undefined;
+  const paywallSection = contentJson.paywall_after_section?.trim();
+  if (paywallSection) {
+    html = `${html}\n\n${PAYWALL_MARKER}`;
+    paywallReminder =
+      `Paywall break marked after "${paywallSection}". Beehiiv's API cannot insert it — ` +
+      `set the paywall break manually in the Beehiiv editor before sending.`;
+  }
+
+  return { html, title, subtitle, seo, previewText, paywallReminder };
 }
 
 /**
@@ -75,14 +111,23 @@ function renderHtmlStep(contentJson: DraftContentJson): {
  */
 async function recordPublication(
   input: PublisherInput,
-  beehiiv: BeehiivPostResult
+  beehiiv: BeehiivPostResult,
+  contentJson: DraftContentJson
 ): Promise<void> {
   const { supabase, workspaceId, draftId } = input;
+
+  // Persist the Beehiiv post id INSIDE content_json.metadata so re-publishing the
+  // same issue edits that post instead of creating a duplicate (create-once,
+  // edit-many). Stored in existing JSON to avoid a schema migration.
+  const nextContentJson: DraftContentJson = {
+    ...contentJson,
+    metadata: { ...contentJson.metadata, beehiiv_post_id: beehiiv.id },
+  };
 
   // Draft status lifecycle: draft → reviewed → published.
   await supabase
     .from("issue_drafts")
-    .update({ status: "published" })
+    .update({ status: "published", content_json: nextContentJson })
     .eq("id", draftId)
     .eq("workspace_id", workspaceId);
 
@@ -191,12 +236,34 @@ export async function runPublisher(input: PublisherInput): Promise<PublisherResu
   const priorStatus = (draft.status as string | undefined) ?? "draft";
   decisions.push(`Human-gated publish for draft ${draftId} (status: ${priorStatus})`);
 
-  const { html, title, subtitle } = renderHtmlStep(contentJson);
+  const { html, title, subtitle, seo, previewText, paywallReminder } =
+    renderHtmlStep(contentJson);
   decisions.push(`render_html: produced ${html.length} chars for "${title}"`);
+  if (paywallReminder) decisions.push(`paywall: ${paywallReminder}`);
 
-  let beehiiv: BeehiivPostResult;
+  // create-once, edit-many: reuse a stored Beehiiv post id when present so a
+  // re-publish updates the same post instead of making a duplicate.
+  const existingPostId = contentJson.metadata?.beehiiv_post_id ?? null;
+  if (existingPostId) {
+    decisions.push(`reuse_post: editing existing Beehiiv post ${existingPostId}`);
+  }
+
+  let outcome: BeehiivPublishOutcome;
   try {
-    beehiiv = await createBeehiivDraft({ title, subtitle, htmlContent: html });
+    outcome = await publishBeehiivPost(
+      { title, subtitle, htmlContent: html, seo, previewText },
+      {
+        existingPostId,
+        ctx: input.userId
+          ? {
+              workspaceId,
+              userId: input.userId,
+              supabase,
+              origin: input.origin,
+            }
+          : undefined,
+      }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -209,16 +276,27 @@ export async function runPublisher(input: PublisherInput): Promise<PublisherResu
     };
   }
 
-  decisions.push(`push_beehiiv: created post ${beehiiv.id} (${beehiiv.status})`);
+  const beehiiv: BeehiivPostResult = {
+    id: outcome.id,
+    title: outcome.title,
+    status: outcome.status,
+    web_url: outcome.web_url,
+  };
+  const verb = outcome.action === "update" ? "updated" : "created";
+  decisions.push(
+    `push_beehiiv: ${verb} post ${beehiiv.id} (${beehiiv.status}) via ${outcome.transport}`
+  );
 
-  await recordPublication(input, beehiiv);
+  await recordPublication(input, beehiiv, contentJson);
   decisions.push(`Marked draft ${draftId} as published`);
 
   return {
     ok: true,
     beehiiv,
+    action: outcome.action,
+    ...(paywallReminder ? { paywallReminder } : {}),
     decisions,
-    summary: `Published "${beehiiv.title}" to Beehiiv`,
+    summary: `${verb === "updated" ? "Updated" : "Published"} "${beehiiv.title}" on Beehiiv`,
     loggable: true,
   };
 }
