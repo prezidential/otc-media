@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2, Download } from "lucide-react";
+import { FileText, Copy, CheckCheck, Loader2, Settings2, RefreshCw, History, ChevronDown, ChevronUp, Trash2, Brain, Columns2, Code2, Send, ExternalLink, Rocket, Sprout, ListTree, Share2, Download, Pencil, Save, X, Plus, ArrowUp, ArrowDown, Newspaper, DownloadCloud } from "lucide-react";
 import { PageHeader } from "../components/page-header";
 import { cn } from "@/lib/utils";
 import { studioInner } from "@/lib/studio/inner-classes";
 import type { PodcastScript } from "@/lib/content-products/podcastScriptTypes";
 import { PODCAST_DELIVERY, PODCAST_ENERGY, type PodcastDelivery, type PodcastEnergy } from "@/lib/content-products/podcastScriptOptions";
+import type { DraftContentJson } from "@/lib/draft/content";
+import { parseFreshSignals, serializeFreshSignals, type FreshSignalItem, type FreshSignalsModel } from "@/lib/draft/freshSignals";
 
 type SocialSnippets = { x_post: string; linkedin_teaser: string; threads: string };
 
@@ -77,6 +79,138 @@ export default function IssuesPage() {
   const [copiedHtml, setCopiedHtml] = useState(false);
   const [seedingOutlines, setSeedingOutlines] = useState(false);
   const [outlineSeedMessage, setOutlineSeedMessage] = useState<string | null>(null);
+
+  // --- P0-1 inline editor + P0-2 This Week panel state ---
+  type EditableSections = {
+    title: string;
+    hook_paragraphs: string;
+    deep_dive: string;
+    last_word: string;
+    promo_slot: string;
+    close: string;
+    sources: string;
+  };
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editFields, setEditFields] = useState<EditableSections | null>(null);
+  const [freshModel, setFreshModel] = useState<FreshSignalsModel>({ synopsis: "", items: [] });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
+  type CandidateSignal = { id?: string; title: string; publisher: string; url: string };
+  const [candidates, setCandidates] = useState<CandidateSignal[] | null>(null);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+
+  function fieldsFromContentJson(cj: Record<string, unknown> | null): EditableSections {
+    const c = (cj ?? {}) as Partial<DraftContentJson>;
+    return {
+      title: typeof c.title === "string" ? c.title : "",
+      hook_paragraphs: Array.isArray(c.hook_paragraphs) ? c.hook_paragraphs.join("\n\n") : "",
+      deep_dive: typeof c.deep_dive === "string" ? c.deep_dive : "",
+      last_word: typeof c.last_word === "string" ? c.last_word : "",
+      promo_slot: typeof c.promo_slot === "string" ? c.promo_slot : "",
+      close: typeof c.close === "string" ? c.close : "",
+      sources: Array.isArray(c.sources) ? c.sources.join("\n") : "",
+    };
+  }
+
+  function openEditor() {
+    const cj = contentJson ?? null;
+    setEditFields(fieldsFromContentJson(cj));
+    setFreshModel(parseFreshSignals(typeof cj?.fresh_signals === "string" ? (cj.fresh_signals as string) : ""));
+    setEditDirty(false);
+    setCandidates(null);
+    setEditorOpen(true);
+  }
+
+  function setField<K extends keyof EditableSections>(key: K, value: string) {
+    setEditFields((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setEditDirty(true);
+  }
+
+  function updateFreshSynopsis(value: string) {
+    setFreshModel((prev) => ({ ...prev, synopsis: value }));
+    setEditDirty(true);
+  }
+  function updateFreshItem(idx: number, patch: Partial<FreshSignalItem>) {
+    setFreshModel((prev) => ({ ...prev, items: prev.items.map((it, i) => (i === idx ? { ...it, ...patch } : it)) }));
+    setEditDirty(true);
+  }
+  function addFreshItem(item?: FreshSignalItem) {
+    setFreshModel((prev) => ({ ...prev, items: [...prev.items, item ?? { headline: "", url: "", note: "" }] }));
+    setEditDirty(true);
+  }
+  function removeFreshItem(idx: number) {
+    setFreshModel((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
+    setEditDirty(true);
+  }
+  function moveFreshItem(idx: number, dir: -1 | 1) {
+    setFreshModel((prev) => {
+      const next = [...prev.items];
+      const j = idx + dir;
+      if (j < 0 || j >= next.length) return prev;
+      [next[idx], next[j]] = [next[j], next[idx]];
+      return { ...prev, items: next };
+    });
+    setEditDirty(true);
+  }
+
+  async function pullCandidates() {
+    setLoadingCandidates(true);
+    try {
+      // Source: in-app signals feed (same source the dashboard Signals feed uses).
+      const res = await fetch("/api/signals/list?limit=25");
+      const data = (await res.json().catch(() => ({}))) as { signals?: CandidateSignal[]; error?: string };
+      const existingUrls = new Set(freshModel.items.map((it) => it.url).filter(Boolean));
+      const list = (data.signals ?? []).filter((s) => s.url && !existingUrls.has(s.url));
+      setCandidates(list);
+    } finally {
+      setLoadingCandidates(false);
+    }
+  }
+
+  function insertCandidate(c: CandidateSignal) {
+    addFreshItem({ headline: c.title, url: c.url, note: c.publisher ? `Via ${c.publisher}.` : "" });
+    setCandidates((prev) => (prev ? prev.filter((x) => x.url !== c.url) : prev));
+  }
+
+  async function saveEdits() {
+    if (!draftId || !editFields) return;
+    setSavingEdit(true);
+    setMessage(null);
+    try {
+      const hook_paragraphs = editFields.hook_paragraphs.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+      const sources = editFields.sources.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+      const fresh_signals = serializeFreshSignals(freshModel);
+      const patch = {
+        title: editFields.title,
+        hook_paragraphs,
+        deep_dive: editFields.deep_dive,
+        last_word: editFields.last_word,
+        promo_slot: editFields.promo_slot,
+        close: editFields.close,
+        sources,
+        fresh_signals,
+      };
+      const res = await fetch(`/api/issues/${encodeURIComponent(draftId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content_json: patch }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setDraft(data.draft ?? "");
+        setContentJson(data.content_json ?? null);
+        setEditDirty(false);
+        setMessage("Draft edits saved");
+        await loadDraftHistory();
+      } else {
+        setMessage(data.error ?? `Save failed: ${res.status}`);
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  const freshFilled = !!(freshModel.synopsis.trim() || freshModel.items.length > 0);
 
   async function loadPublishStatus() {
     const res = await fetch("/api/publish/status");
@@ -978,6 +1112,19 @@ export default function IssuesPage() {
             <span className="font-mono text-[11px] uppercase tracking-widest text-[#6B5F4E]">Draft Preview</span>
             <div className="flex items-center gap-2">
               {draftId && (
+                <button
+                  onClick={() => (editorOpen ? setEditorOpen(false) : openEditor())}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                    editorOpen
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-[#E4D9C2] bg-[#F5EFE4] text-[#6B5F4E] hover:text-[#1F1A14]"
+                  )}>
+                  <Pencil className="h-3.5 w-3.5" />
+                  {editorOpen ? "Close Editor" : "Edit Draft"}
+                </button>
+              )}
+              {draftId && (
                 <div className="relative">
                   <button
                     onClick={() => setRegenSection(regenSection ? null : "title")}
@@ -1072,6 +1219,156 @@ export default function IssuesPage() {
               <pre className={cn(studioInner.draftBodyPreMono, "max-h-[300px] overflow-auto")}>
                 {exportedHtml}
               </pre>
+            </div>
+          )}
+
+          {editorOpen && draftId && editFields && (
+            <div className="mb-4 space-y-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="font-mono text-[11px] uppercase tracking-widest text-primary flex items-center gap-2">
+                  <Pencil className="h-3.5 w-3.5" />
+                  Inline editor
+                </span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openEditor()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors"
+                    title="Discard unsaved edits and reload from saved draft">
+                    <X className="h-3.5 w-3.5" />
+                    Revert
+                  </button>
+                  <button onClick={() => void saveEdits()} disabled={savingEdit || !editDirty}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-opacity">
+                    {savingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    {savingEdit ? "Saving..." : editDirty ? "Save changes" : "Saved"}
+                  </button>
+                </div>
+              </div>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Title</span>
+                <input type="text" value={editFields.title} onChange={(e) => setField("title", e.target.value)}
+                  className="w-full rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-3 py-2 text-sm font-semibold text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Opening hook (blank line between paragraphs)</span>
+                <textarea value={editFields.hook_paragraphs} onChange={(e) => setField("hook_paragraphs", e.target.value)} rows={4}
+                  className={cn(studioInner.textarea, "min-h-[96px]")} />
+              </label>
+
+              {/* P0-2 — This Week panel */}
+              <div className="rounded-lg border border-[#E4D9C2] bg-[#FBF7EE] p-3 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-[#6B5F4E] flex items-center gap-2">
+                    <Newspaper className="h-3.5 w-3.5" />
+                    This Week in Identity
+                    <span className={cn("rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider",
+                      freshFilled ? "bg-[#3F6B4522] text-[#3F6B45]" : "bg-[#EBDFC5] text-[#6B5F4E]")}>
+                      {freshFilled ? `Filled · ${freshModel.items.length} item${freshModel.items.length === 1 ? "" : "s"}` : "Empty"}
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => void pullCandidates()} disabled={loadingCandidates}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-2.5 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] disabled:opacity-50 transition-colors">
+                      {loadingCandidates ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <DownloadCloud className="h-3.5 w-3.5" />}
+                      Pull current candidates
+                    </button>
+                    <button onClick={() => addFreshItem()}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] px-2.5 py-1.5 text-xs font-medium text-[#6B5F4E] hover:text-[#1F1A14] transition-colors">
+                      <Plus className="h-3.5 w-3.5" />
+                      Add item
+                    </button>
+                  </div>
+                </div>
+
+                <label className="block">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Synopsis (Part A — no URLs)</span>
+                  <textarea value={freshModel.synopsis} onChange={(e) => updateFreshSynopsis(e.target.value)} rows={2}
+                    placeholder="One or two lines framing the week's signals."
+                    className={cn(studioInner.textarea, "min-h-[56px]")} />
+                </label>
+
+                {candidates && (
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 space-y-1.5">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] px-1">
+                      {candidates.length === 0 ? "No new candidates in the signals feed" : `${candidates.length} candidate${candidates.length === 1 ? "" : "s"} — click to insert`}
+                    </div>
+                    {candidates.map((c) => (
+                      <button key={c.url} type="button" onClick={() => insertCandidate(c)}
+                        className="flex w-full items-center gap-2 rounded-md border border-[#E4D9C2] bg-[#F5EFE4] px-2 py-1.5 text-left text-xs hover:bg-[#EBDFC5]/80 transition-colors">
+                        <Plus className="h-3 w-3 shrink-0 text-primary" />
+                        <span className="min-w-0 flex-1 truncate text-[#1F1A14]">{c.title}</span>
+                        <span className="shrink-0 text-[10px] text-[#6B5F4E]">{c.publisher}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {freshModel.items.length === 0 ? (
+                  <div className="text-xs text-[#6B5F4E] py-2 text-center">No items yet. Add one or pull candidates.</div>
+                ) : (
+                  <ul className="space-y-2">
+                    {freshModel.items.map((it, idx) => (
+                      <li key={idx} className="rounded-lg border border-[#E4D9C2] bg-[#F5EFE4] p-2.5 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-[#6B5F4E] shrink-0">#{idx + 1}</span>
+                          <input type="text" value={it.headline} onChange={(e) => updateFreshItem(idx, { headline: e.target.value })}
+                            placeholder="Headline"
+                            className="min-w-0 flex-1 rounded-md border border-[#E4D9C2] bg-[#FBF7EE] px-2 py-1.5 text-sm font-medium text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+                          <button onClick={() => moveFreshItem(idx, -1)} disabled={idx === 0}
+                            className="p-1 rounded text-[#6B5F4E] hover:text-[#1F1A14] disabled:opacity-30" title="Move up">
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => moveFreshItem(idx, 1)} disabled={idx === freshModel.items.length - 1}
+                            className="p-1 rounded text-[#6B5F4E] hover:text-[#1F1A14] disabled:opacity-30" title="Move down">
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => removeFreshItem(idx)}
+                            className="p-1 rounded text-[#6B5F4E] hover:text-danger hover:bg-danger/10" title="Remove">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <input type="text" value={it.note ?? ""} onChange={(e) => updateFreshItem(idx, { note: e.target.value })}
+                          placeholder="Why it matters (one line)"
+                          className="w-full rounded-md border border-[#E4D9C2] bg-[#FBF7EE] px-2 py-1.5 text-xs text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+                        <input type="text" value={it.url} onChange={(e) => updateFreshItem(idx, { url: e.target.value })}
+                          placeholder="https://source-url"
+                          className="w-full rounded-md border border-[#E4D9C2] bg-[#FBF7EE] px-2 py-1.5 text-xs font-mono text-[#1F1A14] outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Deep dive</span>
+                <textarea value={editFields.deep_dive} onChange={(e) => setField("deep_dive", e.target.value)} rows={8}
+                  className={cn(studioInner.textarea, "min-h-[180px]")} />
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">The Last Word</span>
+                <textarea value={editFields.last_word} onChange={(e) => setField("last_word", e.target.value)} rows={3}
+                  className={cn(studioInner.textarea, "min-h-[72px]")} />
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Promo slot</span>
+                <textarea value={editFields.promo_slot} onChange={(e) => setField("promo_slot", e.target.value)} rows={2}
+                  className={cn(studioInner.textarea, "min-h-[56px]")} />
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Close</span>
+                <textarea value={editFields.close} onChange={(e) => setField("close", e.target.value)} rows={2}
+                  className={cn(studioInner.textarea, "min-h-[56px]")} />
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B5F4E] mb-1 block">Sources (one URL per line)</span>
+                <textarea value={editFields.sources} onChange={(e) => setField("sources", e.target.value)} rows={3}
+                  className={cn(studioInner.textareaMono, "min-h-[72px]")} />
+              </label>
             </div>
           )}
 
