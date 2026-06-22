@@ -775,7 +775,7 @@ flowchart LR
 **Architecture — notifications (normative):**
 
 1. All outbound/inbound notification behavior goes through a pluggable **`NotificationProvider`** interface (`lib/notifications/provider.ts`). **No Telegram-specific logic** outside `lib/notifications/providers/telegram.ts` (and the webhook route’s provider dispatch).
-2. Inbound webhooks use a single pattern: **`POST /api/notifications/webhook/[provider]`** (e.g. `telegram` today; `slack` / others later).
+2. Inbound webhooks use a workspace-scoped pattern: **`POST /api/notifications/webhook/[provider]/[workspaceId]`** (e.g. `telegram` today; `slack` / others later). The legacy single-tenant route returns `410 Gone`.
 3. **`notification_approvals`** stores approval rows in a **provider-agnostic** shape (`provider`, `entity_type`, `entity_id`, `provider_message_ref`, `status`, `preview_text`, timestamps, `expires_at`).
 
 **Persistence (normative SQL artifacts — apply in Supabase):**
@@ -802,7 +802,7 @@ flowchart LR
 
 **Content lanes seed:** `POST /api/content-lanes/seed` — idempotent default lanes for the workspace (see ACE doc for default lane set; no hardcoded workspace id).
 
-**Configuration (env):** `ACE_ENABLED`, `NOTIFICATION_PROVIDER`, Telegram vars (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`), **`CRON_SECRET`**, Railway cron + webhook registration — detailed in **`docs/Cornerstone-OS-ACE.md`**.
+**Configuration:** `ACE_ENABLED` is the global kill switch; `workspace_settings.ace_enabled` opts workspaces into scheduled runs; `NOTIFICATION_PROVIDER`, Telegram vars (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`), **`CRON_SECRET`**, scheduler setup, and per-workspace webhook registration are detailed in **`docs/Cornerstone-OS-ACE.md`**.
 
 **Execution checklist:** Step-by-step implementation order, TypeScript type sketches, Telegram message formats, webhook behavior, and **required test file list** are maintained in **`docs/Cornerstone-OS-ACE.md`** §14–§16 so this system spec stays the **single narrative** while the ACE doc remains the **agent execution appendix**.
 
@@ -1015,13 +1015,15 @@ Provider credentials live in the **Supabase dashboard → Authentication → Pro
 
 ### Purpose
 
-A standalone analytics pipeline that evaluates newsletter subscriber health against configurable KPI targets and delivers a structured Telegram report every Monday at 8 AM Eastern. It runs independently of the ACE pipeline — no agent loop, no approval gate — and is the creator's weekly heartbeat for distribution health.
+A workspace-scoped analytics pipeline that evaluates newsletter subscriber health against configurable KPI targets and delivers a structured Telegram report every Monday. It runs independently of the ACE pipeline - no agent loop, no approval gate - and is the creator's weekly heartbeat for distribution health.
 
 ### Architecture
 
-**Type:** Standalone Node/TypeScript script (`pipelines/subscriber-health.ts`), not a Next.js API route.  
-**Trigger:** Railway cron — `0 13 * * 1` (13:00 UTC = 8 AM ET/EST; adjust to `0 12 * * 1` during EDT).  
-**Env vars:** Reuses `BEEHIIV_API_KEY`, `BEEHIIV_PUBLICATION_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — no new vars required.
+**Type:** Next.js API cron plus a session-scoped manual route.
+**Scheduled trigger:** `GET|POST /api/pipelines/health-report`, guarded by `Authorization: Bearer ${CRON_SECRET}`. `vercel.json` schedules `GET /api/pipelines/health-report` at `0 13 * * 1`.
+**Manual trigger:** `POST /api/pipelines/health-report/run`, authenticated through `requireWorkspace()` and scoped to the caller's active workspace.
+**Workspace opt-in:** `workspace_settings.subscriber_health_enabled = true` (added by `lib/supabase/schema-subscriber-health.sql`). The cron route uses `supabaseAdmin()` and fans out once per opted-in workspace.
+**Env vars:** Reuses Beehiiv integration config (`BEEHIIV_PUBLICATION_ID`, `BEEHIIV_MCP_SERVER_URL` and/or `BEEHIIV_API_KEY`), Telegram notification env vars, `CRON_SECRET`, and optional `CORNERSTONE_URL` for report links.
 
 ### KPI Configuration (`config/subscriber-kpis.json`)
 
@@ -1046,6 +1048,8 @@ A standalone analytics pipeline that evaluates newsletter subscriber health agai
 | `GET /publications/{id}/posts/{postId}/stats` | Per-post `open_rate`, `click_rate` |
 | `GET /publications/{id}/subscriptions?status=active&limit=500` | New subs (filter client-side to last 7 days), referral attribution |
 
+When Beehiiv MCP is configured, `runSubscriberHealth()` first attempts to resolve the workspace's encrypted Beehiiv OAuth token from `beehiiv_oauth_connections`, refreshes it when needed, and calls the Beehiiv MCP tools with that token. If no workspace OAuth token is available, it falls back to the static env credential path.
+
 ### Status Evaluation Logic
 
 **Standard metrics (higher is better):** `weeklyNewSubs`, `linkedInSourcedPercent`, `openRate`, `clickRate`, `paidSubscribers`
@@ -1058,9 +1062,9 @@ A standalone analytics pipeline that evaluates newsletter subscriber health agai
 - 🟡 `target < value <= warn`
 - 🔴 `value > warn`
 
-### Consecutive-Week Tracking (`data/kpi-history.json`)
+### Consecutive-Week Tracking (`subscriber_health_history`)
 
-Persistent JSON file stores `{ [metric]: { consecutiveWeeksBelow: number, lastStatus: string } }`. When a metric stays 🔴 for 3+ consecutive weeks, a `⚠️` warning line is appended below that metric in the Telegram message. The file is runtime state — tracked in `.gitignore` but initialized as `{}` in the repo.
+Persistent Supabase state stores one row per `(workspace_id, metric)` with latest value, latest ISO week, last status, and `consecutive_weeks_below`. When a metric stays red for 3+ consecutive weeks, a warning line is appended below that metric in the Telegram message. The in-app Subscriber Health panel reads the latest stored status/streak from this table.
 
 ### Telegram Report Format
 
@@ -1087,10 +1091,14 @@ Paid subscribers: 18 🔴 (target: 25)
 
 | File | Purpose |
 |------|---------|
-| `pipelines/subscriber-health.ts` | Main pipeline script |
+| `app/api/pipelines/health-report/route.ts` | `CRON_SECRET`-guarded scheduled fan-out over opted-in workspaces |
+| `app/api/pipelines/health-report/run/route.ts` | Authenticated manual run for the active workspace |
+| `lib/subscriber-health/run.ts` | Per-workspace orchestrator: resolve Beehiiv config, gather metrics, evaluate KPIs, persist history, notify |
+| `lib/subscriber-health/beehiiv.ts` | Beehiiv REST/MCP metric collection |
+| `lib/subscriber-health/history.ts` | Load/save `subscriber_health_history` streak state |
+| `lib/supabase/schema-subscriber-health.sql` | `subscriber_health_enabled` flag, history table, and RLS policy |
 | `config/subscriber-kpis.json` | KPI targets + warn thresholds |
-| `data/kpi-history.json` | Runtime consecutive-week state (gitignored after init) |
-| `__tests__/pipelines/subscriber-health.test.ts` | Unit tests (mocked fetch) |
+| `__tests__/lib/subscriber-health/*.test.ts` | Unit tests for KPI, history, Beehiiv gathering, and report formatting |
 
 **Full implementation spec:** `docs/agent-execution-plan-v1.md` §Phase 1.
 
@@ -1317,7 +1325,7 @@ Stretch:
 | **Brainstormer Agent (Ideation)** | **Implemented** | §3.1 / §3.13 — tool loop: `query_signals`, `get_signal`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`; `brainstorm` LLM role |
 | **Brainstorming Hub** | **Implemented (MVP/M1)** | §3.13 — sessions/messages CRUD; chat UI; streaming; tools as above; Promote to `DraftObject` → `issue_drafts` |
 | **Blog draft (longform)** | **Not started** | §3.13 M2 — `BlogDraftObject`, `POST /api/content-products/blog-draft`, export UI; see agent plan Phase 6 |
-| **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
+| **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]/[workspaceId]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
 | **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
 | **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
@@ -1356,7 +1364,7 @@ Stretch:
 ### Phase 1B — Autonomous Content Engine (ACE) **[NEW in v2.8]**
 
 - **Spec:** §3.14; **checklist:** `docs/Cornerstone-OS-ACE.md`
-- **MVP:** `notification_approvals`, `content_lanes`, `ace_runs` schemas; `NotificationProvider` + Telegram provider; webhook route; `runAce` orchestrator; lane balance + pipeline `returnDraftId` / `laneBalanceContext`; `/api/ace/cron`, `/api/ace/run`; `/ace` dashboard; Beehiiv publish hooks + Telegram status messages; Railway cron + env wiring.
+- **MVP:** `notification_approvals`, `content_lanes`, `ace_runs` schemas; `NotificationProvider` + Telegram provider; workspace-scoped webhook route; `runAce` orchestrator; lane balance + pipeline `returnDraftId` / `laneBalanceContext`; `/api/ace/cron`, `/api/ace/run`; `/ace` dashboard; Beehiiv publish hooks + Telegram status messages; scheduler + env wiring.
 - **Later (ACE Phase 2):** LinkedIn via ACE; additional providers; per-workspace provider config; performance-informed lane weighting.
 
 ### Phase 1C — Dashboard home (Studio) **[NEW in v2.8]**
@@ -1442,14 +1450,14 @@ Full spec in §3.3.
 
 ---
 
-### Phase 2E — Subscriber Health Pipeline **[NEW in v2.12]**
+### Phase 2E — Subscriber Health Pipeline **[Implemented in PR #110]**
 
 **Spec:** §3.17; **agent plan:** `docs/agent-execution-plan-v1.md` Phase 1.
 
-- **Standalone script** `pipelines/subscriber-health.ts` — no app server dependency
-- Config-driven KPIs in `config/subscriber-kpis.json`; consecutive-week state in `data/kpi-history.json`
-- Railway cron: Monday 8 AM ET
-- Beehiiv REST → 7-day stats → Telegram report with ✅/🟡/🔴 per metric
+- Weekly `GET|POST /api/pipelines/health-report` cron fans out over `workspace_settings.subscriber_health_enabled = true`
+- Authenticated `POST /api/pipelines/health-report/run` supports manual runs from `/integrations/analytics`
+- Config-driven KPIs live in `config/subscriber-kpis.json`; consecutive-week state lives in `subscriber_health_history`
+- Beehiiv metrics prefer per-workspace MCP OAuth, then fall back to static env credentials; output is a Telegram report with green/yellow/red status per metric
 
 ---
 

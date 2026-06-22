@@ -25,7 +25,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; see `lib/supabase/` for additional schemas)
+- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub** and `lib/supabase/schema-subscriber-health.sql` for the Subscriber Health panel/cron; see `lib/supabase/` for additional schemas)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -65,6 +65,14 @@ BEEHIIV_PUBLICATION_ID=your-beehiiv-publication-id
 # remain a static-Bearer fallback for servers that accept it.
 BEEHIIV_MCP_SERVER_URL=https://mcp.beehiiv.com/mcp
 
+# Optional — scheduled/system routes. CRON_SECRET protects cron entrypoints.
+# ACE also keeps a global kill switch in addition to per-workspace
+# workspace_settings.ace_enabled.
+CRON_SECRET=random-uuid-for-cron-auth
+ACE_ENABLED=false
+INTERNAL_APP_URL=http://localhost:3000
+CORNERSTONE_URL=http://localhost:3000
+
 # Supergrow (LinkedIn analytics) — MCP-based. The MCP URL carries the api_key as a
 # query param, so no Bearer header is needed. SUPERGROW_WORKSPACE_ID avoids an extra
 # list_workspaces call (discover it via the Supergrow list_workspaces MCP tool).
@@ -84,6 +92,12 @@ PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
 # still creates the invite row and returns the join URL; owners share it manually.
 RESEND_API_KEY=your-resend-api-key
 EMAIL_FROM=cornerstone@onthecornermedia.com
+
+# Optional — Telegram notifications for ACE approvals and Subscriber Health.
+NOTIFICATION_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_CHAT_ID=your-chat-id
+TELEGRAM_WEBHOOK_SECRET=random-uuid-for-webhook-verification
 
 # Optional — LinkedIn OAuth (Phase 2A M1). Without these, the /api/auth/linkedin
 # endpoints return 503 and the integration is hidden in the UI.
@@ -388,8 +402,95 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
+- Browser calls resolve the active workspace through `requireWorkspace()`.
+- Cron/system callers must pass an explicit workspace id through their protected route, or use a cron entrypoint that fans out over opted-in workspaces.
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+
+## ACE Runbook
+
+ACE runs the autonomous Researcher -> Writer -> Editor pipeline, stores an approval request, and publishes only after the Telegram approval callback succeeds.
+
+### Enablement
+
+ACE has two gates:
+
+- `ACE_ENABLED=true` is the global kill switch checked by `runAce()`.
+- `workspace_settings.ace_enabled=true` opts a workspace into the scheduled fan-out route.
+
+Apply `lib/supabase/schema-workspace-settings.sql`, then opt in a workspace with SQL:
+
+```sql
+insert into workspace_settings (workspace_id, ace_enabled)
+values ('<workspace-id>', true)
+on conflict (workspace_id) do update set ace_enabled = true;
+```
+
+### Routes
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/ace/run` | `POST` | Authenticated manual run for the caller's active workspace. Body: `{ "forceRerun": true }` bypasses pending/recent-run guards. |
+| `/api/ace/cron` | `POST` | `CRON_SECRET`-guarded scheduler route. Iterates every workspace where `workspace_settings.ace_enabled = true`. |
+| `/api/ace/dashboard` | `GET` | Returns ACE status, pending approvals, recent run history, and lane balance for `/ace`. |
+| `/api/notifications/webhook/[provider]/[workspaceId]` | `POST` | Provider callback route. Telegram is supported today. |
+
+### Telegram Webhook
+
+Register one webhook URL per workspace, embedding that workspace UUID in the path:
+
+```bash
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url":"https://<app-host>/api/notifications/webhook/telegram/<workspace-id>",
+    "secret_token":"'"$TELEGRAM_WEBHOOK_SECRET"'"
+  }'
+```
+
+The legacy `/api/notifications/webhook/[provider]` path returns `410 Gone`; re-register webhooks after migrating from the old single-tenant URL.
+
+### Troubleshooting
+
+- `skipped: ACE disabled`: set `ACE_ENABLED=true` in the app environment.
+- `no workspaces with ace_enabled=true`: apply `schema-workspace-settings.sql` and opt in the workspace.
+- `Awaiting approval on existing draft`: approve/reject the pending Telegram approval, or manually run with `forceRerun`.
+- `Pipeline ran recently`: ACE suppresses duplicate runs for 20 hours unless `forceRerun` is true.
+- Telegram callback returns `401`: `TELEGRAM_WEBHOOK_SECRET` does not match the Telegram `secret_token`.
+
+## Subscriber Health Runbook
+
+Subscriber Health evaluates Beehiiv growth, engagement, and monetization KPIs from `config/subscriber-kpis.json`, persists per-metric streaks in `subscriber_health_history`, logs `pipeline:subscriber-health` runs, and sends a Telegram report.
+
+### Enablement
+
+Apply `lib/supabase/schema-subscriber-health.sql`, configure Beehiiv and Telegram, then opt in a workspace:
+
+```sql
+insert into workspace_settings (workspace_id, subscriber_health_enabled)
+values ('<workspace-id>', true)
+on conflict (workspace_id) do update set subscriber_health_enabled = true;
+```
+
+Beehiiv metrics prefer the workspace's Beehiiv MCP OAuth token when `BEEHIIV_MCP_SERVER_URL` is set and a connection exists. If OAuth is unavailable, the pipeline falls back to the static Beehiiv env path (`BEEHIIV_API_KEY` plus `BEEHIIV_PUBLICATION_ID`, or an MCP static-token configuration accepted by the server).
+
+### Routes
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/pipelines/health-report` | `GET`/`POST` | `CRON_SECRET`-guarded weekly route. Vercel cron calls it with `GET` per `vercel.json`; `POST` is useful for curl/manual operator runs. |
+| `/api/pipelines/health-report/run` | `POST` | Authenticated manual run for the caller's active workspace, used by `/integrations/analytics`. |
+
+```bash
+curl -s -X POST https://<app-host>/api/pipelines/health-report \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+### Troubleshooting
+
+- `401 Unauthorized`: `CRON_SECRET` is missing or the Authorization header is wrong.
+- `count: 0`: no workspace has `subscriber_health_enabled=true`.
+- `Beehiiv not configured for workspace`: set `BEEHIIV_PUBLICATION_ID` plus either Beehiiv MCP OAuth/static MCP auth or `BEEHIIV_API_KEY`.
+- Notification failures: verify `NOTIFICATION_PROVIDER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET`.
 
 ## Publishing Runbook
 

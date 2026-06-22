@@ -1,31 +1,30 @@
 # Cornerstone OS — Autonomous Content Engine (ACE)
-## Phase 1 Implementation Spec
-### For Cursor Agent Execution
+## Implementation Spec and Operator Runbook
 
 **Owner:** OnTheCorner Media  
-**Base system (canonical narrative):** Cornerstone OS **v2.8** — [`docs/cornerstone-system-spec.md`](cornerstone-system-spec.md) **§3.14**  
-**This document:** step-by-step build order, TypeScript sketches, Telegram behavior, env vars, and test matrix — use alongside the system spec.  
-**Status:** Ready for implementation  
-**Deployment target:** Railway (cron + webhook URLs)
+**Base system (canonical narrative):** [`docs/cornerstone-system-spec.md`](cornerstone-system-spec.md) **§3.14**
+**This document:** source-backed runbook for ACE routes, Telegram behavior, env vars, and operational constraints.
+**Status:** Implemented. Phase 1 shipped; Phase 2A M2 removed the single-tenant `WORKSPACE_ID` route model.
+**Deployment target:** Any Next.js deployment with cron support or an external scheduler.
 
 ---
 
 ## Overview
 
-This spec extends Cornerstone OS **v2.8** (§3.14) to implement the **Autonomous Content Engine (ACE)** — a minimal-touch publishing loop that runs the full Research → Leads → Draft → Approval → Publish pipeline without requiring the creator to operate the system. The only required human interaction is a single tap in Telegram to approve or reject a draft before it publishes.
+This runbook covers the **Autonomous Content Engine (ACE)** — a minimal-touch publishing loop that runs the Researcher -> Writer -> Editor pipeline, sends a Telegram approval request, and publishes only after the creator approves the draft. The only required human interaction is a Telegram approve/reject action before publish.
 
-**Phase 1 scope:** Newsletter pipeline + Telegram approval gate. LinkedIn distribution is Phase 2.
+**Current scope:** Newsletter pipeline + Telegram approval gate + Beehiiv draft creation after approval. LinkedIn distribution remains deferred.
 
-**Design constraint:** All notification integrations must be implemented behind a pluggable `NotificationProvider` interface. Telegram is the first concrete implementation. No Telegram-specific logic should exist outside of `lib/notifications/providers/telegram.ts`. This is a SaaS product — future workspaces will connect Slack, email, or other channels.
+**Design constraint:** All notification integrations go through the pluggable `NotificationProvider` interface. Telegram is the first concrete implementation. No Telegram-specific logic should exist outside of `lib/notifications/providers/telegram.ts`.
 
 ---
 
 ## 1. Environment Variables
 
-Add to `.env.local` and Railway environment configuration:
+Add to `.env.local` and the deployed app environment:
 
 ```env
-# Notification provider selection (workspace-level in future; global for Phase 1)
+# Notification provider selection (global env-backed in the current implementation)
 NOTIFICATION_PROVIDER=telegram
 
 # Telegram — only required when NOTIFICATION_PROVIDER=telegram
@@ -36,19 +35,26 @@ TELEGRAM_WEBHOOK_SECRET=random-uuid-for-webhook-verification
 # ACE scheduler auth
 CRON_SECRET=random-uuid-for-cron-auth
 
-# ACE feature flag
+# ACE global kill switch. Scheduled runs also require workspace_settings.ace_enabled=true.
 ACE_ENABLED=true
+
+# Optional internal URL used when runAce() calls /api/pipeline/run.
+# Defaults to VERCEL_URL, then http://localhost:3000.
+INTERNAL_APP_URL=https://your-app.example.com
 ```
 
 **Setup instructions:**
 
 1. `TELEGRAM_BOT_TOKEN` — Message `@BotFather` on Telegram → `/newbot` → follow prompts → copy token
 2. `TELEGRAM_CHAT_ID` — Message `@userinfobot` on Telegram → it returns your personal chat ID
-3. After Railway deployment, register the webhook:
+3. Apply `lib/supabase/schema-workspace-settings.sql`, then set `workspace_settings.ace_enabled = true` for each workspace that should run on the scheduler.
+4. After deployment, register one Telegram webhook per workspace:
    ```
    POST https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook
-   Body: { "url": "https://your-app.railway.app/api/notifications/webhook/telegram", "secret_token": "{TELEGRAM_WEBHOOK_SECRET}" }
+   Body: { "url": "https://your-app.example.com/api/notifications/webhook/telegram/{workspaceId}", "secret_token": "{TELEGRAM_WEBHOOK_SECRET}" }
    ```
+
+The legacy `/api/notifications/webhook/{provider}` URL returns `410 Gone`. Re-register existing Telegram webhooks with the workspace-scoped path after migrating from the old single-tenant deployment.
 
 ---
 
@@ -325,30 +331,35 @@ Handles two Telegram update types:
 
 ## 5. Inbound Webhook Endpoint
 
-**File: `app/api/notifications/webhook/[provider]/route.ts`**
+**File: `app/api/notifications/webhook/[provider]/[workspaceId]/route.ts`**
 
 ```typescript
-// POST /api/notifications/webhook/telegram
-// POST /api/notifications/webhook/slack      (Phase 2)
-// POST /api/notifications/webhook/email      (Phase 2)
+// POST /api/notifications/webhook/telegram/{workspaceId}
+// POST /api/notifications/webhook/slack/{workspaceId}      (future)
+// POST /api/notifications/webhook/email/{workspaceId}      (future)
 
 // Routing logic:
 // 1. Extract provider slug from [provider] param
-// 2. Get provider instance from factory
-// 3. Call provider.handleInbound(body, headers)
-// 4. If ApprovalResponse returned:
-//    a. Load notification_approvals row — verify status is 'pending' and not expired
-//    b. Update row: status, responded_at
-//    c. If approved AND entity_type === 'newsletter_draft':
-//       - Call POST /api/publish/beehiiv internally with { draftId: entity_id }
-//       - On success: send statusUpdate { level: 'success', title: 'Published', body: title, url: beehiiv_web_url }
-//       - On failure: send statusUpdate { level: 'error', title: 'Publish failed', body: error }
+// 2. Extract workspaceId from [workspaceId] param
+// 3. Get provider instance from factory
+// 4. Call provider.handleInbound(body, headers)
+// 5. If ApprovalResponse returned:
+//    a. Load notification_approvals row
+//    b. Verify the row workspace_id matches the path workspaceId
+//    c. Verify status is 'pending' and not expired
+//    d. Update row: status, responded_at
+//    e. If approved AND entity_type === 'newsletter_draft':
+//       - Render draft HTML
+//       - Create the Beehiiv draft via createBeehiivDraft()
+//       - Send statusUpdate { level: 'success', title: 'Published', body: title, url: beehiiv_web_url }
 //       - Update ace_runs row to 'completed' or 'failed'
-//    d. If rejected:
+//    f. If rejected:
 //       - Send statusUpdate { level: 'info', title: 'Draft rejected', body: 'Open dashboard to edit or regenerate.' }
 //       - Update ace_runs row to 'failed' (no content went out)
-// 5. Always return { ok: true } with HTTP 200
+// 6. Return { ok: true } for ignored/replayed callbacks
 ```
+
+The legacy `app/api/notifications/webhook/[provider]/route.ts` exists only as a migration guard and returns `410 Gone` so stale webhook registrations fail loudly.
 
 ---
 
@@ -481,7 +492,7 @@ The `BalanceSummary` is passed to the Editor Agent as additional context alongsi
 // Returns { created: string[], skipped: string[] }
 ```
 
-Default lanes for David Lee / Identity Jedi workspace. These are configured as any other creator would configure their own lanes — no hardcoded workspace ID. The seed endpoint reads `WORKSPACE_ID` from env.
+Default lanes for David Lee / Identity Jedi workspace. These are configured as any other creator would configure their own lanes — no hardcoded workspace ID. The seed endpoint is authenticated and resolves the active workspace through `requireWorkspace()`.
 
 ```typescript
 const DEFAULT_LANES = [
@@ -546,31 +557,30 @@ const DEFAULT_LANES = [
 
 ```typescript
 // POST /api/ace/cron
-// Called by Railway cron scheduler on configured schedule
+// Called by a cron scheduler on configured schedule
 
 export async function POST(req: Request) {
   // 1. Verify Authorization header: Bearer {CRON_SECRET}
   //    Return 401 if missing or mismatched
   
-  // 2. Check ACE_ENABLED — return 200 { ok: true, skipped: true } if false
+  // 2. Query workspace_settings for rows where ace_enabled=true
   
-  // 3. Call runAce({ workspaceId: process.env.WORKSPACE_ID, trigger: 'cron' })
+  // 3. For each opted-in workspace, call runAce({ workspaceId, trigger: 'cron' })
   
-  // 4. Return { ok: true, result }
-  // Always return 200 — Railway will log the response body for monitoring
+  // 4. Return { ok: true, count, results }
 }
 ```
 
-**Railway cron configuration** (set in Railway dashboard → your service → Settings → Cron):
+**Example external cron configuration**:
 
 | Field | Value |
 |---|---|
 | Schedule | `0 8 * * 1-5` |
-| Command | `curl -s -X POST https://your-app.railway.app/api/ace/cron -H "Authorization: Bearer $CRON_SECRET"` |
+| Command | `curl -s -X POST https://your-app.example.com/api/ace/cron -H "Authorization: Bearer $CRON_SECRET"` |
 
 Note: `0 8 * * 1-5` runs at 8:00 AM UTC Monday–Friday. Adjust offset for your preferred local time (e.g. `0 13 * * 1-5` for 8 AM ET / UTC-5).
 
-For Railway specifically: set `CRON_SECRET` as an environment variable in Railway dashboard under the same service. Railway injects it into the cron command via `$CRON_SECRET`.
+The scheduler route's workspace selection is controlled by `workspace_settings.ace_enabled`. `runAce()` still checks the global `ACE_ENABLED` kill switch, so both gates must be enabled for scheduled work to proceed.
 
 ---
 
@@ -580,16 +590,17 @@ For Railway specifically: set `CRON_SECRET` as an environment variable in Railwa
 
 ```typescript
 // POST /api/ace/run
-// Manual trigger from ACE dashboard or external API call
+// Manual trigger from ACE dashboard
 
 // Request body (all optional):
 // {
-//   stages?: ('research' | 'leads' | 'draft' | 'notify')[],
 //   forceRerun?: boolean
 // }
 
 // Returns AceRunResult
 ```
+
+Authenticated browser calls resolve the workspace from the active session via `requireWorkspace()`. Internal callers may pass `Authorization: Bearer ${CRON_SECRET}` plus `{ workspaceId }`, but the public scheduler should generally call `/api/ace/cron` instead.
 
 ---
 
@@ -615,7 +626,7 @@ Add `Ace` to sidebar navigation. Page shows:
 
 **Controls:**
 - "Run ACE Now" button → `POST /api/ace/run`
-- ACE enabled/disabled toggle → reads/writes `ACE_ENABLED` (or a DB flag in Phase 2)
+- Status chip reads the global `ACE_ENABLED` environment flag. The per-workspace scheduled opt-in lives in `workspace_settings.ace_enabled` and is not toggled by the current dashboard.
 
 **Run History panel:**
 - Last 10 `ace_runs` rows: trigger, status, summary, started_at, duration
@@ -701,12 +712,12 @@ __tests__/
 ├── api/
 │   ├── ace-cron.test.ts
 │   │   # returns 401 without CRON_SECRET
-│   │   # returns 200 skipped when ACE_ENABLED=false
-│   │   # calls runAce with trigger: 'cron'
+│   │   # returns skipped response when no workspace has ace_enabled=true
+│   │   # calls runAce once per opted-in workspace with trigger: 'cron'
 │   │
 │   ├── ace-run.test.ts
 │   │   # manual trigger calls runAce with trigger: 'manual'
-│   │   # passes forceRerun and stages through
+│   │   # passes forceRerun through
 │   │
 │   ├── notification-webhook.test.ts
 │   │   # routes to correct provider by [provider] param
@@ -734,7 +745,7 @@ Execute strictly in this order. Each step should be independently committed and 
 | 3 | `lib/notifications/factory.ts` | Factory + `getProviderFromEnv()` |
 | 4 | `lib/notifications/providers/telegram.ts` | Telegram implementation |
 | 5 | `__tests__/notifications/` | Tests for provider + telegram |
-| 6 | `app/api/notifications/webhook/[provider]/route.ts` | Inbound webhook router |
+| 6 | `app/api/notifications/webhook/[provider]/[workspaceId]/route.ts` | Inbound webhook router |
 | 7 | `__tests__/api/notification-webhook.test.ts` | Webhook tests |
 | 8 | `lib/content-lanes/seed.ts` + `app/api/content-lanes/seed/route.ts` | Seed endpoint |
 | 9 | `__tests__/api/content-lanes-seed.test.ts` | Seed tests |
@@ -749,7 +760,7 @@ Execute strictly in this order. Each step should be independently committed and 
 | 18 | `__tests__/api/ace-cron.test.ts` + `ace-run.test.ts` | Cron + manual trigger tests |
 | 19 | Patch `app/api/publish/beehiiv/route.ts` | Post-publish ACE status update |
 | 20 | `app/ace/page.tsx` | ACE dashboard, add to sidebar nav |
-| 21 | Railway config | Set env vars, configure cron, register Telegram webhook |
+| 21 | Scheduler config | Set env vars, configure cron, register per-workspace Telegram webhook |
 | 22 | End-to-end test | Manual trigger → confirm Telegram message arrives → tap Approve → confirm Beehiiv draft created → confirm Telegram confirmation received |
 
 ---
@@ -776,11 +787,11 @@ The following architectural decisions ensure Phase 1 does not create SaaS migrat
 
 2. **`notification_approvals.provider` column** — All providers write to the same table. Analytics, audit trail, and approval logic are provider-agnostic.
 
-3. **`/api/notifications/webhook/[provider]` routing** — One endpoint pattern handles all current and future providers without new routes.
+3. **`/api/notifications/webhook/[provider]/[workspaceId]` routing** — One endpoint pattern handles all current and future providers while keeping inbound callbacks workspace-scoped. The provider signature still proves authenticity; the path workspace id is cross-checked against the approval row.
 
 4. **Content lanes as workspace data, not system config** — Lanes are DB rows scoped to `workspace_id`. Any creator configures their own lanes via the seed endpoint or future onboarding UI. David's 5 lanes are his configuration, not the system's.
 
-5. **`WORKSPACE_ID` env var** — Phase 1 is single-tenant by env config. Phase 2 multi-tenancy replaces this with request-scoped workspace resolution without changing any of the underlying logic.
+5. **No `WORKSPACE_ID` runtime dependency** — User-triggered ACE routes resolve the workspace from the Supabase session; scheduled ACE routes iterate `workspace_settings.ace_enabled=true`; webhooks embed the workspace id in the URL path.
 
 ---
 
