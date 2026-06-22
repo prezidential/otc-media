@@ -132,11 +132,16 @@ async function callRest(name: string, params: Record<string, unknown>): Promise<
   }
 }
 
-async function callTool(
-  name: string,
-  params: Record<string, unknown>,
+/**
+ * Resolve the active Beehiiv MCP transport for the request, mirroring the auth
+ * precedence used for reads: (1) per-workspace OAuth token, then (2) static env
+ * token. Returns null when no MCP token is available so the caller can fall back
+ * to REST. Shared by the read path (`callTool`) and the write path
+ * (`lib/integrations/beehiiv/write.ts`) so both authenticate identically.
+ */
+export async function resolveBeehiivMcp(
   ctx?: IntegrationToolContext
-): Promise<unknown> {
+): Promise<{ config: McpConfig; pubId: string } | null> {
   const pubId = process.env.BEEHIIV_PUBLICATION_ID;
   const mcpUrl = process.env.BEEHIIV_MCP_SERVER_URL;
 
@@ -150,12 +155,12 @@ async function callTool(
     }).catch(() => null);
     if (token) {
       if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
-      const cfg: McpConfig = {
+      const config: McpConfig = {
         url: mcpUrl,
         headers: { Authorization: `Bearer ${token}` },
         transport: (process.env.BEEHIIV_MCP_TRANSPORT as McpTransportMode) ?? "auto",
       };
-      return withMcp(cfg, (call) => callMcp(name, params, call, pubId));
+      return { config, pubId };
     }
   }
 
@@ -163,7 +168,20 @@ async function callTool(
   const mcp = getMcpConfig("beehiiv");
   if (mcp) {
     if (!pubId) throw new Error("BEEHIIV_PUBLICATION_ID is required");
-    return withMcp(mcp, (call) => callMcp(name, params, call, pubId));
+    return { config: mcp, pubId };
+  }
+
+  return null;
+}
+
+async function callTool(
+  name: string,
+  params: Record<string, unknown>,
+  ctx?: IntegrationToolContext
+): Promise<unknown> {
+  const resolved = await resolveBeehiivMcp(ctx);
+  if (resolved) {
+    return withMcp(resolved.config, (call) => callMcp(name, params, call, resolved.pubId));
   }
   return callRest(name, params);
 }

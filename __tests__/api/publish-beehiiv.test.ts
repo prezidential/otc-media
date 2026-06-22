@@ -14,18 +14,22 @@ vi.mock("@/lib/auth/session", () => ({
 
 vi.mock("@/lib/publish/beehiiv", () => ({
   isBeehiivEnabled: vi.fn(),
-  createBeehiivDraft: vi.fn(),
+}));
+
+vi.mock("@/lib/integrations/beehiiv/write", () => ({
+  publishBeehiivPost: vi.fn(),
 }));
 
 vi.mock("@/lib/publish/renderHtml", () => ({
   renderDraftHtml: vi.fn(() => "<p>rendered</p>"),
 }));
 
-import { createBeehiivDraft, isBeehiivEnabled } from "@/lib/publish/beehiiv";
+import { isBeehiivEnabled } from "@/lib/publish/beehiiv";
+import { publishBeehiivPost } from "@/lib/integrations/beehiiv/write";
 import { renderDraftHtml } from "@/lib/publish/renderHtml";
 import { POST } from "@/app/api/publish/beehiiv/route";
 const mockIsBeehiivEnabled = vi.mocked(isBeehiivEnabled);
-const mockCreateBeehiivDraft = vi.mocked(createBeehiivDraft);
+const mockPublishBeehiivPost = vi.mocked(publishBeehiivPost);
 const mockRenderDraftHtml = vi.mocked(renderDraftHtml);
 
 beforeEach(() => {
@@ -90,11 +94,13 @@ describe("POST /api/publish/beehiiv", () => {
       data: { id: "draft-1", content_json: contentJson },
       error: null,
     });
-    mockCreateBeehiivDraft.mockResolvedValue({
+    mockPublishBeehiivPost.mockResolvedValue({
       id: "post-1",
       title: "Identity at scale",
       status: "draft",
       web_url: "https://beehiiv.com/post-1",
+      action: "create",
+      transport: "mcp",
     });
 
     const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {
@@ -106,12 +112,16 @@ describe("POST /api/publish/beehiiv", () => {
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
     expect(json.beehiiv.id).toBe("post-1");
+    expect(json.action).toBe("create");
     expect(mockRenderDraftHtml).toHaveBeenCalledWith(contentJson);
-    expect(mockCreateBeehiivDraft).toHaveBeenCalledWith({
-      title: "Identity at scale",
-      subtitle: "The stack changed faster than controls",
-      htmlContent: "<p>rendered</p>",
-    });
+    expect(mockPublishBeehiivPost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Identity at scale",
+        subtitle: "The stack changed faster than controls",
+        htmlContent: "<p>rendered</p>",
+      }),
+      expect.objectContaining({ existingPostId: null })
+    );
   });
 
   it("returns 500 with publish error details", async () => {
@@ -132,7 +142,7 @@ describe("POST /api/publish/beehiiv", () => {
       },
       error: null,
     });
-    mockCreateBeehiivDraft.mockRejectedValue(new Error("Beehiiv API error: quota exceeded"));
+    mockPublishBeehiivPost.mockRejectedValue(new Error("Beehiiv API error: quota exceeded"));
 
     const req = makeJsonRequest("http://localhost:3000/api/publish/beehiiv", {
       draftId: "draft-1",
