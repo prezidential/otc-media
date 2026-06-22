@@ -3,8 +3,10 @@
 **Owner:** OnTheCorner Media  
 **Audience:** Claude Code agents executing autonomous build phases  
 **System spec:** `docs/cornerstone-system-spec.md`  
-**Status:** Active  
+**Status:** Historical build plan; verify shipped behavior against `docs/cornerstone-system-spec.md`, `README.md`, and source before executing older phase instructions.
 **Last updated:** 2026-06-04  
+
+> Current docs note: Phase 1 Subscriber Health shipped as Next.js API routes (`GET|POST /api/pipelines/health-report` and `POST /api/pipelines/health-report/run`) with Supabase-backed `subscriber_health_history`, not as the standalone `pipelines/subscriber-health.ts` script originally planned below.
 
 ---
 
