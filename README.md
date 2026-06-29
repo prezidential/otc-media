@@ -399,7 +399,7 @@ Operational constraints:
 |------|--------|---------|
 | `/api/publish/status` | `GET` | Returns publish capability flags used by the Issues UI |
 | `/api/publish/export-html` | `POST` | Returns rendered HTML from `issue_drafts.content_json` |
-| `/api/publish/beehiiv` | `POST` | Pushes a draft post to Beehiiv when integration is enabled |
+| `/api/publish/beehiiv` | `POST` | Creates or updates a Beehiiv draft post when integration is enabled |
 
 ### Capability Check
 
@@ -408,6 +408,8 @@ Operational constraints:
 - `BEEHIIV_ENABLED=true`
 - `BEEHIIV_API_KEY` is set
 - `BEEHIIV_PUBLICATION_ID` is set
+
+The publish route still uses that feature flag even when the actual write goes through the Beehiiv MCP OAuth path.
 
 ```bash
 curl -s http://localhost:3000/api/publish/status
@@ -436,8 +438,9 @@ Returns `ok`, `title`, and inline-styled `html`.
 
 Prerequisites:
 
-- Beehiiv env vars configured
-- Saved draft row with `content_json`
+- Beehiiv capability check passes (`BEEHIIV_ENABLED`, `BEEHIIV_API_KEY`, and `BEEHIIV_PUBLICATION_ID`)
+- Saved draft row with structured `content_json`
+- Optional MCP write path: `BEEHIIV_MCP_SERVER_URL` plus a per-workspace Beehiiv OAuth connection from `/integrations/beehiiv`. If no MCP token is resolved, publishing falls back to the Beehiiv REST API.
 
 ```bash
 curl -s -X POST http://localhost:3000/api/publish/beehiiv \
@@ -445,7 +448,36 @@ curl -s -X POST http://localhost:3000/api/publish/beehiiv \
   -d '{"draftId":"<issue_draft_id>"}'
 ```
 
-Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, and `beehiiv.web_url`.
+The Publisher Agent renders `content_json` to newsletter HTML, sends it as a Beehiiv **draft** (never schedules or sends), logs `agent:publisher` to `/runs`, and marks the issue draft `published` on success.
+
+Write behavior is **create once, edit many**:
+
+1. If `content_json.metadata.beehiiv_post_id` exists, the route updates that Beehiiv draft.
+2. Otherwise, the MCP path lists Beehiiv draft posts and updates an exact title match to avoid duplicates.
+3. If no existing draft can be resolved, it creates a new Beehiiv draft.
+4. After a successful create/update, the Beehiiv post id is stored in `content_json.metadata.beehiiv_post_id` so later pushes update the same draft.
+
+Transport behavior:
+
+- MCP path: `save_post` creates a draft; `edit_post_content` replaces the body; `edit_post` patches title, subtitle, SEO, and preview text.
+- REST fallback: `POST /publications/{id}/posts` creates; `PUT /publications/{id}/posts/{postId}` updates when a stored id exists.
+
+Successful response includes:
+
+```json
+{
+  "ok": true,
+  "action": "create",
+  "beehiiv": {
+    "id": "post_...",
+    "title": "Issue title",
+    "status": "draft",
+    "web_url": "https://..."
+  }
+}
+```
+
+`action` is `"create"` or `"update"`. If the draft has `paywall_after_section`, the response also includes `paywallReminder`; Beehiiv has no API/MCP primitive to insert the premium paywall break, so set the paywall manually in the Beehiiv editor before sending.
 
 ### Troubleshooting
 
@@ -453,6 +485,8 @@ Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, an
 - `404 Draft not found`: draft ID is incorrect or from a different workspace.
 - `400 Draft has no structured content`: draft exists but `content_json` is null.
 - `403 Beehiiv integration is not enabled`: Beehiiv env vars are missing or `BEEHIIV_ENABLED` is not `true`.
+- Duplicate Beehiiv drafts: confirm the saved issue has `content_json.metadata.beehiiv_post_id`. Without a stored id, only the MCP path can reconcile by exact draft title before creating.
+- Paywall missing in Beehiiv: expected API limitation; follow the `paywallReminder` and insert the break manually in Beehiiv.
 - `500 Beehiiv API error: ...`: Beehiiv rejected the request or returned an upstream error.
 
 ## License

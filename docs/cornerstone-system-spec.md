@@ -4,11 +4,11 @@
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Last updated: 2026-06-08
+Last updated: 2026-06-29
 
 > **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
 
-**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17). **Next: §3.19 Newsroom Home & Cohesion Loop (P1)** — make the four creator surfaces (brainstorm, draft, analytics, push) one cohesive newsroom.
+**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Beehiiv publishing now uses MCP-first create/update semantics with REST fallback (§3.18); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17). **Next: §3.19 Newsroom Home & Cohesion Loop (P1)** — make the four creator surfaces (brainstorm, draft, analytics, push) one cohesive newsroom.
 
 ---
 
@@ -192,8 +192,10 @@ ALTER TABLE issue_drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'
 - **Human gate:** Yes — human must review draft before publishing
 - **Tools:**
   - `render_html` — convert draft to newsletter-ready HTML
-  - `push_beehiiv` — create Beehiiv draft (feature-flagged)
+  - `push_beehiiv` — create or update a Beehiiv draft (feature-flagged; MCP-first with REST fallback)
   - `render_linkedin` — format for LinkedIn posting (Phase 2)
+
+`push_beehiiv` is intentionally draft-only: it never schedules or sends the post. The Publisher Agent persists the returned Beehiiv post id in `issue_drafts.content_json.metadata.beehiiv_post_id` so a later push updates the same Beehiiv draft instead of creating a duplicate. If the stored id is missing, the MCP path reconciles by exact draft title before creating. If a draft sets `paywall_after_section`, the rendered HTML includes a marker and the API response returns a `paywallReminder`; Beehiiv does not expose an API/MCP primitive for inserting the premium paywall break, so that remains a manual editor step.
 
 #### Brainstormer Agent (Ideation) **[NEW in v2.7]**
 
@@ -1114,6 +1116,7 @@ lib/integrations/
   beehiiv/
     index.ts        — BeehiivPlugin (MCP or REST: get_publication_stats, list_posts, get_post_stats, list_subscriptions)
     normalize.ts    — MCP/REST -> stable BeehiivPublicationStats / BeehiivPostSummary (reconciles percent vs fraction rates)
+    write.ts        — Beehiiv draft writes: save_post/create, edit_post_content + edit_post/update, REST fallback
   supergrow/
     index.ts        — SupergrowPlugin (MCP: get_linkedin_analytics [composed], get_post_performance, list_scheduled_posts, schedule_post)
     normalize.ts    — SupergrowAnalytics / SupergrowPostSummary + composeAnalytics()
@@ -1143,6 +1146,8 @@ export type IntegrationPlugin = {
 Each plugin checks for `{PLATFORM}_MCP_SERVER_URL` via `getMcpConfig()`. When set, `callTool` routes through `@modelcontextprotocol/sdk` `Client` (HTTP-first, SSE fallback) via the shared `withMcp()` helper in `lib/integrations/mcp.ts`; otherwise it uses the platform REST API. Auth: `{PLATFORM}_MCP_TOKEN` (defaults to `{PLATFORM}_API_KEY`) sent as Bearer, unless the URL itself carries auth (Supergrow embeds `?api_key=` — a stray Bearer header is harmless). Because the plugin's tool names/shapes differ from the raw MCP server surface, `callTool` maps params (injecting `publication_id` / `workspace_id`) and normalizes responses to one stable shape per tool.
 
 **OAuth connections (Beehiiv).** The Beehiiv MCP server requires OAuth 2.1, not a static key. The app self-registers a public PKCE client via Dynamic Client Registration (`lib/integrations/beehiiv/oauth.ts`, built on `@modelcontextprotocol/sdk` auth helpers; client persisted per origin in `mcp_oauth_clients`), runs an authorization-code+PKCE flow through `/api/integrations/beehiiv/oauth/{start,callback}`, and stores per-(workspace,user) tokens pgsodium-encrypted in `beehiiv_oauth_connections` (decrypted view + `upsert_beehiiv_connection` RPC; mirrors the LinkedIn token pattern). `callTool` resolves a fresh access token (auto-refreshing within 60s of expiry) and injects it as the Bearer header. To thread the workspace/user, `IntegrationPlugin.callTool(name, params, ctx?)` takes an optional `IntegrationToolContext` ({workspaceId, userId, supabase, origin}); `runIntegrationQuery` / `callIntegrationTool` and the `/api/integrations/*` routes pass their `requireWorkspace()` ctx through. A **"Connect Beehiiv"** button kicks off the flow.
+
+**Beehiiv write layer.** `lib/integrations/beehiiv/write.ts` shares the same MCP resolution order as analytics reads: per-workspace OAuth token first, then static MCP/env token, then REST fallback when no MCP token is available. It exposes `publishBeehiivPost()` with `action: "create" | "update"` and `transport: "mcp" | "rest"`. The MCP path calls `save_post` for new drafts, `edit_post_content` for full-body replacement, and `edit_post` for metadata updates; when no stored post id is available, it can `list_posts` among Beehiiv drafts and update an exact title match before creating. The REST path creates with `POST /publications/{id}/posts` and updates with `PUT /publications/{id}/posts/{postId}` only when the caller supplies an existing post id. Neither path schedules/sends the post or inserts Beehiiv's premium paywall break.
 
 **Conversational dashboard.** `/integrations/analytics` includes an **Ask panel** (`app/integrations/_components/ask-panel.tsx`) with a platform selector that runs each platform's MCP tools via `/api/integrations/[platform]/query` and shows a visible transcript.
 
