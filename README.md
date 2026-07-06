@@ -8,8 +8,10 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
-| **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
+| **Newsroom Home** | Routes signed-in users to `/dashboard`, the status hub for the creator loop |
+| **Brainstorm** | Grounds ideation in signals, health, and performance data before promoting drafts into Issues |
+| **Drafting** | Produces saved newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Revision** | Edits saved DraftObject sections inline, manages the "This Week" signal panel, and regenerates selected sections with lint guardrails |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
 ## Tech Stack
@@ -111,7 +113,9 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000). Authenticated users land on
+`/dashboard`; the primary studio loop is Dashboard → Brainstorm → Issues →
+Analytics.
 
 ### First-Time Setup
 
@@ -123,12 +127,14 @@ Open [http://localhost:3000](http://localhost:3000).
 6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
 7. **Approve leads:** Review and approve leads on the Leads page
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
-9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+9. **Review/edit draft:** Use Issues → "Edit draft" to adjust saved DraftObject sections and the "This Week in Identity" signal list
+10. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
 ## Auth + Multi-Tenancy (Phase 2A — M0 → M2)
 
 Cornerstone OS uses Supabase Auth + Postgres Row-Level Security for the
-authorization boundary. See spec v2.9 §3.16 for the full model.
+authorization boundary. See `docs/cornerstone-system-spec.md` §3.16 for the
+full model.
 
 Three-layer model:
 1. **Authentication** — Supabase Auth (email + password today, OAuth in M2).
@@ -241,26 +247,35 @@ the workspace explicitly:
 ```
 app/
 ├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── page.tsx             # Redirects / to /dashboard
+├── dashboard/page.tsx   # Newsroom home
+├── brainstorm/page.tsx  # Brainstorming hub
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── issues/page.tsx      # Issue generation, editing, publishing, content products
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── integrations/        # Beehiiv/Supergrow connections + analytics
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
+    ├── dashboard/stats/     # Newsroom home summary
+    ├── brainstorm/          # Sessions, messages, draft promotion
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
-    ├── issues/              # Generate, latest, regenerate-section
+    ├── issues/              # Generate, list/latest, get/patch, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
+    ├── integrations/        # Plugin status/action/query + analytics
     ├── signals/list/        # List captured signals
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
 lib/
 ├── draft/               # DraftObject type, renderer, lint, parser
+├── brainstorm/          # Brainstorm tools, prompts, promotion handoffs
+├── dashboard/           # Newsroom summary helpers
+├── integrations/        # Beehiiv/Supergrow plugin and MCP clients
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
@@ -269,7 +284,7 @@ lib/
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # Canonical system spec, runbooks, execution notes
 ```
 
 ## Architecture
@@ -361,6 +376,66 @@ Resolution behavior:
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
 
+## Issues Draft Editing Runbook
+
+The Issues page is the human gate for saved `issue_drafts`. It loads draft
+history, lets an editor deep-link to a specific draft, and saves hand edits
+without adding schema columns.
+
+### Codepaths
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/issues/list?limit=10` | `GET` | Recent saved drafts for the History panel |
+| `/api/issues/[id]` | `GET` | Load one workspace-scoped draft; used by `/issues?draft=<id>` handoffs |
+| `/api/issues/[id]` | `PATCH` | Save inline editor changes to `content_json` and re-render markdown `content` |
+| `/api/signals/list?limit=25` | `GET` | Candidate source for "Pull current candidates" in the This Week panel |
+
+### Editable fields
+
+`PATCH /api/issues/[id]` accepts either a top-level patch or
+`{ "content_json": { ... } }`. Only these DraftObject fields are editable:
+
+- strings: `title`, `fresh_signals`, `deep_dive`, `last_word`, `promo_slot`, `close`
+- string arrays: `hook_paragraphs`, `sources`
+
+Unknown keys are ignored. Array fields keep string items only. The route merges
+the sanitized patch onto the existing `content_json`, normalizes it through
+`createDraftContent()`, writes both `content_json` and rendered markdown
+`content`, and returns `{ ok, id, draft, content_json }`.
+
+Example from an authenticated session or API client carrying the app session
+cookies:
+
+```bash
+curl -s -X PATCH http://localhost:3000/api/issues/<draft_id> \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content_json": {
+      "title": "Agents Need Guardrails",
+      "hook_paragraphs": ["Identity teams are inheriting agent sprawl faster than policy can follow."],
+      "fresh_signals": "**Fresh Signals**\n\nTwo agent identity stories shaped the week.\n\n**NIST drafts agent IAM guidance**\n\nWorth tracking for control owners.\n\nSources:\n- https://example.com/nist-agent-iam",
+      "sources": ["https://example.com/nist-agent-iam"]
+    }
+  }'
+```
+
+### This Week panel
+
+`fresh_signals` remains a single markdown string in `DraftContentJson`; the UI
+uses `lib/draft/freshSignals.ts` to parse it into `{ synopsis, items[] }` and
+serialize it back deterministically. The editor preserves the synopsis ("Part A")
+while adding, editing, removing, or reordering cited signal items ("Part B").
+"Pull current candidates" reads the same in-app signal feed as dashboard signal
+widgets and filters out URLs already present in the current This Week list.
+
+### Troubleshooting
+
+- `401 Not authenticated`: the request is missing a Supabase session.
+- `400 No editable fields provided in patch.`: the body omitted all whitelisted fields or used wrong types.
+- `404 Draft not found.`: the draft id does not exist in the active workspace.
+- Edits save but publish/export looks stale: check that the client used `PATCH /api/issues/[id]`; direct DB edits to `content_json` do not automatically re-render `content`.
+
 ## Autonomous Pipeline Runbook
 
 The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result.
@@ -388,8 +463,10 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
-- `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+- The request must come from an authenticated session with an active workspace;
+  `requireWorkspace()` supplies the workspace id.
+- `writer` and `editor` require an existing brand profile in `brand_profiles`
+  for the active workspace.
 
 ## Publishing Runbook
 
