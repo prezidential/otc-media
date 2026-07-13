@@ -4,8 +4,8 @@
 
 **Owner:** OnTheCorner Media  
 **Base system (canonical narrative):** Cornerstone OS **v2.8** — [`docs/cornerstone-system-spec.md`](cornerstone-system-spec.md) **§3.14**  
-**This document:** implementation notes, Telegram behavior, env vars, operator runbook, and historical build checklist — use alongside the system spec.  
-**Status:** Implemented; updated for Phase 2A M2 workspace scoping  
+**This document:** implementation notes, Telegram behavior, env vars, operator runbook, and historical build checklist — use alongside the system spec.
+**Status:** Implemented; updated for Phase 2A M2 workspace scoping
 **Deployment target:** Railway/Vercel-style cron + webhook URLs
 
 ---
