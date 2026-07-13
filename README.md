@@ -80,6 +80,19 @@ ELEVENLABS_VOICE_ID=
 # Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
 PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
 
+# Optional — Autonomous Content Engine (ACE) + Subscriber Health cron auth
+ACE_ENABLED=false
+CRON_SECRET=random-uuid-for-cron-auth
+# Optional but recommended when ACE calls the app from server-side code.
+# Falls back to VERCEL_URL or http://localhost:3000.
+INTERNAL_APP_URL=http://localhost:3000
+
+# Optional — ACE approval notifications (Telegram is the Phase 1 provider)
+NOTIFICATION_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_CHAT_ID=your-personal-chat-id
+TELEGRAM_WEBHOOK_SECRET=random-uuid-for-webhook-verification
+
 # Optional — workspace invite emails via Resend. When unset, POST /api/workspaces/[id]/members
 # still creates the invite row and returns the join URL; owners share it manually.
 RESEND_API_KEY=your-resend-api-key
@@ -97,6 +110,8 @@ Notes:
 - Beehiiv variables are optional unless you plan to push drafts directly to Beehiiv.
 - ElevenLabs variables are optional; without them, **Download MP3** on the Issues content-products panel returns a configuration error.
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
+- **ACE variables are optional** unless you run the autonomous approval loop. `ACE_ENABLED=true` is a global safety gate in `lib/ace/orchestrator.ts`; each workspace must also have `workspace_settings.ace_enabled=true` for cron fan-out. `CRON_SECRET` protects `POST /api/ace/cron`, internal `POST /api/ace/run` calls, and the Subscriber Health cron route.
+- **Telegram webhooks are workspace-scoped.** Register each workspace at `/api/notifications/webhook/telegram/<workspaceId>` with `secret_token` set to `TELEGRAM_WEBHOOK_SECRET`; the legacy `/api/notifications/webhook/telegram` path returns HTTP 410.
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
 - **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin-crypto.sql` first (M2: bootstraps the pgsodium key + `linkedin_encrypt`/`linkedin_decrypt` helpers), then `lib/supabase/schema-linkedin.sql` (creates `linkedin_connections` + `linkedin_drafts`, the `linkedin_connections_decrypted` view, and the `upsert_linkedin_connection` RPC) in the Supabase SQL editor before connecting an account.
@@ -179,6 +194,15 @@ In the Supabase SQL editor, run:
   `cs_active_workspace` cookie.
 - The studio sidebar shows the active workspace, role, and a sign-out button.
 
+**Middleware caveat for system routes:** `middleware.ts` only treats `/sign-in`,
+`/sign-up`, `/api/auth/*`, `/api/health`, static assets, and Next.js assets as
+public. External cron or webhook calls without Supabase session cookies must be
+made reachable before their route-level secrets can run. If you enable ACE,
+Subscriber Health cron, or Telegram approvals, expose or allowlist the relevant
+system paths (`/api/ace/cron`, `/api/pipelines/health-report`,
+`/api/notifications/webhook/*`) in the deployment/middleware model and keep the
+route-level `CRON_SECRET` or provider secret checks in place.
+
 ### Workspace + invite endpoints
 
 | Endpoint | Description |
@@ -240,36 +264,59 @@ the workspace explicitly:
 
 ```
 app/
-├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── page.tsx             # Redirects signed-in users to /dashboard
+├── dashboard/page.tsx   # Newsroom home and cross-surface status
 ├── research/page.tsx    # Research console
+├── signals/page.tsx     # Captured signals feed
 ├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── issues/page.tsx      # Issue draft generation, editing, publishing, content products
+├── brainstorm/page.tsx  # Brainstorming Hub
+├── ace/page.tsx         # Autonomous Content Engine dashboard
+├── integrations/        # Beehiiv/Supergrow OAuth, analytics, ask panel
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── brand-profiles/      # Brand profile management
+├── runs/page.tsx        # Agent/pipeline run history
+├── sign-in|sign-up|onboarding/
 └── api/
+    ├── auth/                # Supabase callbacks + LinkedIn publishing OAuth
+    ├── workspaces/          # Workspace creation, active selection, invites, members
     ├── ingest/rss/          # Single RSS feed ingest
-    ├── research/            # Directives, run-directives, run-all
-    ├── leads/               # Generate, list, approve
-    ├── issues/              # Generate, latest, regenerate-section
+    ├── research/            # Directives, sources, run-directives, run-all
+    ├── signals/             # Signal list/create/update/delete
+    ├── leads/               # Generate, list, approve, dismiss, from-signal
+    ├── issues/              # Generate/list/edit/delete/status/regenerate-section
+    ├── brainstorm/          # Sessions, messages, manual signals, promote-draft
+    ├── content-products/    # Social, podcast, TTS, sponsorship derivatives
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
-    ├── revenue/             # List, seed, recommend
+    ├── integrations/        # MCP platform status/query/action/OAuth + analytics
+    ├── analytics/           # Post performance sync
+    ├── pipelines/           # Subscriber Health cron/manual/status routes
+    ├── ace/                 # Cron, manual run, dashboard data
+    ├── notifications/       # Workspace-scoped webhook callbacks
     ├── publish/             # Status, HTML export, Beehiiv draft push
-    ├── signals/list/        # List captured signals
-    ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
+    ├── pipeline/run/        # Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
 lib/
+├── ace/                 # ACE orchestration and lane balance
+├── agents/              # Researcher, Writer, Editor, Publisher agent loop
+├── auth/                # Supabase session, active workspace, OAuth helpers
+├── brainstorm/          # Brainstorming tool loop and issue promotion
+├── content-products/    # Derivative prompt context, TTS, persistence helpers
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
+├── integrations/        # MCP registry, Beehiiv/Supergrow plugins, OAuth/write paths
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
+├── notifications/       # Provider interface + Telegram implementation
 ├── research/            # RSS feed map (8 directives, 13+ sources)
-├── supabase/            # Server + browser clients
+├── subscriber-health/   # Weekly health report pipeline
+├── supabase/            # Server/browser clients and SQL schemas
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+e2e/                     # Playwright smoke and authenticated specs
+docs/                    # Canonical system spec, runbooks, design handoffs
 ```
 
 ## Architecture
@@ -373,6 +420,8 @@ Request body (all optional):
 
 - `stages`: array of stages to run. Defaults to `["researcher","writer","editor"]`.
 - `triggered_by`: audit label for run provenance. Defaults to `"manual"`.
+- `returnDraftId`: when `true`, include the generated editor `draftId` in the response.
+- `laneBalanceContext`: ACE-only lane balance summary forwarded into the Editor context.
 
 ```bash
 curl -s -X POST http://localhost:3000/api/pipeline/run \
@@ -385,11 +434,65 @@ Response includes:
 - `ok`: `true` only when all executed stages succeed.
 - `aborted`: whether execution stopped early after a failed stage.
 - `stages`: per-stage `success`, `summary`, `decisions`, and `data`.
+- `draftId`: returned only when `returnDraftId` is true; `null` means no editor draft id was produced.
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
+- The caller must have a Supabase session and an active workspace (`requireWorkspace()`); production code no longer reads `WORKSPACE_ID`.
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+
+## ACE Operator Runbook
+
+ACE runs the newsroom pipeline autonomously, stores an `ace_runs` row, and sends
+a Telegram approval request before publishing a newsletter draft.
+
+### Prerequisites
+
+1. Apply the ACE-related schemas: `schema-notification-approvals.sql`,
+   `schema-content-lanes.sql`, `schema-ace-runs.sql`, and
+   `schema-workspace-settings.sql`.
+2. Seed content lanes from an authenticated workspace session:
+   `POST /api/content-lanes/seed`.
+3. Enable both gates:
+   - global env: `ACE_ENABLED=true`
+   - workspace row: `workspace_settings.ace_enabled=true`
+4. Configure `CRON_SECRET`, `NOTIFICATION_PROVIDER=telegram`,
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_WEBHOOK_SECRET`.
+
+### Endpoints
+
+| Path | Method | Auth model | Purpose |
+|------|--------|------------|---------|
+| `/api/ace/dashboard` | `GET` | Supabase session | ACE status, pending approvals, history, lane balance |
+| `/api/ace/run` | `POST` | Supabase session | Manual "Run ACE now" for the active workspace |
+| `/api/ace/run` | `POST` | `Authorization: Bearer ${CRON_SECRET}` + `{ "workspaceId": "..." }` | Internal per-workspace run path |
+| `/api/ace/cron` | `POST` | `Authorization: Bearer ${CRON_SECRET}` | Fan out over `workspace_settings.ace_enabled=true` |
+| `/api/notifications/webhook/telegram/[workspaceId]` | `POST` | Telegram secret header | Receive approval/rejection callbacks |
+
+### Cron and webhook examples
+
+```bash
+curl -s -X POST https://your-app.example.com/api/ace/cron \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+```bash
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url":"https://your-app.example.com/api/notifications/webhook/telegram/<workspaceId>",
+    "secret_token":"'"${TELEGRAM_WEBHOOK_SECRET}"'"
+  }'
+```
+
+### Troubleshooting
+
+- `skipped: ACE disabled`: set `ACE_ENABLED=true`; cron also requires the workspace's `workspace_settings.ace_enabled` row to be true.
+- `401 Unauthorized` from cron/manual internal calls: `CRON_SECRET` is missing or the bearer token does not match.
+- Telegram webhook returns 410: the provider-only URL is deprecated; re-register the webhook with `/telegram/<workspaceId>`.
+- No approval message is sent: verify Telegram env vars and ensure the pipeline produced a saved `issue_drafts` row.
+- Cron/webhook redirects to `/sign-in`: expose the system paths in `middleware.ts` or the deployment gateway before relying on route-level secrets.
+- Scheduled ACE fails at the pipeline step with `Not authenticated`: `runAce()` posts to `/api/pipeline/run`, and that route currently calls `requireWorkspace()` from request cookies. Verify the internal call path can satisfy that session requirement before enabling unattended cron.
 
 ## Publishing Runbook
 

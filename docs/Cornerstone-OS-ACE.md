@@ -4,9 +4,9 @@
 
 **Owner:** OnTheCorner Media  
 **Base system (canonical narrative):** Cornerstone OS **v2.8** — [`docs/cornerstone-system-spec.md`](cornerstone-system-spec.md) **§3.14**  
-**This document:** step-by-step build order, TypeScript sketches, Telegram behavior, env vars, and test matrix — use alongside the system spec.  
-**Status:** Ready for implementation  
-**Deployment target:** Railway (cron + webhook URLs)
+**This document:** implementation notes, Telegram behavior, env vars, operator runbook, and historical build checklist — use alongside the system spec.  
+**Status:** Implemented; updated for Phase 2A M2 workspace scoping  
+**Deployment target:** Railway/Vercel-style cron + webhook URLs
 
 ---
 
@@ -25,7 +25,7 @@ This spec extends Cornerstone OS **v2.8** (§3.14) to implement the **Autonomous
 Add to `.env.local` and Railway environment configuration:
 
 ```env
-# Notification provider selection (workspace-level in future; global for Phase 1)
+# Notification provider selection (global Phase 1 provider)
 NOTIFICATION_PROVIDER=telegram
 
 # Telegram — only required when NOTIFICATION_PROVIDER=telegram
@@ -38,17 +38,28 @@ CRON_SECRET=random-uuid-for-cron-auth
 
 # ACE feature flag
 ACE_ENABLED=true
+
+# Optional: origin used by server-side ACE calls to POST /api/pipeline/run.
+# Falls back to VERCEL_URL, then http://localhost:3000.
+INTERNAL_APP_URL=https://your-app.example.com
 ```
 
 **Setup instructions:**
 
 1. `TELEGRAM_BOT_TOKEN` — Message `@BotFather` on Telegram → `/newbot` → follow prompts → copy token
 2. `TELEGRAM_CHAT_ID` — Message `@userinfobot` on Telegram → it returns your personal chat ID
-3. After Railway deployment, register the webhook:
+3. Enable ACE with both gates:
+   - Set `ACE_ENABLED=true` in the app environment.
+   - Set `workspace_settings.ace_enabled=true` for each workspace the cron should run (column added by `lib/supabase/schema-workspace-settings.sql`).
+4. After deployment, register one Telegram webhook per workspace:
    ```
    POST https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook
-   Body: { "url": "https://your-app.railway.app/api/notifications/webhook/telegram", "secret_token": "{TELEGRAM_WEBHOOK_SECRET}" }
+   Body: { "url": "https://your-app.example.com/api/notifications/webhook/telegram/{workspaceId}", "secret_token": "{TELEGRAM_WEBHOOK_SECRET}" }
    ```
+   The legacy provider-only URL (`/api/notifications/webhook/telegram`) returns HTTP 410.
+5. Middleware/deployment must allow external cron and webhook calls to reach the
+   route handlers. The route handlers still enforce `CRON_SECRET` or Telegram's
+   `X-Telegram-Bot-Api-Secret-Token` after middleware passes the request through.
 
 ---
 
@@ -325,26 +336,31 @@ Handles two Telegram update types:
 
 ## 5. Inbound Webhook Endpoint
 
-**File: `app/api/notifications/webhook/[provider]/route.ts`**
+**Files:**
+- `app/api/notifications/webhook/[provider]/[workspaceId]/route.ts` — live workspace-scoped webhook
+- `app/api/notifications/webhook/[provider]/route.ts` — deprecated path, returns HTTP 410
 
 ```typescript
-// POST /api/notifications/webhook/telegram
-// POST /api/notifications/webhook/slack      (Phase 2)
-// POST /api/notifications/webhook/email      (Phase 2)
+// POST /api/notifications/webhook/telegram/<workspaceId>
+// POST /api/notifications/webhook/slack/<workspaceId>      (Phase 2)
+// POST /api/notifications/webhook/email/<workspaceId>      (Phase 2)
 
 // Routing logic:
-// 1. Extract provider slug from [provider] param
-// 2. Get provider instance from factory
-// 3. Call provider.handleInbound(body, headers)
+// 1. Extract provider slug and workspaceId from route params.
+// 2. Get provider instance from factory.
+// 3. Call provider.handleInbound(body, headers), which verifies provider secret.
 // 4. If ApprovalResponse returned:
-//    a. Load notification_approvals row — verify status is 'pending' and not expired
-//    b. Update row: status, responded_at
-//    c. If approved AND entity_type === 'newsletter_draft':
-//       - Call POST /api/publish/beehiiv internally with { draftId: entity_id }
+//    a. Load notification_approvals row.
+//    b. Cross-check row.workspace_id against the workspaceId path param.
+//    c. Verify status is 'pending' and not expired.
+//    d. Update row: status, responded_at
+//    e. If approved AND entity_type === 'newsletter_draft':
+//       - Load the draft from issue_drafts for the same workspace.
+//       - Render HTML and call createBeehiivDraft(...)
 //       - On success: send statusUpdate { level: 'success', title: 'Published', body: title, url: beehiiv_web_url }
 //       - On failure: send statusUpdate { level: 'error', title: 'Publish failed', body: error }
 //       - Update ace_runs row to 'completed' or 'failed'
-//    d. If rejected:
+//    f. If rejected:
 //       - Send statusUpdate { level: 'info', title: 'Draft rejected', body: 'Open dashboard to edit or regenerate.' }
 //       - Update ace_runs row to 'failed' (no content went out)
 // 5. Always return { ok: true } with HTTP 200
@@ -391,7 +407,12 @@ Pre-flight checks (skip if forceRerun: true):
 1. Insert ace_runs row (status: 'running')
 
 2. Call POST /api/pipeline/run internally
-   Body: { stages: ['researcher', 'writer', 'editor'], triggered_by: 'ace:{trigger}', returnDraftId: true }
+   Body: {
+     stages: ['researcher', 'writer', 'editor'],
+     triggered_by: 'ace:{trigger}',
+     returnDraftId: true,
+     laneBalanceContext: getLaneBalance(workspaceId)
+   }
    
 3. Evaluate pipeline result:
 
@@ -423,7 +444,14 @@ Pre-flight checks (skip if forceRerun: true):
 
 ### 6.2 Pipeline Orchestrator contract change
 
-The existing `POST /api/pipeline/run` must be updated to accept `returnDraftId: boolean` in the request body and include the generated `draftId` in the response when `returnDraftId: true`. This is a non-breaking additive change.
+`POST /api/pipeline/run` accepts `returnDraftId: boolean` in the request body
+and includes the generated `draftId` in the response when `returnDraftId: true`.
+It also accepts `laneBalanceContext`, which ACE forwards to the Editor Agent.
+The route is user/session-scoped through `requireWorkspace()`; ACE calls it via
+the app origin selected by `INTERNAL_APP_URL`, `VERCEL_URL`, or localhost.
+For scheduled ACE, verify that internal request path can satisfy this session
+requirement before enabling unattended cron; otherwise the pipeline step returns
+`Not authenticated`.
 
 ---
 
@@ -481,7 +509,10 @@ The `BalanceSummary` is passed to the Editor Agent as additional context alongsi
 // Returns { created: string[], skipped: string[] }
 ```
 
-Default lanes for David Lee / Identity Jedi workspace. These are configured as any other creator would configure their own lanes — no hardcoded workspace ID. The seed endpoint reads `WORKSPACE_ID` from env.
+Default lanes for David Lee / Identity Jedi workspace. These are configured as
+any other creator would configure their own lanes — no hardcoded workspace ID.
+The seed endpoint is a user-facing route: it calls `requireWorkspace()` and
+inserts rows for the caller's active workspace.
 
 ```typescript
 const DEFAULT_LANES = [
@@ -551,13 +582,13 @@ const DEFAULT_LANES = [
 export async function POST(req: Request) {
   // 1. Verify Authorization header: Bearer {CRON_SECRET}
   //    Return 401 if missing or mismatched
-  
-  // 2. Check ACE_ENABLED — return 200 { ok: true, skipped: true } if false
-  
-  // 3. Call runAce({ workspaceId: process.env.WORKSPACE_ID, trigger: 'cron' })
-  
-  // 4. Return { ok: true, result }
-  // Always return 200 — Railway will log the response body for monitoring
+
+  // 2. List workspace_settings rows where ace_enabled=true
+
+  // 3. For each workspace, call runAce({ workspaceId, trigger: 'cron' })
+  //    runAce also checks global ACE_ENABLED === "true" before doing work.
+
+  // 4. Return { ok: true, count, results }
 }
 ```
 
@@ -572,6 +603,11 @@ Note: `0 8 * * 1-5` runs at 8:00 AM UTC Monday–Friday. Adjust offset for your 
 
 For Railway specifically: set `CRON_SECRET` as an environment variable in Railway dashboard under the same service. Railway injects it into the cron command via `$CRON_SECRET`.
 
+For Vercel or another platform cron, configure the same `POST /api/ace/cron`
+request with `Authorization: Bearer ${CRON_SECRET}`. This repository's
+`vercel.json` currently schedules Subscriber Health, not ACE, so add an ACE
+cron entry before expecting platform-scheduled ACE runs.
+
 ---
 
 ## 10. Manual Trigger Endpoint
@@ -580,13 +616,20 @@ For Railway specifically: set `CRON_SECRET` as an environment variable in Railwa
 
 ```typescript
 // POST /api/ace/run
-// Manual trigger from ACE dashboard or external API call
+// Manual trigger from ACE dashboard, or internal per-workspace call from cron
 
-// Request body (all optional):
+// User-initiated request body (all optional):
 // {
-//   stages?: ('research' | 'leads' | 'draft' | 'notify')[],
 //   forceRerun?: boolean
 // }
+// Workspace is resolved from requireWorkspace().
+
+// Internal request body:
+// {
+//   workspaceId: string,
+//   forceRerun?: boolean
+// }
+// Requires Authorization: Bearer ${CRON_SECRET}.
 
 // Returns AceRunResult
 ```
@@ -615,7 +658,8 @@ Add `Ace` to sidebar navigation. Page shows:
 
 **Controls:**
 - "Run ACE Now" button → `POST /api/ace/run`
-- ACE enabled/disabled toggle → reads/writes `ACE_ENABLED` (or a DB flag in Phase 2)
+- ACE enabled status comes from global `ACE_ENABLED`; cron eligibility is the
+  per-workspace `workspace_settings.ace_enabled` flag.
 
 **Run History panel:**
 - Last 10 `ace_runs` rows: trigger, status, summary, started_at, duration
@@ -776,11 +820,13 @@ The following architectural decisions ensure Phase 1 does not create SaaS migrat
 
 2. **`notification_approvals.provider` column** — All providers write to the same table. Analytics, audit trail, and approval logic are provider-agnostic.
 
-3. **`/api/notifications/webhook/[provider]` routing** — One endpoint pattern handles all current and future providers without new routes.
+3. **`/api/notifications/webhook/[provider]/[workspaceId]` routing** — One endpoint pattern handles all current and future providers without deployment-wide workspace state.
 
 4. **Content lanes as workspace data, not system config** — Lanes are DB rows scoped to `workspace_id`. Any creator configures their own lanes via the seed endpoint or future onboarding UI. David's 5 lanes are his configuration, not the system's.
 
-5. **`WORKSPACE_ID` env var** — Phase 1 is single-tenant by env config. Phase 2 multi-tenancy replaces this with request-scoped workspace resolution without changing any of the underlying logic.
+5. **Workspace resolution** — User-facing routes use `requireWorkspace()` and
+   system-only routes pass an explicit `workspaceId` after route-level
+   authentication. Production code no longer reads `WORKSPACE_ID`.
 
 ---
 
