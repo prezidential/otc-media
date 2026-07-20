@@ -8,7 +8,7 @@ Last updated: 2026-06-08
 
 > **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
 
-**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17). **Next: §3.19 Newsroom Home & Cohesion Loop (P1)** — make the four creator surfaces (brainstorm, draft, analytics, push) one cohesive newsroom.
+**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17); and the main §3.19 Newsroom Cohesion wiring shipped across P1a–P1d. The full-loop acceptance test remains open: issue-level performance and analytics-to-editorial handoffs are not implemented yet.
 
 ---
 
@@ -1175,50 +1175,62 @@ Each plugin checks for `{PLATFORM}_MCP_SERVER_URL` via `getMcpConfig()`. When se
 
 ---
 
-## 3.19 Newsroom Home & Cohesion Loop (P1) **[NEW 2026-06-08]**
+## 3.19 Newsroom Home & Cohesion Loop (P1) **[PARTIALLY IMPLEMENTED 2026-06]**
 
 ### Purpose
-Cornerstone has all four creator capabilities — **brainstorm** (§3.13), **draft** (§3.4–§3.7), **see analytics** (§3.17–§3.18), and **push** (§3.7) — but they live as separate routes that don't talk to each other. There is no single home that shows the creator's whole state, the handoffs between surfaces are opaque, and analytics is a read-only dead end that never informs ideation or editorial. The product reads as a set of workbenches, not a newsroom.
+Before P1, Cornerstone's four creator capabilities — **brainstorm** (§3.13), **draft** (§3.4–§3.7), **see analytics** (§3.17–§3.18), and **push** (§3.7) — lived as separate routes with opaque handoffs and no shared operational home. P1 closes those gaps incrementally so the product reads as one newsroom rather than a set of workbenches.
 
 P1 makes Cornerstone **cohere**: one operational home, real cross-surface handoffs, and a closed analytics feedback loop. It is mostly UX and wiring over capabilities that already exist; it adds little net-new infrastructure. It **extends §3.15** (the Studio dashboard) from a pipeline-rail + ingest view into a full-loop status home.
 
 > **Design intent (owner):** "a place where a creator can brainstorm, draft content, see analytics, and push forward" — the same loop we run by hand today, run *inside* Cornerstone.
 
-### P1a — The Newsroom Home (revises §3.15)
-The `/dashboard` home becomes the creator's single pane across the whole loop. It shows:
-- **In-flight brainstorms** — active `brainstorm_sessions` with resume links.
-- **Drafts by status** — `draft` / `reviewed` ("needs you") / scheduled / published, each deep-linking to Issues.
-- **Publish state** — next scheduled and last published issue.
-- **Performance snapshot** — recent post metrics (from §3.18) and the §3.17 subscriber-health KPIs inline, with status colors.
-- **One next-action nudge** — generalized from §3.15's nudge across the whole loop (e.g. "2 drafts awaiting review", "retention down — brainstorm a fix").
+### Current implementation boundary
 
-`GET /api/dashboard/stats` is extended from pipeline counts to include brainstorm, draft-status, publish, and health rollups.
+P1a–P1d each have shipped code, but the end-to-end loop is not complete. The implementation uses a workspace-level `post_performance` cache rather than the proposed `issue_drafts.performance_json`, and the Issues and Analytics surfaces do not yet deep-link to each other. Treat the remaining bullets below as roadmap, not current behavior. The granular status is tracked in `docs/p1-newsroom-cohesion-build.md`.
+
+### P1a — The Newsroom Home (revises §3.15)
+`GET /api/dashboard/stats` now returns a `newsroom` rollup alongside the original pipeline payload:
+
+- **Brainstorms** — sessions updated in the last 14 days plus the most recently updated session.
+- **Drafts** — counts for `draft`, `reviewed`, and `published`.
+- **Publish state** — the most recently created draft whose status is `published`.
+- **Subscriber health** — status counts and the worst metric from `subscriber_health_history`.
+
+`/dashboard` renders those four cards and links to Brainstorm, Issues, or Analytics. It also triggers `POST /api/analytics/sync-posts` in the background to refresh the performance cache. Scheduled-issue state, a post-performance card, and health-aware next-action nudges remain roadmap.
 
 ### P1b — Cross-surface handoffs (close the loop)
-- **Signals → Brainstorm:** an "Explore in Brainstorm" action on a signal row opens a new brainstorm session seeded with that signal.
-- **Brainstorm → Issues:** the promote-to-draft path must return the created `draftId` and deep-link to `/issues?draft=<id>` with visible confirmation (today the landing is opaque). `POST /api/brainstorm/sessions/[id]/promote-draft` returns `{ draftId }`.
-- **Issues → Analytics:** after publish, a "Performance" affordance on the issue links to that post's metrics.
-- **Analytics → Brainstorm/Issues:** "themes that converted" and health alerts link into a seeded brainstorm or the relevant issue.
+- **Shipped — Signals → Brainstorm:** signal rows link to `/brainstorm?signalId=<id>`. Creating a session from that page sends `seedSignalId` and `seedSource: "signal"` to `POST /api/brainstorm/sessions`.
+- **Shipped — Brainstorm → Issues:** `POST /api/brainstorm/sessions/[id]/promote-draft` returns `{ ok: true, draftId }`; the UI opens `/issues?draft=<id>`.
+- **Remaining — Issues → Analytics:** published issues do not expose a post-specific Performance link.
+- **Remaining — Analytics → Brainstorm/Issues:** analytics cards do not create seeded brainstorms or resolve posts back to issue drafts.
 
 ### P1c — Analytics feedback loop
-- **Post-publish metrics:** after a Publisher run (§3.7), fetch the post's Beehiiv stats (open/click/upgrades) and attach them to the issue via `issue_drafts.performance_json` so each issue shows how it did.
-- **Themes that resonated:** a dashboard card computing top-performing recent themes/lanes from §3.18 analytics + `content_lanes`, exposed to the Brainstormer as a new tool **`get_top_performing_themes`** so ideation is grounded in what converts, not just what's fresh.
-- **Health-to-action:** a red §3.17 KPI surfaces in-app on the home with a one-click "brainstorm a fix" that seeds a session.
+- **Shipped — post-performance cache:** `POST /api/analytics/sync-posts` fetches up to 20 published Beehiiv posts with the caller's integration context and upserts them into `post_performance`. Dashboard load is the automatic refresh trigger; callers may also invoke the route directly.
+- **Shipped — Brainstormer analytics tools:** `get_top_performing_themes` reads cached posts ordered by click rate, while `get_audience_health` reads `subscriber_health_history`. Neither tool makes a live provider call during chat.
+- **Remaining — issue attribution and UI:** performance is not attached to `issue_drafts`, shown on Issues, or rendered as a dashboard "themes that resonated" card. Despite its name, `get_top_performing_themes` currently returns top post titles and rates; it does not aggregate `content_lanes`.
+- **Remaining — health-to-action:** the home displays health status and links to Analytics, but it does not seed a health-remediation brainstorm.
+
+Operational prerequisites and pitfalls:
+
+1. Apply `lib/supabase/schema-post-performance.sql`; without it, sync cannot persist data and the top-themes tool query fails.
+2. Apply the current `lib/supabase/schema-brainstorm.sql` to add `seed_signal_id` and `seed_source`. Session creation still succeeds without those columns because provenance is updated best-effort, but the seed metadata is lost.
+3. `get_top_performing_themes` is empty until the sync route succeeds. The route requires a signed-in workspace and an enabled Beehiiv integration; it returns `{ ok: false, synced: 0, skipped }` instead of throwing when the provider is unavailable.
+4. `get_audience_health` is empty until the Subscriber Health pipeline has written rows for the workspace (§3.17).
 
 ### P1d — Navigation / IA cleanup
-The sidebar currently exposes ~12 flat destinations; §3.15's contract is 7. Reconcile: promote the **loop spine** — Home, Brainstorm, Issues, Analytics — to primary; group Signals, Leads, Research, Outlines, Runs, ACE, Brand, Integrations as secondary/sections. Brainstorm becomes a first-class entry with a "New brainstorm" CTA on the home.
+`STUDIO_NAV_SECTIONS` in `lib/studio/nav.ts` now promotes the loop spine — Dashboard, Brainstorm, Issues, Analytics — and groups the remaining destinations under Pipeline and Setup. A dedicated "New brainstorm" CTA on the home/sidebar remains roadmap.
 
 ### Data / schema deltas
-- `issue_drafts.performance_json` (nullable JSONB) — last-fetched post metrics.
-- `brainstorm_sessions.seed_signal_id` (nullable) + `seed_source` (`'signal' | 'health' | 'theme' | 'manual'`) — provenance for seeded sessions.
-- Extend `GET /api/dashboard/stats` payload (brainstorm/draft-status/publish/health rollups).
-- New Brainstormer tool `get_top_performing_themes` (reads §3.18 analytics + lanes).
+- **Shipped:** `post_performance`, keyed by `(workspace_id, external_post_id)`, with member-read RLS and service-role writes from the sync route.
+- **Shipped:** `brainstorm_sessions.seed_signal_id` (nullable) + `seed_source` (`signal` | `health` | `theme` | `manual` in the API) for seed provenance.
+- **Shipped:** `GET /api/dashboard/stats.newsroom` and Brainstormer tools `get_audience_health` / `get_top_performing_themes`.
+- **Not implemented:** the originally proposed `issue_drafts.performance_json`.
 
 ### Non-goals (P1)
 LinkedIn engine (§3.8), source discovery/scoring (§3.3 Phase 2/3), onboarding wizard rework (§3.9), and billing (§8) are out of scope — they extend the platform; they don't make it cohere.
 
 ### Acceptance — the dogfood test
-A creator can run a full loop without leaving the app or losing context: open the home → start a brainstorm from a signal or a health alert → promote it to a draft → edit/approve in Issues → publish → and see the post's performance return to the home. When that round-trip works, P1 is done.
+P1 is complete when a creator can run a full loop without leaving the app or losing context: open the home → start a brainstorm from a signal or health alert → promote it to a draft → edit/approve in Issues → publish → see that issue's performance return to Issues and the home. The current build reaches publish and maintains a workspace-level performance cache, but does not complete the issue-attributed return path.
 
 **Build checklist (granular tasks, files, acceptance):** `docs/p1-newsroom-cohesion-build.md`.
 
@@ -1314,8 +1326,8 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
-| **Brainstormer Agent (Ideation)** | **Implemented** | §3.1 / §3.13 — tool loop: `query_signals`, `get_signal`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`; `brainstorm` LLM role |
-| **Brainstorming Hub** | **Implemented (MVP/M1)** | §3.13 — sessions/messages CRUD; chat UI; streaming; tools as above; Promote to `DraftObject` → `issue_drafts` |
+| **Brainstormer Agent (Ideation)** | **Implemented** | §3.1 / §3.13 / §3.19 — tool loop: `query_signals`, `get_signal`, `list_recent_drafts`, `get_audience_health`, `get_top_performing_themes`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`; `brainstorm` LLM role |
+| **Brainstorming Hub** | **Implemented (MVP/M1 + P1 handoffs)** | §3.13 / §3.19 — sessions/messages CRUD; streaming chat UI; signal-seeded sessions; analytics-cache tools; Promote to `DraftObject` → `issue_drafts` with `/issues?draft=<id>` handoff |
 | **Blog draft (longform)** | **Not started** | §3.13 M2 — `BlogDraftObject`, `POST /api/content-products/blog-draft`, export UI; see agent plan Phase 6 |
 | **ACE — schemas + notifications** | **Landed (apply SQL in Supabase)** | §3.14 — artifacts: `lib/supabase/schema-ace-bundle.sql`; `lib/notifications/*`, `TelegramProvider`, `POST /api/notifications/webhook/[provider]` |
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
@@ -1323,7 +1335,7 @@ Stretch:
 | **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
 | **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv (per-workspace OAuth: DCR+PKCE, pgsodium-encrypted tokens, auto-refresh) + Supergrow both live via MCP with REST fallback + per-plugin normalization; ctx-threaded `callTool`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health + a conversational Ask panel; `/integrations/[platform]` |
 | **Subscriber Health Pipeline** | **Implemented (PR #110)** | §3.17 — weekly cron `/api/pipelines/health-report`; now resolves the **per-workspace Beehiiv OAuth token** (session-less, refresh + graceful fallback to env creds); KPI history in `subscriber_health_history`; "Run now" wired to OAuth |
-| **Newsroom Home & Cohesion Loop (P1)** | **Planned (next)** | §3.19 — full-loop status home, cross-surface handoffs (signals→brainstorm, brainstorm→issues deep-link, issues→analytics, analytics→brainstorm), post-publish metrics onto issues, `get_top_performing_themes` brainstormer tool, nav/IA cleanup; build checklist `docs/p1-newsroom-cohesion-build.md` |
+| **Newsroom Home & Cohesion Loop (P1)** | **Partial (P1a–P1d foundations shipped)** | §3.19 — newsroom status cards, signals→brainstorm, brainstorm→issues deep-link, workspace post-performance cache, analytics-grounded Brainstormer tools, and grouped nav shipped. Issue-attributed performance, Issues↔Analytics handoffs, dashboard performance card, and health→brainstorm remain; see `docs/p1-newsroom-cohesion-build.md` |
 | **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
 | **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |
 | **LinkedIn Draft Engine** | **Roadmap** | §3.8 Phase 3 — generate/regenerate/publish endpoints; Issues LinkedIn tab; Leads channel selector; see agent plan Phase 5 |
@@ -1367,11 +1379,11 @@ Stretch:
 
 ### Phase 1D — Newsroom Cohesion (P1) **[NEW 2026-06-08]**
 
-- **Spec:** §3.19. **Build checklist:** `docs/p1-newsroom-cohesion-build.md`. **Goal:** make the four creator surfaces (brainstorm, draft, analytics, push) feel like one newsroom. Highest-leverage next work — mostly UX/wiring over existing capabilities.
-- **P1a — Newsroom home:** extend `/dashboard` into a full-loop status home (brainstorms, drafts-by-status, publish state, performance + health snapshot, one next-action nudge); extend `GET /api/dashboard/stats`.
-- **P1b — Handoffs:** signals→brainstorm seed; brainstorm→issues deep-link with confirmation; issues→analytics; analytics→brainstorm/issues.
-- **P1c — Analytics loop:** post-publish metrics onto `issue_drafts.performance_json`; "themes that resonated" card + `get_top_performing_themes` brainstormer tool; health-to-action.
-- **P1d — Nav/IA:** promote the loop spine (Home, Brainstorm, Issues, Analytics); demote the rest to secondary.
+- **Spec:** §3.19. **Build checklist:** `docs/p1-newsroom-cohesion-build.md`. **Status:** partial; the foundational work in every sub-phase has shipped.
+- **P1a — Shipped:** `/dashboard` newsroom cards and `GET /api/dashboard/stats.newsroom` for brainstorm, draft, latest-published, and health state. **Remaining:** scheduled/performance state and health-aware nudge.
+- **P1b — Shipped:** signals→brainstorm seed and brainstorm→Issues deep-link. **Remaining:** Issues→Analytics and Analytics→Brainstorm/Issues.
+- **P1c — Shipped:** `post_performance` cache, sync route, `get_top_performing_themes`, and `get_audience_health`. **Remaining:** issue attribution/UI, theme aggregation, dashboard performance card, and health-to-action.
+- **P1d — Shipped:** loop-spine/Pipeline/Setup nav groups. **Remaining:** dedicated New brainstorm CTA and §3.15 IA reconciliation.
 - **Done when:** the dogfood round-trip in §3.19 works end to end without leaving the app.
 
 ## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products
