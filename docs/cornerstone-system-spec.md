@@ -4,11 +4,11 @@
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Last updated: 2026-06-08
+Last updated: 2026-07-27
 
 > **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
 
-**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17). **Next: §3.19 Newsroom Home & Cohesion Loop (P1)** — make the four creator surfaces (brainstorm, draft, analytics, push) one cohesive newsroom.
+**Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent** with Beehiiv WRITE MCP create-once/edit-many (§3.7 / PR #124); Subscriber Health weekly cron uses **per-workspace Beehiiv OAuth** (§3.17); §3.19 P1a–P1d foundations (newsroom home, handoffs, `post_performance` cache + Brainstormer analytics tools, loop-spine nav). **Still open on P1:** issue-level performance attribution, Issues↔Analytics deep links, health-to-action, full dogfood acceptance — see `docs/p1-newsroom-cohesion-build.md`. Operator notes for the cache live in the README **Post Performance Cache Runbook**.
 
 ---
 
@@ -191,8 +191,8 @@ ALTER TABLE issue_drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'
 - **Trigger:** Manual (human clicks publish)
 - **Human gate:** Yes — human must review draft before publishing
 - **Tools:**
-  - `render_html` — convert draft to newsletter-ready HTML
-  - `push_beehiiv` — create Beehiiv draft (feature-flagged)
+  - `render_html` — convert draft to newsletter-ready HTML (inserts a visible paywall marker when `paywall_after_section` is set; Beehiiv cannot insert the real break via API/MCP)
+  - `push_beehiiv` — create or update a Beehiiv **draft** post (feature-flagged; MCP write tools with REST fallback; persists `content_json.metadata.beehiiv_post_id` for create-once/edit-many)
   - `render_linkedin` — format for LinkedIn posting (Phase 2)
 
 #### Brainstormer Agent (Ideation) **[NEW in v2.7]**
@@ -205,6 +205,8 @@ ALTER TABLE issue_drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'
   - **`query_signals`** — list/search **`signals`** for `workspace_id` (filters: date range, directive/source, free-text on title/summary/url; pagination).
   - **`get_signal`** — fetch one signal by id (scoped to workspace).
   - **`list_recent_drafts`** (optional) — titles + ids of recent **`issue_drafts`** for “what we already covered” awareness.
+  - **`get_top_performing_themes`** — read workspace `post_performance` cache (click-rate ranked recent posts). No live provider call; empty until `POST /api/analytics/sync-posts` has succeeded. Despite the name, current implementation returns post titles/rates, not aggregated `content_lanes` themes.
+  - **`get_audience_health`** — read `subscriber_health_history` for the workspace (written by the §3.17 health pipeline). No live provider call.
   - **`trigger_signal_ingest`** — invoke existing **Researcher-style** ingest paths (directive-level or workspace-safe bulk) when the conversation warrants fresh RSS pulls; **must** respect the same guardrails as `POST /api/pipeline/run` / manual ingest (no unbounded crawling in v1).
   - **`propose_manual_signal`** — structured proposal (url, title, notes) for a **human-confirmed** insert via existing manual signal APIs (`/api/signals/create` pattern) when ingest cannot satisfy the ask.
   - **`save_artifact_draft`** — persist the **current working outline + key claims + cited signal ids/urls** into session state or a draft row for **Promote** flows.
@@ -426,7 +428,7 @@ _Unchanged from v2.0._
 ---
 
 ## 3.7 Publishing Engine [REVISED]
-_Unchanged from v2.0. Will be wrapped by Publisher Agent._
+Implemented via the **Publisher Agent** (`lib/agents/publisher.ts`) and `POST /api/publish/beehiiv`. Deterministic render → Beehiiv draft create/update (MCP-first write layer with REST fallback) → mark `issue_drafts.status = published` → optional ACE completion + notification. See §3.1 Publisher Agent and §3.18 Beehiiv write notes.
 
 ---
 
@@ -1282,9 +1284,9 @@ Stretch:
 | **Editor Agent** | **Implemented** | Issue path: curation + `POST /api/issues/generate` (lead evaluation, steering, output mode, draft generation); `lib/agents/editor.ts` for pipeline orchestration |
 | **Content outlines** | **Implemented** | `content_outlines` with `disabled_at`; REST `/api/content-outlines` + `/api/content-outlines/[id]`; `/outlines` CRUD UI; seed route; generate validates outline ids |
 | **Draft status lifecycle** | **Implemented** | draft → reviewed → published tracking on `issue_drafts` |
-| **Publisher Agent** | **Implemented (PR #109)** | §3.7 — deterministic `runPublisher()` (render → push_beehiiv → mark published → close ACE run + notify); `/api/publish/beehiiv` delegates and logs an `agent:publisher` run to `/runs`, completing the Researcher→Writer→Editor→Publisher chain |
+| **Publisher Agent** | **Implemented (PR #109 + #124)** | §3.7 — deterministic `runPublisher()` (render → MCP/REST create-or-update Beehiiv draft → store `content_json.metadata.beehiiv_post_id` → mark published → close ACE run + notify); `/api/publish/beehiiv` delegates and logs an `agent:publisher` run to `/runs` |
 | **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
-| **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
+| **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise); UI at `/runs` via `GET /api/runs/list` |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
 | Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done), optional 5th LinkedIn-connect step (§3.9) |
 | **Supabase Auth + sign-in/sign-up/sign-out** | **Implemented** | `app/sign-in`, `app/sign-up`, `app/api/auth` — email + password (M0); Google + LinkedIn-as-auth (M2 — §3.16) |
@@ -1321,9 +1323,10 @@ Stretch:
 | **ACE — orchestrator + cron + dashboard** | **Implemented** | §3.14 — `runAce`, `/api/ace/cron`, `/api/ace/run`, `GET /api/ace/dashboard`, `/ace` UI, pipeline `returnDraftId` / `laneBalanceContext`, Beehiiv publish hook |
 | **Dashboard — Studio home** | **Implemented (MVP)** | §3.15 — `StudioAppShell` global chrome; `/dashboard` home (pipeline rail, ingest, nudge w/ snooze, signals + heat + promote → **`POST /api/leads/from-signal`**); **`GET /api/dashboard/stats`**; **`GET /api/search`** + **⌘K** palette; `/signals` full ingest UI |
 | **Newsletter draft quality — `last_word`** | **Implemented (PR #99)** | `dojo_checklist: string[]` → `last_word: string`; rewritten IDJ system prompt; `renderDraftMarkdown` + `renderDraftHtml` updated; backward-compat parse for "From the Dojo" headers |
-| **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv (per-workspace OAuth: DCR+PKCE, pgsodium-encrypted tokens, auto-refresh) + Supergrow both live via MCP with REST fallback + per-plugin normalization; ctx-threaded `callTool`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health + a conversational Ask panel; `/integrations/[platform]` |
+| **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv (per-workspace OAuth: DCR+PKCE, pgsodium-encrypted tokens, auto-refresh) + Supergrow both live via MCP with REST fallback + per-plugin normalization; Beehiiv **write** path in `lib/integrations/beehiiv/write.ts` (create-once/edit-many); ctx-threaded `callTool`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health + a conversational Ask panel; `/integrations/[platform]` |
 | **Subscriber Health Pipeline** | **Implemented (PR #110)** | §3.17 — weekly cron `/api/pipelines/health-report`; now resolves the **per-workspace Beehiiv OAuth token** (session-less, refresh + graceful fallback to env creds); KPI history in `subscriber_health_history`; "Run now" wired to OAuth |
-| **Newsroom Home & Cohesion Loop (P1)** | **Planned (next)** | §3.19 — full-loop status home, cross-surface handoffs (signals→brainstorm, brainstorm→issues deep-link, issues→analytics, analytics→brainstorm), post-publish metrics onto issues, `get_top_performing_themes` brainstormer tool, nav/IA cleanup; build checklist `docs/p1-newsroom-cohesion-build.md` |
+| **Post performance cache (P1c foundation)** | **Implemented (PR #119)** | Workspace `post_performance` table + `POST /api/analytics/sync-posts` (dashboard auto-refresh); Brainstormer `get_top_performing_themes` / `get_audience_health` read cache/history only. Issue-level attribution and Issues↔Analytics deep links remain open (see §3.19 / `docs/p1-newsroom-cohesion-build.md`) |
+| **Newsroom Home & Cohesion Loop (P1)** | **Partial (P1a–P1d foundations)** | §3.19 — newsroom home cards, signal→brainstorm + brainstorm→issues handoffs, post_performance cache + analytics Brainstormer tools, loop-spine nav shipped; remaining: issue performance attribution, Issues↔Analytics handoffs, health-to-action, full dogfood acceptance. Build checklist: `docs/p1-newsroom-cohesion-build.md` |
 | **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
 | **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |
 | **LinkedIn Draft Engine** | **Roadmap** | §3.8 Phase 3 — generate/regenerate/publish endpoints; Issues LinkedIn tab; Leads channel selector; see agent plan Phase 5 |
@@ -1367,11 +1370,11 @@ Stretch:
 
 ### Phase 1D — Newsroom Cohesion (P1) **[NEW 2026-06-08]**
 
-- **Spec:** §3.19. **Build checklist:** `docs/p1-newsroom-cohesion-build.md`. **Goal:** make the four creator surfaces (brainstorm, draft, analytics, push) feel like one newsroom. Highest-leverage next work — mostly UX/wiring over existing capabilities.
-- **P1a — Newsroom home:** extend `/dashboard` into a full-loop status home (brainstorms, drafts-by-status, publish state, performance + health snapshot, one next-action nudge); extend `GET /api/dashboard/stats`.
-- **P1b — Handoffs:** signals→brainstorm seed; brainstorm→issues deep-link with confirmation; issues→analytics; analytics→brainstorm/issues.
-- **P1c — Analytics loop:** post-publish metrics onto `issue_drafts.performance_json`; "themes that resonated" card + `get_top_performing_themes` brainstormer tool; health-to-action.
-- **P1d — Nav/IA:** promote the loop spine (Home, Brainstorm, Issues, Analytics); demote the rest to secondary.
+- **Spec:** §3.19. **Build checklist:** `docs/p1-newsroom-cohesion-build.md`. **Operator runbook:** README **Post Performance Cache Runbook** (sync route + Brainstormer tools). **Status:** P1a–P1d foundations shipped; full-loop acceptance still open.
+- **P1a — Shipped foundation:** `/dashboard` newsroom cards + `GET /api/dashboard/stats` newsroom rollups. **Remaining:** scheduled/performance snapshot + health-aware nudge.
+- **P1b — Shipped foundation:** signals→brainstorm seed; brainstorm→issues `?draft=` deep-link. **Remaining:** Issues→Analytics and Analytics→Brainstorm/Issues.
+- **P1c — Shipped foundation:** `post_performance` + `POST /api/analytics/sync-posts`; `get_top_performing_themes` + `get_audience_health`. **Remaining:** issue attribution/UI, true theme aggregation, dashboard performance card, health-to-action.
+- **P1d — Shipped foundation:** loop-spine / Pipeline / Setup nav groups. **Remaining:** dedicated New brainstorm CTA; reconcile §3.15 IA contract.
 - **Done when:** the dogfood round-trip in §3.19 works end to end without leaving the app.
 
 ## Phase 2 — Brand Profile, LinkedIn Foundation, and Content Products

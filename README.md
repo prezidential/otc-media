@@ -8,9 +8,11 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Last Word, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
+| **Publish** | Human-gated Beehiiv draft push via the Publisher Agent (`create-once` / `edit-many`) |
+| **Analytics loop** | Caches recent Beehiiv post rates so Brainstorm can ground ideation in what converted |
 
 ## Tech Stack
 
@@ -18,14 +20,14 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 - **AI:** Pluggable Anthropic/OpenAI via `lib/llm/provider.ts` (default: Claude Sonnet)
 - **Database:** Supabase (hosted PostgreSQL)
 - **UI:** Tailwind CSS v4, Lucide React, JetBrains Mono
-- **Testing:** Vitest
+- **Testing:** Vitest (unit/API) + Playwright (`e2e/`)
 
 ## Getting Started
 
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; see `lib/supabase/` for additional schemas)
+- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; add `lib/supabase/schema-post-performance.sql` for Brainstormer top-post grounding; see `lib/supabase/` for additional schemas)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -235,41 +237,53 @@ the workspace explicitly:
 | `npm test` | Run Vitest test suite |
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run test:coverage` | Run tests with V8 coverage |
+| `npm run e2e` | Playwright browser UI tests (see `e2e/README.md`) |
+| `npm run e2e:report` | Open the last Playwright HTML report |
 
 ## Project Structure
 
 ```
 app/
 ├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── dashboard/page.tsx   # Newsroom home (loop status + sync-posts trigger)
+├── brainstorm/          # Brainstorming Hub
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── issues/page.tsx      # Issue draft generation + inline editor
 ├── outlines/page.tsx    # Content outlines CRUD UI
+├── runs/page.tsx        # Pipeline / agent run history
+├── integrations/        # Beehiiv, Supergrow, analytics Ask panel
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
-    ├── issues/              # Generate, latest, regenerate-section
+    ├── issues/              # Generate, list, [id] get/patch, regenerate-section
+    ├── analytics/sync-posts/# Refresh post_performance cache
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
-    ├── publish/             # Status, HTML export, Beehiiv draft push
+    ├── publish/             # Status, HTML export, Beehiiv draft push (Publisher Agent)
     ├── signals/list/        # List captured signals
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
-    └── runs/list/           # List ingest/generation runs
+    └── runs/list/           # List agent / pipeline runs
 
 lib/
-├── draft/               # DraftObject type, renderer, lint, parser
+├── agents/              # Researcher, Writer, Editor, Publisher
+├── analytics/           # post_performance sync helper
+├── brainstorm/          # Hub tools (signals, health, top posts, promote)
+├── draft/               # DraftObject type, renderer, lint, freshSignals helper
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
+├── integrations/        # Beehiiv/Supergrow plugins (MCP + REST)
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
 ├── research/            # RSS feed map (8 directives, 13+ sources)
-├── supabase/            # Server + browser clients
+├── runs/                # Run formatting helpers for /runs UI
+├── supabase/            # Server + browser clients + SQL schemas
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+e2e/                     # Playwright browser UI tests
+docs/                    # System specification + operator runbooks
 ```
 
 ## Architecture
@@ -388,8 +402,118 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
+- Workspace scope comes from the signed-in session via `requireWorkspace()` (no `WORKSPACE_ID` env).
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+- Each stage that runs is also persisted to `runs` (`run_type` like `agent:researcher`) and appears on `/runs`.
+
+## Pipeline Runs Runbook
+
+`/runs` is the audit surface for agent and pipeline activity (Researcher → Writer → Editor → Publisher).
+
+### Endpoint
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/runs/list` | `GET` | Workspace-scoped recent rows from `runs` |
+
+Query params:
+
+- `limit` — max rows (default `25`; the UI requests `50`)
+
+```bash
+curl -s "http://localhost:3000/api/runs/list?limit=25"
+```
+
+Response shape: `{ runs: [{ run_type, status, started_at, finished_at, error_message, output_refs_json }, ...] }`.
+
+### What lands here
+
+| `run_type` | Source |
+|------------|--------|
+| `agent:researcher` / `agent:writer` / `agent:editor` | `POST /api/pipeline/run` (and ACE when it drives the same agents) |
+| `agent:publisher` | Successful/failed Beehiiv publish via `POST /api/publish/beehiiv` (only when the Publisher Agent marks the outcome `loggable`) |
+
+### Operational notes
+
+- Rows are workspace-scoped through RLS + `requireWorkspace()`.
+- Publisher pre-flight failures (`disabled`, `not_found`, `no_content`) are not logged; only real publish attempts (`publish_failed` or success) create a run.
+- Use the UI filter on `/runs` to isolate failures when debugging a stuck newsroom loop.
+
+## Post Performance Cache Runbook
+
+§3.19 P1c grounds Brainstorm ideation in cached Beehiiv post stats instead of live provider calls during chat.
+
+### Intent
+
+1. Refresh a workspace-scoped `post_performance` snapshot from Beehiiv (open/click rates).
+2. Let Brainstormer tools read that cache (`get_top_performing_themes`) and subscriber-health history (`get_audience_health`).
+3. Keep the chat path fast and rate-limit safe — no Beehiiv round-trip inside the tool loop.
+
+### Schema prerequisite
+
+Apply once in the Supabase SQL editor:
+
+```text
+lib/supabase/schema-post-performance.sql
+```
+
+Creates `post_performance` (PK `workspace_id, external_post_id`), a click-rate index, and member-read RLS. Writes go through `supabaseAdmin()` from the sync route.
+
+Also ensure Subscriber Health history exists if you want `get_audience_health` to return data (`lib/supabase/schema-subscriber-health.sql` + the weekly health pipeline).
+
+### Sync endpoint
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/analytics/sync-posts` | `POST` | Fetch up to 20 published Beehiiv posts and upsert into `post_performance` |
+
+Auth / gates:
+
+- Requires a signed-in workspace (`requireWorkspace()`).
+- Beehiiv plugin must report enabled (`isBeehiivEnabled()` — `BEEHIIV_ENABLED=true` plus `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID`).
+- Uses the caller's integration context so per-workspace Beehiiv OAuth is preferred when connected.
+
+```bash
+curl -s -X POST http://localhost:3000/api/analytics/sync-posts
+```
+
+Typical responses:
+
+```json
+{ "ok": true, "synced": 12 }
+```
+
+```json
+{ "ok": false, "synced": 0, "skipped": "Beehiiv integration not enabled" }
+```
+
+The route is fire-and-forget friendly: provider/auth/table errors return `{ ok: false, synced: 0, skipped }` instead of throwing a 5xx.
+
+### Automatic refresh
+
+`/dashboard` fires `POST /api/analytics/sync-posts` in the background on load. Opening Analytics or calling the route manually also refreshes the cache. Until a sync succeeds, `get_top_performing_themes` returns `available: false`.
+
+### Brainstormer consumers
+
+| Tool | Reads | Notes |
+|------|-------|-------|
+| `get_top_performing_themes` | `post_performance` ordered by `click_rate` DESC | Name is aspirational — returns top **post titles + rates**, not aggregated `content_lanes` themes. `limit` clamped 1–10 (default 5). |
+| `get_audience_health` | `subscriber_health_history` | Empty until the weekly health report has written rows for the workspace. |
+
+Neither tool makes a live Beehiiv/Supergrow call during chat.
+
+### Constraints / pitfalls
+
+- Performance is **not** attached to `issue_drafts` yet (no `performance_json`, no Issues → Analytics deep link). The cache is workspace-level only.
+- Publisher does **not** trigger sync after push; rely on dashboard load or a manual `POST /api/analytics/sync-posts`.
+- Missing `post_performance` table → sync cannot persist; the top-themes tool query fails until the schema is applied.
+- Empty cache after a "successful" sync usually means Beehiiv returned no published posts (or all lacked ids).
+
+### Troubleshooting
+
+- `{ skipped: "Beehiiv integration not enabled" }`: set `BEEHIIV_ENABLED=true`, `BEEHIIV_API_KEY`, and `BEEHIIV_PUBLICATION_ID`.
+- Sync succeeds but Brainstorm still says no performance cached: confirm the SQL schema was applied and the Beehiiv connection can list **published** posts (OAuth on `/integrations/beehiiv` if MCP is required).
+- `get_audience_health` unavailable: run the Subscriber Health pipeline for this workspace (see health-report routes / cron).
 
 ## Publishing Runbook
 
