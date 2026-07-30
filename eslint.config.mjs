@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Static design-handoff mockups (reference HTML/JSX, not app code).
+    "docs/design_handoff_inner_pages/**",
+    "docs/design_handoff_cornerstone_dashboard/**",
   ]),
 ]);
 
