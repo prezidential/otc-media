@@ -8,9 +8,11 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Brainstorm** | Conversational ideation over workspace signals, with promote-to-draft handoff into Issues |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Last Word, Promo, Close) with thesis-driven editorial angles |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
+| **Publish / Analytics** | HTML export + Beehiiv push; post-performance cache and subscriber-health KPIs ground the next ideation loop |
 
 ## Tech Stack
 
@@ -235,42 +237,52 @@ the workspace explicitly:
 | `npm test` | Run Vitest test suite |
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run test:coverage` | Run tests with V8 coverage |
+| `npm run e2e` | Run Playwright browser UI tests (see `e2e/README.md`) |
+| `npm run e2e:report` | Open the last Playwright HTML report |
 
 ## Project Structure
 
 ```
 app/
-├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
-├── research/page.tsx    # Research console
-├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
-├── outlines/page.tsx    # Content outlines CRUD UI
+├── components/              # Studio shell, page header, markdown
+├── dashboard/page.tsx       # Newsroom home (loop status)
+├── brainstorm/page.tsx      # Brainstorming Hub
+├── issues/page.tsx          # Issue draft generation + editing
+├── integrations/analytics/  # Beehiiv + Supergrow + subscriber health
+├── runs/page.tsx            # Pipeline run history
+├── research/page.tsx        # Research console
+├── leads/page.tsx           # Editorial leads
+├── signals/                 # Signal feed + research setup
+├── outlines/page.tsx        # Content outlines CRUD UI
+├── ace/page.tsx             # ACE dashboard
 └── api/
-    ├── ingest/rss/          # Single RSS feed ingest
-    ├── research/            # Directives, run-directives, run-all
-    ├── leads/               # Generate, list, approve
-    ├── issues/              # Generate, latest, regenerate-section
-    ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
-    ├── revenue/             # List, seed, recommend
-    ├── publish/             # Status, HTML export, Beehiiv draft push
-    ├── signals/list/        # List captured signals
-    ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
-    └── runs/list/           # List ingest/generation runs
+    ├── brainstorm/          # Sessions, messages, promote-draft
+    ├── dashboard/stats/     # Newsroom rollups
+    ├── analytics/sync-posts/# Refresh post_performance cache
+    ├── pipeline/run/        # Researcher → Writer → Editor
+    ├── pipelines/health-report/  # Subscriber Health cron + manual
+    ├── publish/             # Status, HTML export, Beehiiv push
+    ├── issues/              # Generate, list, [id] get/patch, regenerate
+    ├── runs/list/           # Agent + ingest run history
+    └── …                    # research, leads, integrations, ace, auth, …
 
 lib/
+├── agents/              # Researcher, Writer, Editor, Publisher + framework
+├── brainstorm/          # Tool loop, promote-to-issue, system prompt
+├── analytics/           # syncPostPerformance (post_performance cache)
 ├── draft/               # DraftObject type, renderer, lint, parser
-├── content-outlines/    # Outline specs, validation, resolution, access checks
-├── leads/               # Zod schema for lead validation
-├── llm/                 # Provider abstraction + role-based model selection
-├── research/            # RSS feed map (8 directives, 13+ sources)
-├── supabase/            # Server + browser clients
-└── utils.ts             # cn() utility
+├── integrations/        # Beehiiv + Supergrow MCP/REST plugins
+├── studio/nav.ts        # Sidebar loop spine + sections
+├── runs/format.ts       # Pipeline Runs dashboard helpers
+├── supabase/            # Clients + SQL schemas
+└── …
 
+e2e/                     # Playwright browser UI tests
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # System specification + runbooks
 ```
+
+Studio nav spine (primary): **Dashboard → Brainstorm → Issues → Analytics**. Pipeline and Setup destinations are grouped under secondary sections in `lib/studio/nav.ts`.
 
 ## Architecture
 
@@ -363,16 +375,20 @@ Resolution behavior:
 
 ## Autonomous Pipeline Runbook
 
-The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result.
+The pipeline endpoint runs the agent sequence (`researcher` → `writer` → `editor`) and records each stage result to the `runs` table (`run_type` like `agent:researcher`).
 
 ### Endpoint
 
 `POST /api/pipeline/run`
 
+Requires an authenticated session with an active workspace (`requireWorkspace()`). There is no `WORKSPACE_ID` env fallback.
+
 Request body (all optional):
 
 - `stages`: array of stages to run. Defaults to `["researcher","writer","editor"]`.
 - `triggered_by`: audit label for run provenance. Defaults to `"manual"`.
+- `returnDraftId`: when `true`, response includes `draftId` from the editor stage (used by ACE).
+- `laneBalanceContext`: optional ACE lane-balance summary forwarded into the Editor.
 
 ```bash
 curl -s -X POST http://localhost:3000/api/pipeline/run \
@@ -385,11 +401,95 @@ Response includes:
 - `ok`: `true` only when all executed stages succeed.
 - `aborted`: whether execution stopped early after a failed stage.
 - `stages`: per-stage `success`, `summary`, `decisions`, and `data`.
+- `draftId`: present only when `returnDraftId` was true.
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
+- Active workspace comes from the session (`cs_active_workspace` cookie).
 - `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+
+## Brainstorming Hub Runbook
+
+`/brainstorm` is the conversational ideation surface (§3.13). The Brainstormer agent reads workspace signals (and optional analytics caches), can trigger bounded ingest, and promotes a saved working artifact into an `issue_drafts` row.
+
+### Prerequisites
+
+- Apply `lib/supabase/schema-brainstorm.sql` (sessions, messages, optional `seed_signal_id` / `seed_source`).
+- At least one brand profile in the workspace before promote-to-draft.
+- For analytics-grounded ideation:
+  - `lib/supabase/schema-subscriber-health.sql` + a completed health-report run → `get_audience_health`
+  - `lib/supabase/schema-post-performance.sql` + a successful `POST /api/analytics/sync-posts` → `get_top_performing_themes`
+
+### Session APIs
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brainstorm/sessions` | `GET` | List recent sessions for the active workspace |
+| `/api/brainstorm/sessions` | `POST` | Create a session (`title`, optional `brandProfileId`, `seedSignalId`, `seedSource`) |
+| `/api/brainstorm/sessions/[id]/messages` | `POST` | Send a turn (tool loop + assistant reply; supports streaming) |
+| `/api/brainstorm/sessions/[id]/promote-draft` | `POST` | Map `artifact_json.working_artifact` → `DraftObject`, insert `issue_drafts`, return `{ ok, draftId }` |
+| `/api/brainstorm/sessions/[id]/confirm-manual-signal` | `POST` | Confirm a pending manual signal proposed by the agent |
+
+Seed a session from a signal (Signals feed / dashboard deep link):
+
+```bash
+# UI: /brainstorm?signalId=<uuid>
+curl -s -X POST http://localhost:3000/api/brainstorm/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title":"From signal","seedSignalId":"<signal_uuid>","seedSource":"signal"}'
+```
+
+`seedSource` accepts `signal` | `health` | `theme` | `manual`. Seed columns are updated best-effort after insert so session creation still succeeds if the seed migration has not been applied yet.
+
+### Agent tools
+
+Implemented in `lib/brainstorm/signal-tools.ts` / prompted via `lib/brainstorm/system-prompt.ts`:
+
+| Tool | Reads / writes | Notes |
+|------|----------------|-------|
+| `query_signals` / `get_signal` | `signals` | Workspace-scoped search / fetch |
+| `list_recent_drafts` | `issue_drafts` | Titles + ids for “already covered” awareness |
+| `get_audience_health` | `subscriber_health_history` | Cached KPIs only — no live Beehiiv call |
+| `get_top_performing_themes` | `post_performance` | Ranks cached posts by **click rate** (not content-lane aggregation yet) |
+| `trigger_signal_ingest` | RSS cadence ingest | Same guardrails as research ingest; logs a run |
+| `propose_manual_signal` | session `artifact_json` | Requires human confirm on the Hub UI |
+| `save_artifact_draft` | session `artifact_json.working_artifact` | Required before promote |
+
+### Promote → Issues
+
+1. Agent (or creator) saves a working artifact via `save_artifact_draft`.
+2. `POST .../promote-draft` with optional `brandProfileId` (falls back to session brand).
+3. Server maps artifact → validated `DraftObject` (`last_word`, not `dojo_checklist`) and inserts `issue_drafts`.
+4. UI routes to `/issues?draft=<draftId>`.
+
+Common failures:
+
+- `400 brandProfileId is required...` — pass a brand id or set one on the session.
+- `Nothing to promote: save an artifact...` — call `save_artifact_draft` first.
+- Analytics tools return `available: false` — run health-report / open Dashboard or Analytics so `POST /api/analytics/sync-posts` can fill `post_performance`.
+
+## Post Performance Cache
+
+Workspace-scoped Beehiiv post stats live in `post_performance` (`lib/supabase/schema-post-performance.sql`).
+
+- **Refresh:** `POST /api/analytics/sync-posts` (session + Beehiiv enabled). Dashboard fires this on load (best-effort). Upserts via `supabaseAdmin()`; members only need SELECT RLS.
+- **Consumers:** dashboard “themes that resonated” surface and Brainstormer `get_top_performing_themes`.
+- **Constraint:** this is a **post-level** cache keyed by Beehiiv `external_post_id`. It does **not** yet write `issue_drafts.performance_json` or aggregate by content lane/theme.
+
+```bash
+curl -s -X POST http://localhost:3000/api/analytics/sync-posts
+# { "ok": true, "synced": 12 }  or  { "ok": false, "synced": 0, "skipped": "..." }
+```
+
+## Pipeline Runs Dashboard
+
+`/runs` is the Phase 1 pipeline status surface. It loads `GET /api/runs/list?limit=50` for the active workspace and shows totals, failures, last trigger, and per-row type/status/duration.
+
+- Rows come from the shared `runs` table (ingest, lead generation, `agent:*`, publisher, etc.).
+- Formatting helpers live in `lib/runs/format.ts` (`formatRunType`, `runStatusMeta`, `summarizeRuns`).
+- Filter toggle: **All** vs **Failed**. Refresh re-fetches the list; there is no separate “cancel run” control.
+
+This complements Research’s “run pipeline” control and the ACE dashboard — it is the cross-agent history view, not a scheduler.
 
 ## Publishing Runbook
 
