@@ -565,7 +565,7 @@ Standalone `insider_access` mode may still run from **approved leads only** (`ne
 
 **Content products** turn a persisted **newsletter draft** (`issue_drafts.content_json` / `DraftObject`) into derivative assets: social posts, podcast-oriented output, and sponsorship alignment copy. They are invoked from the **Issues** page (“Phase 2 — content products”) and use LLM generation over a **compact text summary** of the draft (see `lib/content-products/promptContext.ts`).
 
-Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server loads `content_json`) or an in-memory `content_json` override for the same shape.
+Workspace scope follows `requireWorkspace()` (active session workspace). Inputs are either `draftId` (server loads `content_json`) or an in-memory `content_json` override for the same shape.
 
 ### Social snippets **[REVISED in v2.6]**
 
@@ -585,13 +585,11 @@ Workspace scope follows `WORKSPACE_ID`. Inputs are either `draftId` (server load
 
 **Legacy:** `POST /api/content-products/podcast-outline` remains available (beats-style outline, no signal resolution); new work should use **podcast-script**.
 
-**ElevenLabs:** `POST /api/content-products/podcast-tts` — request body `{ script: <PodcastScript> }` or `{ fullText: string }`, optional `voiceId` (defaults to `ELEVENLABS_VOICE_ID`). Server uses `ELEVENLABS_API_KEY`, optional `ELEVENLABS_MODEL_ID` (default `eleven_multilingual_v2`). Returns `audio/mpeg` (chunked synthesis + concatenated MP3). **Human gate:** Issues UI exposes download only on explicit click after script preview.
+**ElevenLabs:** `POST /api/content-products/podcast-tts` — request body `{ script: <PodcastScript> }` or `{ fullText: string }`, optional `voiceId` / `modelId`. Voice resolution order: body `voiceId` → draft brand `elevenlabs_voice_id` (when `draftId` present) → `ELEVENLABS_VOICE_ID`. Model resolution: body `modelId` → brand `elevenlabs_model_id` (when body omits `modelId`) → `ELEVENLABS_MODEL_ID` → default **`eleven_turbo_v2_5`**. Server requires `ELEVENLABS_API_KEY`. Returns `audio/mpeg` (chunked ~750 chars + concatenated MP3). **Human gate:** Issues UI exposes download only on explicit click after script preview.
 
-**Remaining (normative):**
+**Persistence (shipped):** Table **`podcast_episodes`** (`lib/supabase/schema-podcast-episodes.sql`) + env **`PODCAST_AUDIO_STORAGE_BUCKET`**: `POST /api/content-products/podcast-tts` with `persist: true` + saved `draftId` + `script` inserts the row, uploads `{workspace_id}/{episode_id}.mp3`, sets `audio_ready` (response headers `X-Podcast-Persist-*`). In-memory drafts (no `draftId`) still download only.
 
-1. **Persistence:** Table **`podcast_episodes`** (`lib/supabase/schema-podcast-episodes.sql`) + env **`PODCAST_AUDIO_STORAGE_BUCKET`**: `POST /api/content-products/podcast-tts` with `persist` + saved `draftId` inserts the row, uploads `{workspace_id}/{episode_id}.mp3`, sets `audio_ready`. In-memory drafts (no `draftId`) still download only.
-
-2. **TTS safety:** Prompts require plain spoken prose; strip or forbid bracketed stage directions before TTS if authors introduce them later.
+**TTS safety (ongoing):** Prompts require plain spoken prose; strip or forbid bracketed stage directions before TTS if authors introduce them later. Operator runbook: `README.md` → Content Products Runbook.
 
 ```mermaid
 flowchart LR
@@ -1148,8 +1146,10 @@ Each plugin checks for `{PLATFORM}_MCP_SERVER_URL` via `getMcpConfig()`. When se
 
 | Platform | REST enabled when | MCP enabled when | Notes |
 |----------|-------------------|------------------|-------|
-| Beehiiv | `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID` | `BEEHIIV_MCP_SERVER_URL` (+ `BEEHIIV_PUBLICATION_ID`) | MCP rates are percent; REST are 0–1 (normalizer reconciles) |
-| Supergrow | `SUPERGROW_API_KEY` | `SUPERGROW_MCP_SERVER_URL` | every tool needs `workspace_id` (`SUPERGROW_WORKSPACE_ID`, else `list_workspaces`); overview composes ~5 calls; 500/day rate limit (snapshot cache) |
+| Beehiiv | `BEEHIIV_API_KEY` + `BEEHIIV_PUBLICATION_ID` | `BEEHIIV_MCP_SERVER_URL` (+ `BEEHIIV_PUBLICATION_ID`) | Analytics `isEnabled` does **not** require `BEEHIIV_ENABLED` (publish/push does). MCP rates are percent; REST are 0–1 (normalizer reconciles). Auth order for reads: workspace OAuth → static MCP Bearer → REST |
+| Supergrow | `SUPERGROW_API_KEY` | `SUPERGROW_MCP_SERVER_URL` | every tool needs `workspace_id` (`SUPERGROW_WORKSPACE_ID`, else `list_workspaces`); overview composes ~6 MCP calls; ~500/day rate limit (5‑min in-process snapshot cache) |
+
+**Operator note:** `GET /api/integrations/[platform]/status` probes tool[0] **without** `IntegrationToolContext`, so Beehiiv OAuth-only workspaces can look unhealthy on status while Ask/query succeed. Prefer `GET /api/integrations/analytics` or `POST .../query` after Connect Beehiiv. Operator runbook: `README.md` → Analytics / Integrations Runbook.
 
 ### API Routes
 
@@ -1157,9 +1157,11 @@ Each plugin checks for `{PLATFORM}_MCP_SERVER_URL` via `getMcpConfig()`. When se
 |-------|--------|---------|
 | `/api/integrations` | GET | List all registered plugins with enabled status |
 | `/api/integrations/analytics` | GET | Unified snapshot across all enabled integrations |
-| `/api/integrations/[platform]/status` | GET | Platform connectivity health check |
+| `/api/integrations/[platform]/status` | GET | Platform connectivity health check (no OAuth ctx) |
 | `/api/integrations/[platform]/query` | POST | AI-powered query via integration agent |
 | `/api/integrations/[platform]/action` | POST | Direct tool call (non-AI) |
+| `/api/integrations/beehiiv/oauth/start` | GET | Start Beehiiv MCP OAuth (DCR + PKCE) |
+| `/api/integrations/beehiiv/oauth/callback` | GET | OAuth callback; stores encrypted tokens |
 
 ### UI
 
