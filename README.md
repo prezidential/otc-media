@@ -75,7 +75,9 @@ SUPERGROW_WORKSPACE_ID=your-supergrow-workspace-uuid
 # Optional — Issues → Phase 2 → Podcast script → Download MP3 (ElevenLabs)
 ELEVENLABS_API_KEY=
 ELEVENLABS_VOICE_ID=
-# ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+# ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
+# Optional LLM role for the Integrations Ask panel
+# LLM_INTEGRATION=anthropic:claude-sonnet-4-6
 
 # Optional — when set, Download MP3 also inserts podcast_episodes + uploads to this Storage bucket (private bucket recommended)
 PODCAST_AUDIO_STORAGE_BUCKET=podcast-audio
@@ -241,19 +243,20 @@ the workspace explicitly:
 ```
 app/
 ├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
-├── research/page.tsx    # Research console
-├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── dashboard/           # Newsroom home
+├── brainstorm/          # Brainstorming Hub
+├── issues/page.tsx      # Issue draft generation + Phase 2 content products
+├── integrations/        # Analytics Ask panel + per-platform dashboards
 ├── outlines/page.tsx    # Content outlines CRUD UI
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
     ├── leads/               # Generate, list, approve
-    ├── issues/              # Generate, latest, regenerate-section
+    ├── issues/              # Generate, list, patch, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
-    ├── revenue/             # List, seed, recommend
+    ├── content-products/    # Social snippets, podcast script/TTS, sponsorship
+    ├── brand-profiles/      # List, seed, create
+    ├── integrations/        # Analytics snapshot, Ask query, direct tool action
     ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
@@ -262,6 +265,8 @@ app/
 lib/
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
+├── content-products/    # Draft loaders, podcast options, ElevenLabs voice resolve
+├── integrations/        # Plugin registry, MCP client, Beehiiv + Supergrow
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
 ├── research/            # RSS feed map (8 directives, 13+ sources)
@@ -269,7 +274,8 @@ lib/
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+e2e/                     # Playwright browser tests (see e2e/README.md)
+docs/                    # System specification + runbooks
 ```
 
 ## Architecture
@@ -454,6 +460,137 @@ Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, an
 - `400 Draft has no structured content`: draft exists but `content_json` is null.
 - `403 Beehiiv integration is not enabled`: Beehiiv env vars are missing or `BEEHIIV_ENABLED` is not `true`.
 - `500 Beehiiv API error: ...`: Beehiiv rejected the request or returned an upstream error.
+
+## Analytics / Integrations Runbook
+
+Conversational analytics lives at `/integrations/analytics` (Ask panel + metric rail). Plugins are registered in `lib/integrations/` (Beehiiv + Supergrow). This is separate from the workspace `post_performance` cache synced by `POST /api/analytics/sync-posts` (Brainstormer grounding).
+
+### Enablement (analytics vs publish)
+
+| Platform | Analytics enabled when | Notes |
+|----------|------------------------|-------|
+| Beehiiv | `(BEEHIIV_API_KEY + BEEHIIV_PUBLICATION_ID)` **or** `(BEEHIIV_MCP_SERVER_URL + BEEHIIV_PUBLICATION_ID)` | Does **not** require `BEEHIIV_ENABLED` (that gate is for publish/push only) |
+| Supergrow | `SUPERGROW_API_KEY` **or** `SUPERGROW_MCP_SERVER_URL` | Prefer MCP URL with `?api_key=`; set `SUPERGROW_WORKSPACE_ID` to skip `list_workspaces` |
+
+Beehiiv MCP auth order for reads: (1) per-workspace OAuth token from **Connect Beehiiv**, (2) static `BEEHIIV_MCP_TOKEN` / `BEEHIIV_API_KEY` MCP Bearer, (3) REST with `BEEHIIV_API_KEY`. Apply `schema-beehiiv-crypto.sql` then `schema-beehiiv-oauth.sql` before OAuth.
+
+### API surface
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/integrations` | `GET` | List registered plugins + `enabled` flags |
+| `/api/integrations/analytics` | `GET` | Unified snapshot — each enabled plugin’s first tool (overview) |
+| `/api/integrations/[platform]/status` | `GET` | Connectivity probe via tool[0] |
+| `/api/integrations/[platform]/query` | `POST` | Ask panel — LLM agent (`role: "integration"`, max 8 tool iterations) |
+| `/api/integrations/[platform]/action` | `POST` | Direct tool call (no LLM) |
+| `/api/integrations/beehiiv/oauth/start` | `GET` | Start Beehiiv MCP OAuth (DCR + PKCE) |
+| `/api/integrations/beehiiv/oauth/callback` | `GET` | OAuth callback; stores encrypted tokens |
+
+`platform` is `beehiiv` or `supergrow`. Snapshot/query/action routes use `requireWorkspace()` (session cookie).
+
+### Ask panel (example)
+
+```bash
+curl -s -X POST http://localhost:3000/api/integrations/beehiiv/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Give me a full performance overview"}'
+```
+
+Response: `{ ok, summary, data, decisions }` (or `error`). Direct tool call:
+
+```bash
+curl -s -X POST http://localhost:3000/api/integrations/beehiiv/action \
+  -H "Content-Type: application/json" \
+  -d '{"tool":"list_posts","params":{"limit":5,"status":"published"}}'
+```
+
+### Tools
+
+**Beehiiv:** `get_publication_stats`, `list_posts`, `get_post_stats`, `list_subscriptions`
+
+**Supergrow:** `get_linkedin_analytics`, `get_post_performance`, `list_scheduled_posts`, `schedule_post` (`content` + `scheduled_at` required)
+
+### Operational pitfalls
+
+- **`GET .../status` does not pass OAuth context** — Beehiiv status can fail with OAuth-only workspaces even when Ask/query works. Prefer `/api/integrations/analytics` or a query for health checks after Connect Beehiiv.
+- **Supergrow overview is expensive** (~6 MCP calls) and cached **5 minutes** in-process to protect the ~500/day rate limit. Rapid Refresh spam still burns quota on cache misses.
+- **MCP vs REST shapes are normalized** in each plugin’s `normalize.ts` (Beehiiv MCP rates are percent; REST are 0–1).
+- Optional `LLM_INTEGRATION` overrides the Ask-panel model; otherwise roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
+
+### Troubleshooting
+
+- `Integration "…" is not enabled`: missing platform env vars (see table above).
+- `query is required` / `tool is required`: empty Ask body or missing `tool` on action.
+- Beehiiv `401` on MCP: static API key rejected — complete **Connect Beehiiv** OAuth, or ensure MCP URL + publication id are set.
+- Supergrow empty/wrong workspace: set `SUPERGROW_WORKSPACE_ID` from the Supergrow `list_workspaces` tool.
+- Unified snapshot shows `enabled: true` with `error`: overview tool threw (upstream/auth); platform is configured but the call failed.
+
+## Content Products Runbook
+
+Issues → **Phase 2 — content products** turns a newsletter draft into derivatives. All routes use `requireWorkspace()` and accept either `draftId` (saved `issue_drafts` row) or in-memory `content_json`.
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/content-products/social-snippets` | `POST` | X / LinkedIn / Threads copy from draft + brand voice |
+| `/api/content-products/podcast-script` | `POST` | TTS-oriented spoken script with signal grounding |
+| `/api/content-products/podcast-tts` | `POST` | ElevenLabs MP3 (`audio/mpeg`); optional persist |
+| `/api/content-products/podcast-outline` | `POST` | Legacy beats outline — prefer `podcast-script` |
+| `/api/content-products/sponsorship-alignment` | `POST` | Align draft to active `revenue_items` |
+
+### Social snippets
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-products/social-snippets \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>"}'
+```
+
+- Brand resolution: draft’s `brand_profile_id`, else body `brandProfileId`.
+- Temperature `0.92` + rotation hints so repeat clicks diverge.
+- Returns `{ ok, snippets: { x_post, linkedin_teaser, threads } }`.
+
+### Podcast script
+
+Optional body fields: `podcastDelivery` (`conversational` \| `deep_dive` \| `narrative`, default conversational), `podcastEnergy` (`relaxed` \| `medium` \| `high`, default medium), `customDirection` (max ~400 chars).
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-products/podcast-script \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>","podcastDelivery":"conversational","podcastEnergy":"medium"}'
+```
+
+Returns `{ ok, script, grounding }`. First segment id should be `intro`. Citation URLs are joined to workspace `signals` for grounding.
+
+### Podcast TTS (ElevenLabs)
+
+Prerequisites: `ELEVENLABS_API_KEY` and a voice via body `voiceId`, draft brand `elevenlabs_voice_id`, or `ELEVENLABS_VOICE_ID`.
+
+Default model: `ELEVENLABS_MODEL_ID` or **`eleven_turbo_v2_5`** (brand `elevenlabs_model_id` overrides when `draftId` is present and body omits `modelId`).
+
+```bash
+curl -s -X POST http://localhost:3000/api/content-products/podcast-tts \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>","script":{...},"persist":true}' \
+  --output episode.mp3
+```
+
+- Text is chunked at ~750 chars (paragraph/sentence aware), then concatenated.
+- `persist: true` requires `draftId` + `script` + `PODCAST_AUDIO_STORAGE_BUCKET` (inserts `podcast_episodes`, uploads `{workspace_id}/{episode_id}.mp3`).
+- Response headers: `X-Podcast-Tts-Chunks`, and on persist `X-Podcast-Persist-Status` / `X-Podcast-Episode-Id` / `X-Podcast-Storage-Path`.
+- Issues UI downloads only on explicit click after script preview (human gate).
+
+### Sponsorship alignment
+
+Needs active rows in `revenue_items` for the workspace (`POST /api/revenue/seed` if empty). Returns recommended item id, confidence, rationale, and suggested mention.
+
+### Troubleshooting
+
+- `400` / draft load errors: missing `draftId` and `content_json`, or draft not in this workspace / empty `content_json`.
+- `503 ELEVENLABS_API_KEY is not configured`: set the key before Download MP3.
+- `400 No ElevenLabs voice`: set `voiceId`, `ELEVENLABS_VOICE_ID`, or brand `elevenlabs_voice_id`.
+- `400 draftId is required when persist is true` / bucket unset: save the draft and configure Storage.
+- `404 No active revenue items to align`: seed or create revenue items first.
+- `502 ElevenLabs …`: upstream TTS failure (check model id, voice id, and chunk size).
 
 ## License
 
