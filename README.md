@@ -115,15 +115,16 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### First-Time Setup
 
-1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
-2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
-3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
-4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
-5. **Ingest signals:** Go to Research → click "Run All Directives"
-6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
-7. **Approve leads:** Review and approve leads on the Leads page
-8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
-9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+The supported first-run path is the **onboarding wizard** at `/onboarding`. Middleware sends any signed-in user with **zero workspace memberships** there. After the wizard, continue the editorial loop below.
+
+1. **Complete the 4-step wizard** (`/onboarding`) — workspace → brand template → editorial seeds → dashboard. Steps 2 and 3 are skippable. See [Onboarding Wizard Runbook](#onboarding-wizard-runbook).
+2. **Ingest signals:** Go to Research → click "Run All Directives"
+3. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
+4. **Approve leads:** Review and approve leads on the Leads page
+5. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
+6. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
+
+Seed endpoints (`POST /api/brand-profiles/seed`, `/api/research/seed-directives`, `/api/content-outlines/seed`, `/api/revenue/seed`, `/api/content-lanes/seed`) still exist for skips, re-runs, and workspaces that never went through the wizard. They are idempotent (no-op when rows already exist).
 
 ## Auth + Multi-Tenancy (Phase 2A — M0 → M2)
 
@@ -173,19 +174,23 @@ In the Supabase SQL editor, run:
   exchanges the code for a session.
 - Middleware (`middleware.ts`) refreshes the Supabase session on every request,
   redirects unauthenticated traffic to `/sign-in?next=...`, and redirects
-  signed-in users with no workspaces to `/onboarding`.
-- `/onboarding` collects a workspace name + slug and POSTs to `/api/workspaces`,
-  which creates the workspace, adds the user as `owner`, and sets the
-  `cs_active_workspace` cookie.
+  signed-in users with **zero** `workspace_members` rows to `/onboarding`.
+  That gate is membership-based — `workspaces.onboarding_completed_at` is
+  **not** a route lock. After step 1 creates a membership, studio routes are
+  reachable even if the remaining wizard steps are skipped.
+- `/onboarding` is a **4-step wizard** (Phase 2A M1): create workspace → pick a
+  brand template → seed editorial defaults → stamp completion and go to
+  `/dashboard`. See [Onboarding Wizard Runbook](#onboarding-wizard-runbook).
 - The studio sidebar shows the active workspace, role, and a sign-out button.
 
 ### Workspace + invite endpoints
 
 | Endpoint | Description |
 |---|---|
-| `GET  /api/me` | Current user, every workspace they belong to, active workspace id |
+| `GET  /api/me` | Current user, every workspace they belong to, active workspace id, `onboarding_completed_at` |
 | `POST /api/workspaces` | Create a workspace, become its owner, set active cookie |
 | `POST /api/workspaces/active` | Switch the active workspace (RLS-gated) |
+| `PATCH /api/workspaces/[id]/complete-onboarding` | Owner-only stamp of `onboarding_completed_at` (wizard step 4) |
 | `GET/POST/DELETE /api/workspaces/[id]/members` | List members + invites; create invite token; remove member (owner-only via RLS) |
 | `GET  /api/workspaces/invites/[token]` | Public invite landing — redirects to /sign-in then accepts the invite |
 
@@ -195,6 +200,162 @@ share it manually. The POST response includes
 `email: { sent: boolean, error: string | null }` so the UI can show a banner
 when delivery falls back. A one-click resend endpoint is available at
 `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only).
+
+## Onboarding Wizard Runbook
+
+Phase 2A M1 replaced the M0 name+slug-only form with a guided wrapper around
+existing seed APIs. The page is a single client route (`app/onboarding/page.tsx`);
+there are no per-step URLs, so a refresh restarts at step 1.
+
+### Gate vs completion stamp
+
+| Mechanism | What it does |
+|-----------|----------------|
+| Middleware membership check | Users with **no** `workspace_members` row cannot reach studio pages. Allowlist: `/onboarding`, `/api/me`, `/api/workspaces`, `/api/auth`. |
+| `PATCH /api/workspaces/:id/complete-onboarding` | Owner-only (RLS `workspaces_owner_write`). Sets `onboarding_completed_at`. Surfaced on `GET /api/me`. Does **not** block navigation. |
+
+`POST /api/workspaces` uses `supabaseAdmin()` because the caller has zero
+memberships and RLS would otherwise block the insert. It creates the workspace,
+inserts the caller as `owner`, and sets the `cs_active_workspace` cookie. After
+that, `requireWorkspace()` works for the remaining seed calls.
+
+### Wizard steps
+
+| Step | UI | Backend | Skip / Back |
+|------|----|---------|-------------|
+| **1. Workspace** | Name + slug | `POST /api/workspaces` `{ name, slug }` | Required. Back disabled after insert (row is not undone). |
+| **2. Brand voice** | Template `idj` \| `blank`, optional display name | `POST /api/brand-profiles/seed` `{ template, name? }` then `PATCH /api/workspace/settings` `{ defaultBrandProfileId }` | Skippable. Seed is idempotent: if any profile exists, returns `{ inserted: 0, brandProfile }` for the existing row. |
+| **3. Editorial defaults** | Parallel seed of 4 catalogs | `POST /api/research/seed-directives`, `/api/content-outlines/seed`, `/api/revenue/seed`, `/api/content-lanes/seed` | Skippable. Continue is offered after success or partial failure. Back → step 2 is allowed (seed is a no-op if rows exist). |
+| **4. Done** | CTA to `/dashboard` | `PATCH /api/workspaces/:id/complete-onboarding` | Terminus. Failure still lets the user proceed to the dashboard. |
+
+There is **no LinkedIn step** in this wizard. Publishing OAuth lives on
+`/api/auth/linkedin/start` (optional; 503 without `LINKEDIN_*` env vars).
+
+### Templates
+
+Catalog: `lib/brand-profile/templates/` (`TEMPLATE_CATALOG`). Valid ids:
+
+- `idj` — Identity Jedi cybersecurity newsletter voice (default if `template` is omitted)
+- `blank` — empty-but-valid `CreatorBrandProfile` fields for authors who will fill voice later
+
+Unknown ids return **400**. There is no `custom` template id — custom profiles
+are created later via `/brand-profiles` (see Brand Profiles Runbook).
+
+### Constraints
+
+- Slug: 2–41 chars, `^[a-z0-9][a-z0-9-]{1,40}$`. Duplicate slug → **409**.
+- Step 2 settings PATCH is best-effort: if the profile inserts but default
+  assignment fails, the wizard shows a warning and continues.
+- Authed Playwright (`e2e/helpers/auth.ts`) only completes **step 1**, then
+  navigates away. That is enough for later pages because membership exists.
+
+### Example: seed a template after skip
+
+```bash
+curl -s -X POST http://localhost:3000/api/brand-profiles/seed \
+  -H "Content-Type: application/json" \
+  -d '{"template":"blank","name":"Acme Voice"}'
+```
+
+```json
+{ "inserted": 1, "brandProfile": { "id": "<uuid>", "name": "Acme Voice" } }
+```
+
+### Troubleshooting
+
+- Redirect loop to `/onboarding`: the user has no `workspace_members` row (or
+  the middleware `workspace_members` lookup failed — it falls through to
+  onboarding rather than 500).
+- `400 Slug must be 2–41 chars...`: slug failed the regex.
+- `409 Slug already taken`: pick another slug.
+- `400 Unknown template "..."`: only `idj` and `blank` are valid.
+- Step 2 warning about workspace default: profile exists; set it later on
+  `/brand-profiles` via `PATCH /api/workspace/settings`.
+- Step 4 "Couldn't stamp onboarding-complete": caller is not owner, or
+  `workspaceId` was lost (refresh mid-flow). Studio is still usable.
+- Seed "Failed" rows: Continue anyway; re-POST the individual seed URL. Seeds
+  no-op when the workspace already has rows of that type.
+
+## Brand Profiles Runbook
+
+Brand profiles are the **voice** layer (tone, forbidden phrases, CTA/emoji
+policy, narrative, optional ElevenLabs ids). Content outlines are the **artifact
+shape** — keep them separate.
+
+Onboarding seeds at most **one** profile (`POST /api/brand-profiles/seed`).
+Additional profiles, full JSON editing, and workspace-default selection live on
+`/brand-profiles`.
+
+### UI
+
+- **New profile** opens the 7-step `BrandProfileWizard` (`app/brand-profiles/BrandProfileWizard.tsx`).
+- **Switch to JSON editor** drops to the raw JSON form (same payload).
+- Existing profiles load via `GET /api/brand-profiles/[id]` and save with
+  `PATCH /api/brand-profiles/[id]`.
+- **Set as workspace default** / **Clear default** call
+  `PATCH /api/workspace/settings` with `defaultBrandProfileId` (uuid or `null`).
+
+### Wizard steps → payload
+
+The wizard only requires **profile name** on step 1. Other fields default to
+empty objects/arrays (`max_primary_ctas` defaults to `1`). Create submits:
+
+`POST /api/brand-profiles/create` → `{ ok: true, id }`
+
+| Step | Fields | JSON column |
+|------|--------|-------------|
+| 1 Basics | name*, profile_version, elevenlabs_voice_id, elevenlabs_model_id | top-level columns |
+| 2 Voice | voice_name, tone[], style[], audience[], stance[] | `voice_rules_json` |
+| 3 Formatting | paragraph_length, preferred_structures[], avoid_structures[] | `formatting_rules_json` |
+| 4 Forbidden | forbiddenPatterns[] | `forbidden_patterns_json` (array) |
+| 5 CTAs | default_cta, allowed_cta_styles[], max_primary_ctas | `cta_rules_json` |
+| 6 Emoji | allowed, allowed_emojis[], guidance | `emoji_policy_json` |
+| 7 Narrative | core_thesis[], recurring_angles[], skepticism_triggers[] | `narrative_preferences_json` |
+
+Validation (`lib/brand-profile/creatorBrandProfile.ts`): `name` required;
+object-shaped JSON fields; `forbidden_patterns_json` must be an array. Optional
+strings are trimmed or stored as `null`.
+
+### API
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/brand-profiles/list` | `GET` | `{ brandProfiles: [{ id, name, created_at }], defaultBrandProfileId }` |
+| `/api/brand-profiles/seed` | `POST` | Idempotent template insert. Body `{ template?: "idj" \| "blank", name?: string }` |
+| `/api/brand-profiles/create` | `POST` | Insert a full validated profile. Returns `{ ok, id }` |
+| `/api/brand-profiles/[id]` | `GET` | Full editor shape |
+| `/api/brand-profiles/[id]` | `PATCH` | Replace validated fields (same payload as create) |
+| `/api/workspace/settings` | `GET` | `{ defaultBrandProfileId, updated_at }` |
+| `/api/workspace/settings` | `PATCH` | `{ defaultBrandProfileId: string \| null }` — uuid must belong to this workspace |
+
+All of these use `requireWorkspace()` + RLS. Seed/create/list/get/patch do
+**not** auto-set the workspace default except the onboarding wizard's follow-up
+PATCH.
+
+### Create example
+
+```bash
+curl -s -X POST http://localhost:3000/api/brand-profiles/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Voice",
+    "profile_version": "1.0",
+    "voice_rules_json": { "voice_name": "Acme", "tone": ["direct"], "style": [], "audience": [], "stance": [] },
+    "formatting_rules_json": { "paragraph_length": "3-4 sentences", "preferred_structures": [], "avoid_structures": [] },
+    "forbidden_patterns_json": [],
+    "cta_rules_json": { "default_cta": "Subscribe", "allowed_cta_styles": ["short"], "max_primary_ctas": 1 },
+    "emoji_policy_json": { "allowed": false, "allowed_emojis": [], "guidance": "" },
+    "narrative_preferences_json": { "core_thesis": [], "recurring_angles": [], "skepticism_triggers": [] }
+  }'
+```
+
+### Troubleshooting
+
+- `400 name is required` / `voice_rules_json must be an object` / `forbidden_patterns_json must be an array`: payload failed `validateCreatorBrandProfilePayload`.
+- `404 Brand profile not found in this workspace`: default PATCH pointed at another tenant's id (or a typo).
+- `400 defaultBrandProfileId must be a non-empty string or null`: omitted or wrong type.
+- Seed returns `inserted: 0`: workspace already has a profile — use `/brand-profiles` to create another, or PATCH the existing one.
+- Issues / content products pick the wrong voice: set the workspace default, or pass `brandProfileId` on the generate/content-product request when the UI exposes it.
 
 ### Migration status (M2 — `WORKSPACE_ID` removed)
 
@@ -242,6 +403,8 @@ the workspace explicitly:
 app/
 ├── components/          # Sidebar, page header
 ├── page.tsx             # Signals (homepage)
+├── onboarding/page.tsx  # 4-step first-run wizard
+├── brand-profiles/      # Voice editor + 7-step BrandProfileWizard
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
 ├── issues/page.tsx      # Issue draft generation
@@ -252,7 +415,8 @@ app/
     ├── leads/               # Generate, list, approve
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
-    ├── brand-profiles/      # List, seed
+    ├── brand-profiles/      # List, seed, create, [id] get/patch
+    ├── workspaces/          # Create, active cookie, members, complete-onboarding
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
     ├── signals/list/        # List captured signals
@@ -260,6 +424,7 @@ app/
     └── runs/list/           # List ingest/generation runs
 
 lib/
+├── brand-profile/       # CreatorBrandProfile validator + idj/blank templates
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation

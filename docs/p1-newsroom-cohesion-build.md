@@ -48,4 +48,4 @@
 Run a real loop inside Cornerstone with no external tools: open the home → start a brainstorm from a signal or a health alert → promote to a draft → edit/approve in Issues → publish → see the post's performance return to the home. When that round-trip works end to end, P1 ships.
 
 ## Out of scope (own phases)
-LinkedIn engine (§3.8 / Phase 3), source discovery + signal scoring (§3.3 Phase 2/3), onboarding wizard rework (§3.9), billing (§8).
+LinkedIn engine (§3.8 / Phase 3), source discovery + signal scoring (§3.3 Phase 2/3), billing (§8). Creator onboarding is shipped (M1, §3.9) and is not P1 work.

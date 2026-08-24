@@ -4,7 +4,7 @@
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Last updated: 2026-06-08
+Last updated: 2026-08-24
 
 > **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
 
@@ -64,7 +64,7 @@ Cornerstone OS is **workspace-scoped by default**. Every domain row (`signals`, 
 | `workspace_members` | Many-to-many join `(workspace_id, user_id, role)` with role enum **`owner` \| `editor` \| `viewer`**. A user can belong to many workspaces. |
 | `workspace_invites` | Pending invitations addressed by email; consumed on first sign-in matching the address. |
 
-**Active workspace selection** — a user's currently-selected workspace is persisted in the **`cs_active_workspace`** cookie (see `lib/auth/session.ts`). The cookie holds a `workspace_id`; helpers `getActiveWorkspaceId()` / `setActiveWorkspaceId()` read/write it, and the workspace switcher in the Studio sidebar updates it via **`PATCH /api/workspaces/active`**. If the cookie is missing or points to a workspace the user is no longer a member of, the session helper falls back to the user's first membership.
+**Active workspace selection** — a user's currently-selected workspace is persisted in the **`cs_active_workspace`** cookie (see `lib/auth/session.ts`). The cookie holds a `workspace_id`; helpers `getActiveWorkspaceId()` / `setActiveWorkspaceId()` read/write it, and the workspace switcher in the Studio sidebar updates it via **`POST /api/workspaces/active`**. If the cookie is missing or points to a workspace the user is no longer a member of, the session helper falls back to the user's first membership.
 
 **Per-query enforcement** — user-facing routes obtain their Supabase client through **`supabaseUser()`** in `lib/supabase/server.ts`. That client runs under the Postgres **`authenticated`** role, so every query is filtered by RLS policies built around the `public.user_in_workspace(uuid)` helper. Routes never need to manually `.eq("workspace_id", …)` to enforce isolation — RLS does it. See §3.16 for the full auth/tenancy/RLS contract.
 
@@ -435,34 +435,42 @@ _Unchanged from v2.0._
 
 ---
 
-## 3.9 Creator Onboarding + LinkedIn Connection **[REVISED in v2.9]**
+## 3.9 Creator Onboarding + Brand Profiles **[REVISED — M1 shipped]**
 
-Onboarding ships in two phases that share the same destination: a workspace with a brand profile, default editorial setup, and an optional connected LinkedIn account.
+Onboarding lands a workspace with an optional brand profile and editorial seed data. LinkedIn publishing OAuth is a **separate** integration (not a wizard step).
 
-### M0 — Minimum viable onboarding (shipped)
+### Gate
 
-A single-page form at **`app/onboarding/page.tsx`** captures **workspace name** + **slug** and submits to **`POST /api/workspaces`**. The route creates the `workspaces` row, inserts the caller as **`owner`** in `workspace_members`, sets the **`cs_active_workspace`** cookie, and redirects to `/dashboard`. Middleware (`middleware.ts`) enforces this gate: any authenticated user with **zero** workspace memberships is redirected to `/onboarding` from every protected route. See §3.16 for the auth client used by the bootstrap route.
+`middleware.ts` redirects authenticated users with **zero** `workspace_members` rows to `/onboarding`. While in that state, only `/onboarding`, `/api/me`, `/api/workspaces`, and `/api/auth` are reachable. After step 1 inserts a membership, studio routes open — **`onboarding_completed_at` is not a route lock**. It is an owner-stamped timestamp returned by `GET /api/me`.
 
-The M0 page is intentionally minimal — no brand profile, no editorial seed, no LinkedIn — so the rest of the product becomes reachable as quickly as possible. The user can then run **`POST /api/brand-profiles/seed`**, **`POST /api/content-outlines/seed`**, **`POST /api/revenue/seed`**, **`POST /api/content-lanes/seed`** manually (or via the Issues / Brand pages) to fill out their workspace.
+### M0 — Bootstrap API (shipped; UI superseded)
 
-### M1 — Multi-step wizard (next)
+**`POST /api/workspaces`** `{ name, slug }` remains the tenancy bootstrap. The handler uses `supabaseAdmin()` because the caller has zero memberships and RLS would block the insert. It creates the `workspaces` row, inserts the caller as **`owner`**, and sets the **`cs_active_workspace`** cookie. Slug constraint: 2–41 chars, `^[a-z0-9][a-z0-9-]{1,40}$` (409 on collision). See §3.16 for the auth client used by the bootstrap route.
 
-M1 replaces `app/onboarding/page.tsx` with a **4-step wizard** that drives the same seed endpoints in sequence. Each step is a discrete client state with its own Continue / Back affordances; the route remains single-page (no separate URLs per step) so refreshes don't lose progress mid-flow.
+The original M0 page was name+slug only. Seed endpoints (`POST /api/brand-profiles/seed`, `/api/content-outlines/seed`, `/api/revenue/seed`, `/api/content-lanes/seed`, `/api/research/seed-directives`) remain available for skips and existing workspaces; each is idempotent (no-op when rows already exist).
+
+### M1 — 4-step wizard (shipped, `app/onboarding/page.tsx`)
+
+A single-page client wizard (no per-step URLs; refresh restarts at step 1). Back is allowed only from step 3 → 2. Step 1 is not undone. Steps 2 and 3 are skippable.
 
 | Step | Purpose | Backend call |
 |------|---------|--------------|
 | **1. Workspace** | Name + slug. | `POST /api/workspaces` |
-| **2. Brand voice** | Pick a template (**`idj` \| `blank` \| `custom`**), enter display name + tagline. Templates live in `lib/brand-profile/templates/` (replacing the hardcoded `DEFAULT_IDJ_PROFILE` in `app/api/brand-profiles/seed/route.ts`). | `POST /api/brand-profiles/create` → `PATCH /api/workspace/settings` (default brand profile) |
-| **3. Editorial setup** | One-click seed: research directives, content outlines, revenue items, content lanes (parallel). | `POST /api/research/seed-directives`, `POST /api/content-outlines/seed`, `POST /api/revenue/seed`, `POST /api/content-lanes/seed` |
-| **4. Done** | Marks `workspaces.onboarding_completed_at`, then deep-links into `/dashboard`. | — |
+| **2. Brand voice** | Pick template **`idj` \| `blank`** (no `custom` id), optional display name. Templates live in `lib/brand-profile/templates/`. | `POST /api/brand-profiles/seed` `{ template, name? }` → `PATCH /api/workspace/settings` `{ defaultBrandProfileId }` |
+| **3. Editorial setup** | One-click parallel seed: research directives, content outlines, revenue items, content lanes. | `POST /api/research/seed-directives`, `POST /api/content-outlines/seed`, `POST /api/revenue/seed`, `POST /api/content-lanes/seed` |
+| **4. Done** | Marks `workspaces.onboarding_completed_at`, then deep-links into `/dashboard`. | `PATCH /api/workspaces/:id/complete-onboarding` (owner-only via RLS) |
 
-An **optional 5th step** ("Connect LinkedIn — later if you want") is added by the LinkedIn OAuth milestone and links to **`GET /api/auth/linkedin/start`**; skipping it is fully supported.
+`POST /api/brand-profiles/seed` is idempotent: if the workspace already has any profile, it returns `{ inserted: 0, brandProfile }` for that row so the wizard can still PATCH the default. Unknown template ids return 400. Default template when omitted: `idj`.
 
-The wizard does not introduce any new API surface — it composes the existing seed endpoints behind a guided UX. Middleware already lets `/onboarding` through without onboarding-completion gates, so users can return mid-flow.
+There is **no 5th LinkedIn-connect step** in this wizard. LinkedIn publishing OAuth is `GET /api/auth/linkedin/start` (503 without `LINKEDIN_*` env vars) — see below.
+
+### Brand profiles after onboarding (`/brand-profiles`)
+
+Onboarding seeds **at most one** profile. Additional profiles use the 7-step **`BrandProfileWizard`** (`app/brand-profiles/BrandProfileWizard.tsx`) → **`POST /api/brand-profiles/create`**. The same page can switch to a raw JSON editor (`POST` create / `PATCH /api/brand-profiles/[id]`). Workspace default is `PATCH /api/workspace/settings` `{ defaultBrandProfileId }` (uuid must belong to the workspace, or `null` to clear). Payload validation is `validateCreatorBrandProfilePayload` in `lib/brand-profile/creatorBrandProfile.ts` (`name` required; JSON object fields; `forbidden_patterns_json` must be an array).
 
 ### LinkedIn connection
 
-OAuth surface (`/api/auth/linkedin/start`, `/api/auth/linkedin/callback`) and the `linkedin_connections` + `linkedin_drafts` tables are specified in §8 Phase 2A M1 and land alongside the wizard's optional 5th step. The auth/tenancy contract for those routes follows §3.16.
+OAuth surface (`/api/auth/linkedin/start`, `/api/auth/linkedin/callback`) and the `linkedin_connections` + `linkedin_drafts` tables are specified in §8 Phase 2A M1. They are **not** composed into `/onboarding`. The auth/tenancy contract for those routes follows §3.16.
 
 ---
 
@@ -622,7 +630,7 @@ flowchart LR
 
 ## 3.12 Content hub posture, derivative quality, and LLM architecture **[NEW in v2.6]**
 
-**Product intent:** Cornerstone is the creator’s **content hub**: they generate a **canonical artifact** (e.g. newsletter `DraftObject`), then produce **derivatives** (social, podcast script, sponsorship copy, etc.) **without rewriting from scratch**. Output should be **tailored to the creator** and land **~80% of the way** there; light human edit completes the rest. Multi-tenant **onboarding** (not built yet) will eventually capture preferences; until then, **brand profile** + **draft-linked lineage** are the primary personalization carriers.
+**Product intent:** Cornerstone is the creator’s **content hub**: they generate a **canonical artifact** (e.g. newsletter `DraftObject`), then produce **derivatives** (social, podcast script, sponsorship copy, etc.) **without rewriting from scratch**. Output should be **tailored to the creator** and land **~80% of the way** there; light human edit completes the rest. Multi-tenant **onboarding** (M1 wizard, §3.9) seeds a workspace brand profile; **brand profile** + **draft-linked lineage** remain the primary personalization carriers.
 
 **Why “Claude in the app” can outperform a single API call:** The app session typically accumulates **more context** (multi-turn steering, pasted material, implicit corrections) and **more iterations** before the user accepts a result. Cornerstone routes often send a **compact summary** (`draftSummaryForContentProducts`) plus **hard constraints** (JSON shape, lint-adjacent rules, outline contracts). Same model name does not imply the same **effective prompt, token budget, temperature, or iteration count**. The gap is addressed by **richer inputs**, **in-product refinement loops**, and **constraint design**—not by requiring vendor-hosted “assistant” threads as the default.
 
@@ -849,7 +857,7 @@ The canonical reference for how a request becomes an authorized database query i
 Authorization is composed of three independent layers. Each layer fails closed; bypassing any one of them is a bug.
 
 1. **Authentication** — handled by **Supabase Auth**. Today this means email + password (sign-up confirmation email, password reset). OAuth providers (Google, LinkedIn-as-auth) are scheduled for Phase 2A M2. Sign-in / sign-up / sign-out routes live under `app/sign-in`, `app/sign-up`, and `app/api/auth`. Middleware (`middleware.ts`) refreshes the Supabase session cookie on every request and redirects unauthenticated callers on protected paths to `/sign-in`.
-2. **Workspace binding** — the **`workspaces`** and **`workspace_members`** tables (`lib/supabase/schema-tenancy.sql`) describe which users can act inside which tenants. One user may belong to many workspaces, each with role **`owner` \| `editor` \| `viewer`**. The active workspace for a given request is read from the **`cs_active_workspace`** cookie (`lib/auth/session.ts`); the workspace switcher in the Studio sidebar writes it via `PATCH /api/workspaces/active`. Users with zero memberships are forced through `/onboarding` (§3.9).
+2. **Workspace binding** — the **`workspaces`** and **`workspace_members`** tables (`lib/supabase/schema-tenancy.sql`) describe which users can act inside which tenants. One user may belong to many workspaces, each with role **`owner` \| `editor` \| `viewer`**. The active workspace for a given request is read from the **`cs_active_workspace`** cookie (`lib/auth/session.ts`); the workspace switcher in the Studio sidebar writes it via `POST /api/workspaces/active`. Users with zero memberships are forced through `/onboarding` (§3.9).
 3. **Per-query enforcement (RLS)** — every user-facing route uses **`supabaseUser()`** from `lib/supabase/server.ts`, which constructs a Supabase client bound to the user's JWT and running under the Postgres **`authenticated`** role. RLS policies on every domain table reference the **`public.user_in_workspace(uuid)`** helper, so isolation is enforced inside the database rather than at the API layer. Routes never need to manually filter by `workspace_id` for authorization; doing so is at best redundant and at worst masks a missing policy.
 
 Service-role contexts (cron jobs, webhooks, the workspace-creation bootstrap) bypass RLS and **must** filter by `workspace_id` explicitly. The allowlist is enumerated below.
@@ -1215,7 +1223,7 @@ The sidebar currently exposes ~12 flat destinations; §3.15's contract is 7. Rec
 - New Brainstormer tool `get_top_performing_themes` (reads §3.18 analytics + lanes).
 
 ### Non-goals (P1)
-LinkedIn engine (§3.8), source discovery/scoring (§3.3 Phase 2/3), onboarding wizard rework (§3.9), and billing (§8) are out of scope — they extend the platform; they don't make it cohere.
+LinkedIn engine (§3.8), source discovery/scoring (§3.3 Phase 2/3), and billing (§8) are out of scope — they extend the platform; they don't make it cohere. Creator onboarding is **shipped** (M1, §3.9) and is not P1 work.
 
 ### Acceptance — the dogfood test
 A creator can run a full loop without leaving the app or losing context: open the home → start a brainstorm from a signal or a health alert → promote it to a draft → edit/approve in Issues → publish → and see the post's performance return to the home. When that round-trip works, P1 is done.
@@ -1285,15 +1293,15 @@ Stretch:
 | **Publisher Agent** | **Implemented (PR #109)** | §3.7 — deterministic `runPublisher()` (render → push_beehiiv → mark published → close ACE run + notify); `/api/publish/beehiiv` delegates and logs an `agent:publisher` run to `/runs`, completing the Researcher→Writer→Editor→Publisher chain |
 | **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
 | **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
-| Brand profile — generic schema | Not started | Replaces hardcoded seed |
-| Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done), optional 5th LinkedIn-connect step (§3.9) |
+| Brand profile — generic schema | **Implemented** | `CreatorBrandProfile` validator (`lib/brand-profile/creatorBrandProfile.ts`); templates `idj` \| `blank` in `lib/brand-profile/templates/`; seed/create/[id] APIs |
+| Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done). No LinkedIn step in the wizard — publishing OAuth is a separate integration (§3.9) |
 | **Supabase Auth + sign-in/sign-up/sign-out** | **Implemented** | `app/sign-in`, `app/sign-up`, `app/api/auth` — email + password (M0); Google + LinkedIn-as-auth (M2 — §3.16) |
 | **OAuth sign-in providers (Google + LinkedIn-as-auth)** | **Implemented (M2)** | "Continue with …" buttons on `/sign-in` + `/sign-up`; `lib/auth/oauth.ts`; providers configured in Supabase dashboard; runbook at `docs/m2-oauth-runbook.md` (§3.16) |
 | **Workspace tenancy (workspaces, workspace_members, workspace_invites)** | **Implemented** | `lib/supabase/schema-tenancy.sql` — `(workspace_id, user_id, role)` join with `owner` / `editor` / `viewer` (§3.0) |
 | **RLS scaffolding + helper functions** | **Implemented (wave-1 + wave-2)** | `lib/supabase/schema-rls-wave1.sql` covers signals, editorial_leads, issue_drafts, content_outlines, brand_profiles, workspace_settings, runs; `schema-rls-wave2.sql` covers brainstorm_sessions, brainstorm_messages, content_lanes, notification_approvals, ace_runs, podcast_episodes (§3.16) |
 | **`WORKSPACE_ID` env removal** | **Implemented (M2)** | Removed from all production code paths. User-facing routes use `requireWorkspace()`; cron iterates `workspace_settings.ace_enabled`; webhooks moved to per-workspace URL paths (§3.16) |
 | **Auth middleware (session refresh + onboarding gate)** | **Implemented** | `middleware.ts` — refreshes Supabase session, redirects unauth to `/sign-in`, members-of-zero-workspaces to `/onboarding` |
-| **Workspace switcher + sidebar identity** | **Implemented** | `app/api/me/route.ts` returns current user + membership list; Studio sidebar switcher writes `cs_active_workspace` cookie via `PATCH /api/workspaces/active` |
+| **Workspace switcher + sidebar identity** | **Implemented** | `app/api/me/route.ts` returns current user + membership list; Studio sidebar switcher writes `cs_active_workspace` cookie via `POST /api/workspaces/active` |
 | **Workspace invites (email delivery)** | **Implemented (M1)** | `POST /api/workspaces/[id]/members` triggers Resend via `lib/email/resend.ts`; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only) |
 | **LinkedIn OAuth connection (publishing)** | **Implemented (M1)** | `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` defines `linkedin_connections` + `linkedin_drafts` with RLS via `user_in_workspace` |
 | **LinkedIn token encryption at rest** | **Implemented (M2)** | pgsodium AEAD-DET via `lib/supabase/schema-linkedin-crypto.sql`; `linkedin_connections_decrypted` view + `upsert_linkedin_connection` RPC; wrapped by `lib/linkedin/store.ts` (§3.16) |
@@ -1385,12 +1393,13 @@ Phase 2A is sequenced in three milestones — **M0**, **M1**, **M2** — all shi
 - ✅ Workspace tenancy schema — `workspaces`, `workspace_members`, `workspace_invites` via `lib/supabase/schema-tenancy.sql`
 - ✅ RLS wave-1 + helper functions — `lib/supabase/schema-rls-wave1.sql` covering signals, editorial_leads, issue_drafts, content_outlines, brand_profiles, workspace_settings, runs (§3.16)
 - ✅ Auth middleware — session refresh + onboarding gate (`middleware.ts`)
-- ✅ Workspace switcher + sidebar identity — `app/api/me/route.ts`, `cs_active_workspace` cookie, `PATCH /api/workspaces/active`
+- ✅ Workspace switcher + sidebar identity — `app/api/me/route.ts`, `cs_active_workspace` cookie, `POST /api/workspaces/active`
 - ✅ Onboarding flow (M0 minimum) — `app/onboarding/page.tsx` (name + slug → `POST /api/workspaces`)
 
 #### M1 — RLS wave-2, onboarding wizard, invites, LinkedIn **(shipped, PR #92)**
 - ✅ **RLS wave-2 migration** — 42 user-facing routes converted from `supabaseAdmin()` to `supabaseUser()` + `requireWorkspace()`; `lib/supabase/schema-rls-wave2.sql` covers `brainstorm_sessions`, `brainstorm_messages`, `content_lanes`, `notification_approvals`, `ace_runs`, `podcast_episodes` (§3.16).
-- ✅ **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done) plus optional 5th LinkedIn-connect step (§3.9).
+- ✅ **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done). LinkedIn publishing OAuth is a separate `/api/auth/linkedin/*` flow, not a wizard step (§3.9).
+- ✅ **`PATCH /api/workspaces/:id/complete-onboarding`** — owner-only stamp of `onboarding_completed_at` (not a route gate).
 - ✅ **Invite SMTP** — Resend wired into `POST /api/workspaces/[id]/members`; `lib/email/resend.ts`; `RESEND_API_KEY` + `EMAIL_FROM` documented; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend`.
 - ✅ **LinkedIn OAuth (publishing) + tables** — `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` with `linkedin_connections` and `linkedin_drafts` (both RLS-enabled via `user_in_workspace`). Token encryption at rest was flagged as an M1 carryover and shipped in M2.
 - ✅ **Generic `CreatorBrandProfile` template flow** — templates extracted to `lib/brand-profile/templates/` (`idj.ts` + `blank.ts`); hardcoded `DEFAULT_IDJ_PROFILE` deprecated; wizard step 2 selects template by name.
