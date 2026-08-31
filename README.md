@@ -25,7 +25,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; see `lib/supabase/` for additional schemas)
+- A Supabase project with required tables (at minimum apply `lib/supabase/schema-issue_drafts.sql` and `lib/supabase/schema-content-outlines.sql`; add `lib/supabase/schema-research-intent.sql` for **Signals → Research Setup**; add `lib/supabase/schema-brainstorm.sql` for the **Brainstorming Hub**; see `lib/supabase/` for additional schemas)
 - An Anthropic API key (and OpenAI API key if any role uses OpenAI)
 
 ### Environment Variables
@@ -116,10 +116,10 @@ Open [http://localhost:3000](http://localhost:3000).
 ### First-Time Setup
 
 1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
-2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
+2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives), or use **Seed directives** on Signals → Research Setup
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
 4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
-5. **Ingest signals:** Go to Research → click "Run All Directives"
+5. **Configure research + ingest signals:** On **Signals → Research Setup**, save a Research Intent profile and add at least one RSS source (user-added sources are auto-approved). Then ingest via one of two paths — see [Signals + Research Ingest Runbook](#signals--research-ingest-runbook)
 6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
 7. **Approve leads:** Review and approve leads on the Leads page
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
@@ -241,21 +241,24 @@ the workspace explicitly:
 ```
 app/
 ├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
-├── research/page.tsx    # Research console
+├── page.tsx             # Redirects to /dashboard
+├── signals/             # Research Setup + Signal Feed tabs
+├── research/page.tsx    # Research console (agent pipeline + cadence ingest)
 ├── leads/page.tsx       # Editorial leads
 ├── issues/page.tsx      # Issue draft generation
 ├── outlines/page.tsx    # Content outlines CRUD UI
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
-    ├── leads/               # Generate, list, approve
+    ├── research-intent/     # Workspace research intent GET/PUT
+    ├── research-sources/    # List/create/approve/reject RSS sources
+    ├── leads/               # Generate, list, approve, from-signal
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
-    ├── signals/list/        # List captured signals
+    ├── signals/list/        # List captured signals (?heat=1 adds recency heat)
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
@@ -264,17 +267,88 @@ lib/
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
 ├── llm/                 # Provider abstraction + role-based model selection
-├── research/            # RSS feed map (8 directives, 13+ sources)
+├── research/            # RSS_FEED_MAP + cadence ingest (legacy directive path)
+├── agents/researcher.ts # Agent ingest from approved research_sources
 ├── supabase/            # Server + browser clients
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # System specification (see docs/cornerstone-system-spec.md)
 ```
 
 ## Architecture
 
 See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+
+## Signals + Research Ingest Runbook
+
+`/signals` is the research input surface: **Research Setup** (intent + sources) and **Signal Feed** (read-only inbox). Apply `lib/supabase/schema-research-intent.sql` before using either tab.
+
+Two ingest implementations coexist. The Writer Agent consumes **both** (signals with a `directive_id` vs undirected signals grouped by publisher). Mixing them is supported; empty approved sources only break the agent path.
+
+### Dual ingest paths
+
+| Path | How to run | What it reads | What it writes |
+|------|------------|---------------|----------------|
+| **Agent (intent-driven)** | Research console → **Research + write leads** / **Run full pipeline**, or `POST /api/pipeline/run` with `stages: ["researcher"]` | `research_sources` where `status=approved` | `signals` with `directive_id=null`, `relevance_score=0.0`, `trust_score` copied from the source; updates `research_sources.last_ingested_at`; `runs.run_type=agent:researcher` |
+| **Cadence (legacy)** | Research console → **Run all directives** / **Run daily** / **Run weekly**, Brainstorm `trigger_signal_ingest`, or `POST /api/research/run-all` | `research_directives` + hardcoded `RSS_FEED_MAP` in `lib/research/rssFeedMap.ts` | `signals` with `directive_id` set; `runs.run_type=directive_ingest` |
+
+The Researcher Agent tools are `check_signal_freshness` (stale if `last_ingested_at` is missing or older than 24h), `ingest_approved_sources` (optional `source_id`), and `report_summary`. It does **not** read `research_intent` yet, does **not** propose sources (`discover_sources` is still Phase 2), and does **not** score signals (`relevance_score` stays `0.0`).
+
+### Research Setup tab
+
+1. **Research Intent** — tag lists for `topic_focus`, `watch_entities`, `keywords`. Enter to add, × to remove, **Save** upserts `PUT /api/research-intent`. Saved for later agent discovery/scoring; current ingest does not filter on it.
+2. **Add a source** — `name` + `feed_url` required; `site_url` optional. `POST /api/research-sources/create` inserts `status=approved`, `proposed_by=user`, `trust_score=1.0`. Duplicate `(workspace_id, feed_url)` returns **409**.
+3. **Proposed sources** — shown only when rows have `status=proposed`. **Approve** / **Reject** call `POST /api/research-sources/[id]/approve|reject`. Nothing in production currently inserts proposed rows (`discover_sources` is unshipped), so this section is usually empty.
+4. **Approved sources** — active feeds with last-ingested date. Rejected rows are omitted from this list.
+5. **Seed directives** — `POST /api/research/seed-directives` inserts the 8 default directives only when the workspace has zero `research_directives` rows (`inserted: 0` otherwise). Directives are required for the cadence path and for Writer grouping of directed signals.
+
+```bash
+# Upsert research intent
+curl -s -X PUT http://localhost:3000/api/research-intent \
+  -H "Content-Type: application/json" \
+  -d '{"topic_focus":["identity security"],"watch_entities":["Okta"],"keywords":["ITDR"]}'
+
+# Add an auto-approved RSS source
+curl -s -X POST http://localhost:3000/api/research-sources/create \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Dark Reading","feed_url":"https://www.darkreading.com/rss.xml"}'
+
+# Agent ingest (requires an approved source)
+curl -s -X POST http://localhost:3000/api/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"triggered_by":"manual","stages":["researcher"]}'
+```
+
+All of these routes use `requireWorkspace()` (session cookie). There is no `WORKSPACE_ID` env fallback.
+
+### Signal Feed tab
+
+- **Fresh count** — signals with `captured_at` in the last 14 days (`GET /api/signals/list?limit=200`).
+- **Last ingest / stale badge** — latest **completed** `runs` row with `run_type=directive_ingest` only. Stale if that run is older than 3 days, or if no such run exists. **Agent ingest does not update this badge** (`agent:researcher` is a different `run_type`). Use the fresh count and `last_ingested_at` on approved sources as the agent-path signal.
+- **Topic chips** — client-side `inferTopicFromTitle()` (`lib/dashboard/inferTopic.ts`). Not stored. Filters: All, AI, Identity, Biotech, Robotics, Climate, Media, Consumer, General.
+- **Heat bar** — `GET /api/signals/list?limit=40&heat=1` derives `heat` from `captured_at` recency (not `relevance_score`). Floor 12, ceiling 100.
+- **Brainstorm** — `/brainstorm?signalId=<id>` when the row has an id.
+- **Lead** (hover) — `POST /api/leads/from-signal` with `{ title, url, publisher }`. Requires a workspace brand profile. Creates an `editorial_leads` row (`status=pending_review`, `confidence_score=0.5`) and hides the card locally; it does not delete the signal.
+
+`POST /api/signals/create` still exists for manual/developer inserts and is not shown on this tab.
+
+### Constraints
+
+- User-added sources ingest on the **next Researcher run**; adding a source does not fetch immediately.
+- Agent ingest parses up to **15 items per feed**. Cadence ingest uses `limitPerFeed` (Research UI sends `10`; `run-all` default is `15`).
+- Approve does not change `trust_score` (agent-proposed rows keep `0.7`).
+- Empty Signal Feed: add/approve sources and run Researcher, **or** seed directives and run cadence ingest, then clear the topic filter.
+
+### Troubleshooting
+
+- `400 name is required` / `400 feed_url is required`: Add Source omitted a required field.
+- `409 This feed URL is already in your sources.`: unique `(workspace_id, feed_url)`.
+- `400 No brand profile for workspace`: Promote to Lead before seeding/creating a brand profile.
+- Researcher returns `No approved sources to ingest`: add a source on Research Setup (or approve a proposed one). Cadence ingest still works independently.
+- Signal Feed shows **No ingests yet** after a successful Researcher run: expected — the badge only reads `directive_ingest`. Check fresh-signal count or `research_sources.last_ingested_at`.
+- Relation `research_intent` / `research_sources` does not exist: apply `lib/supabase/schema-research-intent.sql`.
+- Cadence ingest inserts 0: seed directives first; `RSS_FEED_MAP` keys must match directive names.
 
 ## Content Outlines Runbook
 

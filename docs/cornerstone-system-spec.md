@@ -132,13 +132,14 @@ type AgentRunState = {
 - **LLM role:** `research`
 - **Trigger:** Scheduled (daily ingest, weekly source discovery) or manual
 - **Human gate:** No — signals flow automatically from approved sources. Newly discovered sources require one-time user approval before their signals enter the pipeline (see §3.3).
-- **Tools:**
+- **Tools (shipped):**
   - `check_signal_freshness` — query `research_sources` to determine staleness per approved source (>24h since last ingest)
-  - `ingest_approved_sources` — run RSS ingest across all `research_sources` rows with `status=approved`; updates `last_ingested_at` after each run
-  - `discover_sources` — use web search to find RSS feeds and newsletters relevant to the workspace Research Intent profile; inserts results as `research_sources` rows with `status=proposed` (never auto-approved) *(Phase 2)*
-  - `score_signal_relevance` — score incoming signals against the Research Intent profile (topic, entity, keyword matching) and set `relevance_score` *(Phase 3)*
-  - `report_summary` — log what was ingested, discovered, and skipped
-- **Decision-making:** Reads the workspace `research_intent` profile to understand topic focus, watch entities, and keywords. Only ingests from `status=approved` sources. Proposes new sources via `discover_sources` on a weekly cadence without blocking the daily ingest cycle.
+  - `ingest_approved_sources` — run RSS ingest across all `research_sources` rows with `status=approved` (optional `source_id`); updates `last_ingested_at` after each feed; inserts `signals` with `directive_id=null` and `relevance_score=0.0`
+  - `report_summary` — log inserted vs skipped counts
+- **Tools (not implemented):**
+  - `discover_sources` — use web search to find RSS feeds relevant to the workspace Research Intent profile; insert as `research_sources` with `status=proposed` (never auto-approved) *(Phase 2)*
+  - `score_signal_relevance` — score incoming signals against the Research Intent profile and set `relevance_score` *(Phase 3)*
+- **Decision-making (current):** Only ingests from `status=approved` sources. Stops with a message if none exist — does not fabricate sources. Does **not** read `research_intent` and does **not** write `runs.run_type=directive_ingest` (pipeline persistence uses `agent:researcher`). Planned: read intent for discovery/scoring; weekly `discover_sources` without blocking daily ingest.
 
 #### Writer Agent
 - **Role:** Generate editorial leads from fresh signals
@@ -146,11 +147,11 @@ type AgentRunState = {
 - **Trigger:** Event (fires after Researcher completes, if new signals were ingested)
 - **Human gate:** No (leads are generated as `pending_review`)
 - **Tools:**
-  - `query_fresh_signals` — get signals from the last 14 days, ordered by `relevance_score` DESC then `captured_at` DESC
+  - `query_fresh_signals` — get signals from the last 14 days, split into `directive_groups` (cadence path, `directive_id` set) and `source_groups` (agent path, undirected). Ordered by `captured_at` DESC. `relevance_score` ordering is Phase 3.
   - `check_existing_leads` — check for duplicate angles before generating
   - `generate_leads` — call LLM to produce leads from signals
   - `save_leads` — persist leads to DB with proper deduplication
-- **Decision-making:** Skips sources that already have sufficient pending leads. Prioritizes high-`relevance_score` signals when the pool is large. Adjusts lead count based on signal volume.
+- **Decision-making:** Skips sources that already have sufficient pending leads. Uses both cadence (directive) and agent (publisher) signal groups. `relevance_score` prioritization is Phase 3.
 
 #### Editor Agent
 - **Role:** Editor-in-Chief. Reviews approved leads, makes all editorial decisions, and produces the newsletter draft.
@@ -362,18 +363,21 @@ proposed → approved → [actively ingested on every daily cycle]
 The Signals page is organized into two tabs:
 
 **Research Setup tab**
-- Research Intent form — topic focus, watch entities, keywords (tag-list inputs + Save)
-- Add Source form — name, feed URL, site URL; user-added sources are auto-approved
-- Proposed Sources section — agent-proposed sources with Approve / Reject per card *(Phase 2)*
+- Research Intent form — topic focus, watch entities, keywords (tag-list inputs + Save). Persisted for later discovery/scoring; current Researcher ingest does not filter on it.
+- Add Source form — name, feed URL, site URL; user-added sources are auto-approved (`trust_score=1.0`)
+- Proposed Sources section — rendered when `status=proposed` rows exist; Approve / Reject per card (API shipped). Production does not yet insert proposed rows (`discover_sources` is Phase 2).
 - Approved Sources list — currently active sources with last-ingested timestamp
+- Seed directives — one-shot insert of the 8 default `research_directives` (no-op if any rows exist)
 
 **Signal Feed tab**
 - Read-only signal feed (no manual ingest controls)
-- Freshness strip — fresh signal count (14-day window), last ingest time, stale/fresh badge
-- Topic filter buttons
-- Signal list — heat bar, topic tag, publisher, Brainstorm link, Promote to Lead action
+- Freshness strip — fresh signal count (14-day `captured_at` window); last-ingest time and stale/fresh badge read **completed `directive_ingest` runs only** (cadence path). Agent ingest (`agent:researcher`) does not update the badge. Stale = no such run, or last run older than 3 days.
+- Topic filter buttons — client-side `inferTopicFromTitle()`; not persisted
+- Signal list — recency heat bar (`?heat=1`, not `relevance_score`), topic tag, publisher, Brainstorm deep-link (`/brainstorm?signalId=`), Promote to Lead (`POST /api/leads/from-signal`)
 
 **Removed from UI:** RSS URL paste input, manual topic injection form. `POST /api/signals/create` remains available as a developer tool but is not surfaced in the primary UI.
+
+**Coexisting cadence ingest:** `/research` **Run all directives** / **Run daily** / **Run weekly** still ingest via `RSS_FEED_MAP` + `research_directives` (`lib/research/runCadenceIngest.ts`). The Writer Agent accepts both directed (`directive_id` set) and undirected (publisher-grouped) signals.
 
 ---
 
@@ -381,12 +385,16 @@ The Signals page is organized into two tabs:
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/research-intent` | GET | Fetch workspace research intent profile |
-| `/api/research-intent` | PUT | Upsert workspace research intent profile |
+| `/api/research-intent` | GET | Fetch workspace research intent profile (empty arrays if no row) |
+| `/api/research-intent` | PUT | Upsert workspace research intent profile (`onConflict: workspace_id`) |
 | `/api/research-sources/list` | GET | List sources; optional `?status=proposed\|approved\|rejected` |
-| `/api/research-sources/create` | POST | Add a source (user-added, auto-approved, `trust_score=1.0`) |
-| `/api/research-sources/[id]/approve` | POST | Approve a proposed source |
+| `/api/research-sources/create` | POST | Add a source (user-added, auto-approved, `trust_score=1.0`); **409** on duplicate feed URL |
+| `/api/research-sources/[id]/approve` | POST | Approve a proposed source (does not change `trust_score`) |
 | `/api/research-sources/[id]/reject` | POST | Reject a proposed source |
+| `/api/signals/list` | GET | List signals; `?heat=1` adds recency-derived `heat` |
+| `/api/leads/from-signal` | POST | Promote a feed row to `editorial_leads` (`pending_review`); requires a brand profile |
+| `/api/pipeline/run` | POST | Researcher stage runs `ingest_approved_sources` |
+| `/api/research/run-all` | POST | Cadence ingest for daily + weekly directives via `RSS_FEED_MAP` |
 
 ---
 
@@ -396,17 +404,19 @@ The Signals page is organized into two tabs:
 - `research_intent` table + GET/PUT API
 - `research_sources` table + CRUD API
 - Signals page redesigned: Research Setup + Signal Feed tabs
-- Researcher Agent reads from `research_sources` (status=approved) instead of hardcoded `RSS_FEED_MAP`
+- Proposed Sources queue UI (Approve / Reject) — empty until Phase 2 inserts rows
+- Researcher Agent reads from `research_sources` (status=approved) for the agent ingest path
+- Cadence ingest via `RSS_FEED_MAP` remains on `/research` and Brainstorm `trigger_signal_ingest`
 
 **Phase 2 — Autonomous Discovery**
 - `discover_sources()` tool on Researcher Agent (web search → proposed sources)
 - Weekly discovery schedule independent of daily ingest
-- Proposed Sources queue in Research Setup tab
+- Researcher reads `research_intent` to drive discovery queries
 
 **Phase 3 — Signal Scoring**
 - `score_signal_relevance()` tool scoring signals against Research Intent profile
-- `relevance_score` surfaced in Signal Feed UI
-- Writer Agent orders signals by `relevance_score` DESC
+- `relevance_score` surfaced in Signal Feed UI (today the heat bar is recency-only)
+- Writer Agent orders signals by `relevance_score` DESC (today it orders by `captured_at`)
 
 ---
 
@@ -1324,7 +1334,7 @@ Stretch:
 | **Pluggable Integration Framework** | **Implemented** | §3.18 — `lib/integrations/`; Beehiiv (per-workspace OAuth: DCR+PKCE, pgsodium-encrypted tokens, auto-refresh) + Supergrow both live via MCP with REST fallback + per-plugin normalization; ctx-threaded `callTool`; `/integrations/analytics` renders Beehiiv + Supergrow + Subscriber Health + a conversational Ask panel; `/integrations/[platform]` |
 | **Subscriber Health Pipeline** | **Implemented (PR #110)** | §3.17 — weekly cron `/api/pipelines/health-report`; now resolves the **per-workspace Beehiiv OAuth token** (session-less, refresh + graceful fallback to env creds); KPI history in `subscriber_health_history`; "Run now" wired to OAuth |
 | **Newsroom Home & Cohesion Loop (P1)** | **Planned (next)** | §3.19 — full-loop status home, cross-surface handoffs (signals→brainstorm, brainstorm→issues deep-link, issues→analytics, analytics→brainstorm), post-publish metrics onto issues, `get_top_performing_themes` brainstormer tool, nav/IA cleanup; build checklist `docs/p1-newsroom-cohesion-build.md` |
-| **Source Discovery (Phase 2D-P2)** | **Roadmap** | §3.3 Phase 2 — `discover_sources()` Researcher Agent tool; proposed sources queue UI; see agent plan Phase 2 |
+| **Source Discovery (Phase 2D-P2)** | **Partial** | §3.3 — Proposed Sources Approve/Reject UI shipped; `discover_sources()` tool, weekly schedule, and intent-driven population remain roadmap (agent plan Phase 2) |
 | **Signal Scoring (Phase 2D-P3)** | **Roadmap** | §3.3 Phase 3 — `score_signal_relevance()` tool; `relevance_score` column; Writer Agent ordering; see agent plan Phase 3 |
 | **LinkedIn Draft Engine** | **Roadmap** | §3.8 Phase 3 — generate/regenerate/publish endpoints; Issues LinkedIn tab; Leads channel selector; see agent plan Phase 5 |
 | **Blog / Longform** | **Roadmap** | §3.13 M2 — `BlogDraftObject`; blog-draft API; Markdown/HTML export; see agent plan Phase 6 |
@@ -1426,14 +1436,16 @@ Full spec in §3.3.
 **Phase 1 — Foundation (shipped)**
 - ✅ `research_intent` table + `GET`/`PUT /api/research-intent`
 - ✅ `research_sources` table + `/api/research-sources/list|create|[id]/approve|[id]/reject`
-- ✅ Signals page: Research Setup tab (intent form + sources) + Signal Feed tab (read-only)
-- ✅ Researcher Agent reads from `research_sources` (status=approved) — hardcoded `RSS_FEED_MAP` removed
-- ✅ `last_ingested_at` updated on `research_sources` after each ingest run
+- ✅ Signals page: Research Setup tab (intent form + sources + seed directives) + Signal Feed tab (read-only)
+- ✅ Proposed Sources queue UI (Approve / Reject); no production writer of `status=proposed` yet
+- ✅ Researcher Agent ingests `research_sources` (`status=approved`) via `ingest_approved_sources`
+- ✅ `last_ingested_at` updated on `research_sources` after each **agent** ingest run
+- ⚠️ Cadence ingest (`RSS_FEED_MAP` + `runCadenceIngest`) still exists on `/research` and Brainstorm `trigger_signal_ingest`; Signal Feed last-ingest badge reads `directive_ingest` runs only
 
 **Phase 2 — Autonomous Discovery (agent plan Phase 2)**
 - [ ] `discover_sources()` tool on Researcher Agent (web search → proposed sources)
 - [ ] Weekly discovery schedule (separate from daily ingest)
-- [ ] Proposed Sources queue in Research Setup UI
+- [ ] Researcher reads `research_intent` when proposing sources
 
 **Phase 3 — Signal Scoring (agent plan Phase 3)**
 - [ ] `score_signal_relevance()` tool on Researcher Agent

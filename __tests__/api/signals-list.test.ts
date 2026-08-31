@@ -60,4 +60,31 @@ describe("GET /api/signals/list", () => {
 
     expect(json.signals).toEqual([]);
   });
+
+  it("omits heat unless heat=1 or includeHeat=true", async () => {
+    mockSupabase._setResult("signals", {
+      data: [{ title: "Now", publisher: "Pub", url: "https://a.com", published_at: null, captured_at: "2026-01-01" }],
+      error: null,
+    });
+
+    const req = makeRequest("http://localhost:3000/api/signals/list");
+    const json = await (await GET(req)).json();
+
+    expect(json.signals[0].heat).toBeUndefined();
+  });
+
+  it("adds recency heat when heat=1", async () => {
+    const captured_at = new Date().toISOString();
+    mockSupabase._setResult("signals", {
+      data: [{ title: "Now", publisher: "Pub", url: "https://a.com", published_at: null, captured_at }],
+      error: null,
+    });
+
+    const req = makeRequest("http://localhost:3000/api/signals/list?heat=1");
+    const json = await (await GET(req)).json();
+
+    expect(json.signals[0].heat).toBeGreaterThanOrEqual(12);
+    expect(json.signals[0].heat).toBeLessThanOrEqual(100);
+    expect(json.signals[0].heat).toBeGreaterThan(90);
+  });
 });

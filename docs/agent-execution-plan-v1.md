@@ -381,6 +381,8 @@ In Railway dashboard → Service → Settings → Cron Jobs, add:
 **Branch:** `claude/source-discovery`  
 **Prerequisite:** Phase 2D-P1 shipped (✅ already done — `research_sources` table exists)  
 
+**Shipped vs remaining (as of 2026-08):** The Research Setup **Proposed Sources** queue (Approve / Reject via existing `/api/research-sources/[id]/approve|reject` routes) is already in `app/signals/ResearchSetupTab.tsx`. It only renders when `status=proposed` rows exist. Remaining work is the agent that **creates** those rows, plus the Discover Sources button / `POST /api/pipeline/discover-sources` rate-limited endpoint. Do not rebuild the queue UI.
+
 ### Objective
 
 Add `discover_sources()` tool to the Researcher Agent. When called, the agent uses web search to find RSS feeds relevant to the workspace Research Intent profile (`topic_focus`, `watch_entities`, `keywords`) and inserts results as `research_sources` rows with `status=proposed`, `proposed_by=agent`, `trust_score=0.7`. Runs on a weekly schedule independent of the daily ingest cycle. Proposed sources appear in the Research Setup UI for the user to Approve or Reject.
@@ -443,16 +445,16 @@ Add `discover_sources` tool definition alongside existing tools:
 }
 ```
 
-#### `app/signals/page.tsx` — Proposed Sources queue
+#### `app/signals/ResearchSetupTab.tsx` — Proposed Sources queue
 
-In the Research Setup tab, add a "Proposed Sources" section below the Add Source form. This section:
-- Fetches `GET /api/research-sources/list?status=proposed` on mount
-- Renders one card per proposed source: name, feed URL, site URL, rationale (if stored)
-- Approve button → `POST /api/research-sources/{id}/approve`
-- Reject button → `POST /api/research-sources/{id}/reject`
-- Only visible when `proposed.length > 0`
-- On empty proposed list: "No proposed sources. Run source discovery to find new feeds."
-- Button: "Discover Sources" → `POST /api/pipeline/discover-sources` → refresh proposed list
+**Shipped.** `SourcesList` already:
+- Fetches `GET /api/research-sources/list` on mount (client-filters `proposed` vs `approved`)
+- Renders one card per proposed source: name, feed URL, “Proposed by agent” tag
+- Approve → `POST /api/research-sources/{id}/approve`
+- Reject → `POST /api/research-sources/{id}/reject`
+- Section is hidden when `proposed.length === 0`
+
+**Still to add in this file:** empty-state copy (“Run source discovery…”), a **Discover Sources** button calling `POST /api/pipeline/discover-sources`, and optional rationale text if/when that column exists.
 
 ### Tests
 
@@ -474,8 +476,8 @@ __tests__/api/discover-sources-route.test.ts
 ### Acceptance Criteria
 
 - [ ] `POST /api/pipeline/discover-sources` returns `{ ok: true, proposed: N }`
-- [ ] Proposed sources appear in Research Setup tab
-- [ ] Approve/Reject buttons work (existing routes, just new UI surface)
+- [x] Proposed sources appear in Research Setup tab *(UI shipped; population still pending)*
+- [x] Approve/Reject buttons work (existing routes + UI)
 - [ ] Runs are logged to `runs` table with `run_type = "agent:researcher:discover"`
 - [ ] Rate limit prevents re-running within 24 hours
 - [ ] All tests pass
