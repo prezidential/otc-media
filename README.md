@@ -111,7 +111,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000). `/` redirects to **`/dashboard`** (the newsroom home). See [Newsroom Home (Dashboard) Runbook](#newsroom-home-dashboard-runbook).
 
 ### First-Time Setup
 
@@ -240,26 +240,32 @@ the workspace explicitly:
 
 ```
 app/
-├── components/          # Sidebar, page header
-├── page.tsx             # Signals (homepage)
+├── page.tsx             # Redirects to /dashboard
+├── dashboard/page.tsx   # Newsroom home (pipeline rail, newsroom cards, ingest, nudge, signals)
+├── components/          # StudioAppShell, command palette, sidebar
+├── signals/             # Signal feed + research setup tabs
 ├── research/page.tsx    # Research console
 ├── leads/page.tsx       # Editorial leads
-├── issues/page.tsx      # Issue draft generation
+├── issues/page.tsx      # Issue draft generation + editing
 ├── outlines/page.tsx    # Content outlines CRUD UI
 └── api/
+    ├── dashboard/stats/     # Newsroom + pipeline rollups (home + sidebar)
+    ├── search/              # Command palette (⌘K)
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
-    ├── leads/               # Generate, list, approve
+    ├── leads/               # Generate, list, approve, from-signal
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
     ├── revenue/             # List, seed, recommend
     ├── publish/             # Status, HTML export, Beehiiv draft push
-    ├── signals/list/        # List captured signals
+    ├── signals/list/        # List captured signals (?heat=1 for recency bars)
     ├── pipeline/run/        # Autonomous Researcher → Writer → Editor run
     └── runs/list/           # List ingest/generation runs
 
 lib/
+├── dashboard/           # Stats payload, nudge, health rollup, topic filters
+├── studio/nav.ts        # Sidebar sections (loop spine + Pipeline + Setup)
 ├── draft/               # DraftObject type, renderer, lint, parser
 ├── content-outlines/    # Outline specs, validation, resolution, access checks
 ├── leads/               # Zod schema for lead validation
@@ -269,12 +275,104 @@ lib/
 └── utils.ts             # cn() utility
 
 __tests__/               # Vitest tests (unit + API route)
-docs/                    # System specification (v2.3)
+docs/                    # Canonical system spec + runbooks
 ```
 
 ## Architecture
 
-See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap. Studio chrome and the newsroom home contract live in **§3.15**; the cohesion loop is **§3.19**.
+
+## Newsroom Home (Dashboard) Runbook
+
+`/dashboard` is the creator's operational home: pipeline counts, the full-loop newsroom rollup, a one-action nudge, one-off RSS ingest, and a heat-ranked signal inbox. The Studio shell (`StudioAppShell`) wraps every primary route and reuses the same stats payload for sidebar badges and the "Today" strip.
+
+Nav (`lib/studio/nav.ts`) is grouped for the newsroom loop:
+
+| Section | Destinations |
+|---------|----------------|
+| **Loop spine** (unlabeled) | Dashboard, Brainstorm, Issues, Analytics |
+| **Pipeline** | Signals, Leads, Research, Outlines, Pipeline (`/runs`) |
+| **Setup** | Brand, ACE, Integrations |
+
+### Endpoints the home uses
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/dashboard/stats` | `GET` | Pipeline counts, newsroom rollup, nudge, last ingest, sidebar lines |
+| `/api/signals/list?limit=40&heat=1` | `GET` | Latest signals plus recency `heat` (0–100) |
+| `/api/ingest/rss` | `POST` | One-off RSS ingest from the Ingest feed card |
+| `/api/signals/create` | `POST` | Manual signal (title required) |
+| `/api/leads/from-signal` | `POST` | Promote a signal row to a `pending_review` lead |
+| `/api/analytics/sync-posts` | `POST` | Fire-and-forget refresh of the workspace `post_performance` cache |
+| `/api/search?q=` | `GET` | Command palette (⌘K / Ctrl+K): nav + signals + leads + drafts + outlines |
+
+All of these go through `requireWorkspace()`. Unauthenticated callers get **401** `{ error: "Not authenticated" }`. Authenticated users with no memberships (or a stale `cs_active_workspace` cookie) get **403** `{ error: "No workspaces" }`.
+
+### Stats payload
+
+```bash
+curl -s http://localhost:3000/api/dashboard/stats
+```
+
+Helpers live in `lib/dashboard/stats.ts`. Shape (`DashboardStatsPayload`):
+
+| Field | Source / rule |
+|-------|----------------|
+| `pipeline.research` | Count of `signals` (sublabel `"signals"`) |
+| `pipeline.leads` | `editorial_leads` with `status = pending_review` |
+| `pipeline.issues` | `issue_drafts` with `status` null, `draft`, or `reviewed`. If that filter errors (older schema without `status`), falls back to all drafts |
+| `pipeline.outlines` | Active `content_outlines` (`disabled_at` is null). Query error → `0` |
+| `newsroom.brainstorms.active` | `brainstorm_sessions` updated in the last **14 days** |
+| `newsroom.brainstorms.latest` | Most recently updated session (`id`, `title`, `updatedAt`), or `null` |
+| `newsroom.drafts` | Counts by `draft` (null/`draft`), `reviewed`, `published` |
+| `newsroom.lastPublished` | Newest `status = published` draft; title from `content_json.title`, else `"Untitled issue"` |
+| `newsroom.health` | Rollup of `subscriber_health_history` (`green` / `yellow` / `red` counts + worst metric). `null` if the table is empty or the query fails (weekly health cron has not run) |
+| `needsYou` | First match: pending leads → in-draft issues → stale research → any active outlines → `null` |
+| `nudge` | Server-computed copy + primary CTA (`/leads`, `/issues`, or `/research`) |
+| `lastIngest` | Latest **completed** `runs` row with `run_type = directive_ingest` (not the dashboard's one-off `/api/ingest/rss`) |
+| `sidebar` | Human lines plus numeric mirrors (`signalsIngested24h`, `leadsToApprove`, `issuesDrafting`) for nav badges |
+
+**Stale research:** `lastIngest.isStale` is `true` when there is no completed `directive_ingest` run, or the last one is older than **3 days**. The Ingest feed card still shows the last directive-ingest timestamp; running a one-off RSS ingest from the dashboard does **not** clear this flag.
+
+**Nudge vs `needsYou`:** `pickNeedsYou` can return `"outlines"` when everything else is clear and at least one outline exists, but `buildNudge` has no outlines-specific copy — it falls through to the "caught up" message with CTA `/research`. Snooze is **client-only**: `localStorage` key `studio_nudge_snooze_until`, 24 hours, per browser.
+
+### Ingest, manual signals, and promote
+
+Dashboard Ingest feed posts `{ feedUrl, limit: 10 }` (API default `limit` is 15). Success: `{ feedUrl, publisher, inserted, skipped }`. Missing `feedUrl` → **400**.
+
+Manual signal requires `title`. Optional `url`, `publisher` (default `"Manual Entry"`), `notes`. Dedupe hash is `manual|{title}|{publisher}`. Success: `{ ok: true, signal }`.
+
+Promote → lead (`POST /api/leads/from-signal`) requires a workspace `brand_profiles` row. It inserts `editorial_leads` with `status: pending_review`, `confidence_score: 0.5`, `angle` = signal title (truncated to 500). Missing brand profile → **400** `"No brand profile for workspace"`. Missing title → **400**.
+
+**Brainstorm handoff:** each signal row with an `id` links to `/brainstorm?signalId=<id>`. Topic chips on the list (`All`, `AI`, `Identity`, …) are client-side keyword buckets from `lib/dashboard/inferTopic.ts` — they are not persisted and are not the same as `content_lanes`.
+
+**Heat:** `GET /api/signals/list?heat=1` derives `heat` from `captured_at` recency (`heatFromCapturedAt`), not `relevance_score`. Floor 12, ceiling 100.
+
+**Background cache:** on dashboard mount the page fires `POST /api/analytics/sync-posts` and ignores failures. That keeps the Brainstormer `get_top_performing_themes` cache warm; it does not write `issue_drafts.performance_json` (that column is not used — cache is workspace-level `post_performance`).
+
+### Command palette
+
+⌘K / Ctrl+K calls `GET /api/search?q=`. Empty `q` returns empty arrays (still **200**). Matches are `ilike` on signal title/publisher, lead `angle`, draft `content` text, and outline `name` (active outlines only). Query fragments are stripped of `% _ \` and capped at 80 characters.
+
+### Operational notes
+
+- Sidebar badges attach only to Signals (24h ingest count), Leads (pending review), and Issues (null/`draft`/`reviewed`). The ACE nav item never shows a count.
+- Studio shell fetches `/api/dashboard/stats` and `/api/me` once on mount — switching workspaces requires a reload for badges to refresh.
+- Newsroom "Last published" and "Drafts" cards both deep-link to `/issues` (not a specific draft id). Subscriber health links to `/integrations/analytics`.
+- Apply `lib/supabase/schema-brainstorm.sql` and the subscriber-health schema before expecting those newsroom cards to populate; missing tables surface as zeros / `health: null`, not a 500.
+
+### Troubleshooting
+
+- `401 Not authenticated`: no Supabase session cookie. Sign in, then retry.
+- `403 No workspaces`: user has zero `workspace_members` rows (or the active-workspace cookie points at a workspace they left). Complete `/onboarding` or switch workspace.
+- Dashboard greeting stuck on "Loading…" / stats error: `/api/dashboard/stats` failed; check the JSON `error` and that wave-1 RLS + `user_in_workspace()` are applied.
+- Last ingest always stale after using Ingest feed: expected — staleness reads `directive_ingest` runs from Research → Run All Directives, not `/api/ingest/rss`.
+- Promote shows "Couldn’t promote": usually no brand profile. Seed via `POST /api/brand-profiles/seed` or the onboarding wizard.
+- `400 feedUrl required` / `400 title is required`: ingest or manual-signal body omitted the required field.
+- Subscriber health card shows "No health data yet": `subscriber_health_history` is empty for this workspace (opt in + weekly cron), or the select failed.
+- Sync-posts returns `{ ok: false, skipped: "Beehiiv integration not enabled" }`: Beehiiv plugin not configured; dashboard still loads. Themes-that-resonated stay empty until OAuth + a successful sync.
+- Command palette finds nothing for a known draft: search matches `issue_drafts.content` (plain text), not `content_json.title`.
+- Topic filter empty: client-side title keywords only; a cybersecurity headline may land in `General` or `Identity`, not a directive name.
 
 ## Content Outlines Runbook
 
