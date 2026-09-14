@@ -4,9 +4,9 @@
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Last updated: 2026-06-08
+Last updated: 2026-09-14
 
-> **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
+> **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md` (sign-in OAuth), `docs/linkedin-publishing-oauth-runbook.md` (M1 LinkedIn publishing connect), and the design handoffs under `docs/design_handoff_*`.
 
 **Recently landed (2026-06):** Analytics LIVE via MCP — Beehiiv + Supergrow (§3.18); **Publisher Agent shipped** (§3.7 — completes Researcher→Writer→Editor→Publisher; logs `agent:publisher` runs to `/runs`); Subscriber Health weekly cron now uses **per-workspace Beehiiv OAuth** (§3.17). **Next: §3.19 Newsroom Home & Cohesion Loop (P1)** — make the four creator surfaces (brainstorm, draft, analytics, push) one cohesive newsroom.
 
@@ -430,8 +430,38 @@ _Unchanged from v2.0. Will be wrapped by Publisher Agent._
 
 ---
 
-## 3.8 LinkedIn Draft Engine
-_Unchanged from v2.0._
+## 3.8 LinkedIn Draft Engine **[REVISED — foundation shipped, engine not started]**
+
+The LinkedIn module is two layers. **Foundation (M1/M2, shipped):** a publishing OAuth connection that stores per-(workspace, user, LinkedIn account) tokens. **Engine (Phase 3, not started):** generate / regenerate / list / publish of `linkedin_drafts`, an Issues LinkedIn tab, and a Leads channel selector. Operator steps: `docs/linkedin-publishing-oauth-runbook.md`. Sign-in LinkedIn (`linkedin_oidc`) is a different app + callback; see §3.16 and `docs/m2-oauth-runbook.md`.
+
+### Intent
+
+Connect once so a later Publisher/Draft Engine can call LinkedIn as the member (`w_member_social`) without a second consent. Tokens are personal credentials, not a workspace-shared API key.
+
+### What is implemented
+
+| Piece | Location | Behavior |
+|-------|----------|----------|
+| Start | `GET /api/auth/linkedin/start` | **503** if any of `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` / `LINKEDIN_REDIRECT_URI` is unset (checked **before** auth). Else `requireWorkspace()`, set httpOnly `linkedin_oauth_state` (`path=/api/auth/linkedin`, 10 min, `SameSite=lax`), redirect to LinkedIn authorize. Scopes: `openid profile email w_member_social`. |
+| Callback | `GET /api/auth/linkedin/callback` | Verify `state` cookie; exchange code; `GET /v2/userinfo`; `upsertLinkedInConnection`. Success redirect: `/dashboard?linkedin=connected`. Failures: `/dashboard?linkedin=error&reason=…` **except** a missing session, which returns JSON **401/403** (`/api/auth` is a public middleware prefix). |
+| Persistence | `lib/linkedin/store.ts` | Writes go through `upsert_linkedin_connection` (encrypts, pins `auth.uid()`). Reads go through `linkedin_connections_decrypted`. Unique key: `(workspace_id, user_id, provider_user_id)` where `provider_user_id` is OIDC `sub`. |
+| Schema | `schema-linkedin-crypto.sql` then `schema-linkedin.sql` | `linkedin_connections` (member SELECT, self-only write) + `linkedin_drafts` (member read/write, unused). Encryption at rest: §3.16. |
+| Types | `lib/linkedin/types.ts` | `LinkedInDraftObject` is a placeholder (`body?`, `working_title?`, `meta?`) until Phase 3. |
+
+OAuth `state` is a random UUID. It does **not** encode `workspace_id`. The row is bound to whatever workspace `requireWorkspace()` resolves at callback (the `cs_active_workspace` cookie, else the user's oldest membership).
+
+### What is not implemented
+
+- **No first-class UI.** `/integrations` lists Beehiiv + Supergrow only. `/onboarding` has no LinkedIn step. `/dashboard` ignores `?linkedin=`. Operators connect by visiting `/api/auth/linkedin/start` while signed in.
+- **No status, disconnect, or token refresh.** `getLinkedInConnection()` is unused by routes. `refresh_token` is stored when LinkedIn returns one; no refresh helper runs (unlike Beehiiv MCP OAuth).
+- **No draft engine.** There are no `/api/linkedin/generate|regenerate|list|publish` routes. The Issues **LinkedIn** social-snippet panel is `POST /api/content-products/social-snippets` (`linkedin_teaser` copy-paste), not this connection. LLM role `linkedin` / `LLM_LINKEDIN` is reserved for Phase 3.
+- **Supergrow `get_linkedin_analytics`** on `/integrations/analytics` does not read `linkedin_connections`.
+
+### Constraints
+
+- Connections are **per user**. Workspace members may see that a connection exists; they cannot overwrite another member's tokens (`linkedin_connections_self_write`).
+- Re-run `/start` to rotate tokens. There is no revoke endpoint.
+- Phase 3 posting must use the decrypted view / store helpers — never `linkedin_connections.access_token` (ciphertext `bytea`).
 
 ---
 
@@ -456,13 +486,13 @@ M1 replaces `app/onboarding/page.tsx` with a **4-step wizard** that drives the s
 | **3. Editorial setup** | One-click seed: research directives, content outlines, revenue items, content lanes (parallel). | `POST /api/research/seed-directives`, `POST /api/content-outlines/seed`, `POST /api/revenue/seed`, `POST /api/content-lanes/seed` |
 | **4. Done** | Marks `workspaces.onboarding_completed_at`, then deep-links into `/dashboard`. | — |
 
-An **optional 5th step** ("Connect LinkedIn — later if you want") is added by the LinkedIn OAuth milestone and links to **`GET /api/auth/linkedin/start`**; skipping it is fully supported.
+There is **no 5th LinkedIn-connect step** in the shipped wizard. Publishing OAuth is a separate visit to **`GET /api/auth/linkedin/start`** after the user already has a workspace (§3.8).
 
 The wizard does not introduce any new API surface — it composes the existing seed endpoints behind a guided UX. Middleware already lets `/onboarding` through without onboarding-completion gates, so users can return mid-flow.
 
 ### LinkedIn connection
 
-OAuth surface (`/api/auth/linkedin/start`, `/api/auth/linkedin/callback`) and the `linkedin_connections` + `linkedin_drafts` tables are specified in §8 Phase 2A M1 and land alongside the wizard's optional 5th step. The auth/tenancy contract for those routes follows §3.16.
+OAuth surface (`/api/auth/linkedin/start`, `/api/auth/linkedin/callback`) and the `linkedin_connections` + `linkedin_drafts` tables are specified in §8 Phase 2A M1 and implemented as in §3.8. They are **not** composed into `/onboarding`. The auth/tenancy contract for those routes follows §3.16. Operator runbook: `docs/linkedin-publishing-oauth-runbook.md`.
 
 ---
 
@@ -1286,7 +1316,7 @@ Stretch:
 | **Pipeline Orchestrator** | **Partial** | `POST /api/pipeline/run` — staged `researcher` → `writer` → `editor`, optional `stages`; manual from Research UI; no scheduled/cron runner yet |
 | **Agent run state** | **Implemented** | Persisted to **`runs`** (`run_type` like `agent:…`); dedicated **`agent_runs`** table not used (Phase 1 doc originally assumed otherwise) |
 | Brand profile — generic schema | Not started | Replaces hardcoded seed |
-| Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done), optional 5th LinkedIn-connect step (§3.9) |
+| Creator onboarding flow | **Implemented (M1)** | 4-step wizard at **`app/onboarding/page.tsx`** (workspace → brand voice → editorial setup → done). No LinkedIn step in the wizard — publishing OAuth is a separate integration (§3.8 / §3.9) |
 | **Supabase Auth + sign-in/sign-up/sign-out** | **Implemented** | `app/sign-in`, `app/sign-up`, `app/api/auth` — email + password (M0); Google + LinkedIn-as-auth (M2 — §3.16) |
 | **OAuth sign-in providers (Google + LinkedIn-as-auth)** | **Implemented (M2)** | "Continue with …" buttons on `/sign-in` + `/sign-up`; `lib/auth/oauth.ts`; providers configured in Supabase dashboard; runbook at `docs/m2-oauth-runbook.md` (§3.16) |
 | **Workspace tenancy (workspaces, workspace_members, workspace_invites)** | **Implemented** | `lib/supabase/schema-tenancy.sql` — `(workspace_id, user_id, role)` join with `owner` / `editor` / `viewer` (§3.0) |
@@ -1295,7 +1325,7 @@ Stretch:
 | **Auth middleware (session refresh + onboarding gate)** | **Implemented** | `middleware.ts` — refreshes Supabase session, redirects unauth to `/sign-in`, members-of-zero-workspaces to `/onboarding` |
 | **Workspace switcher + sidebar identity** | **Implemented** | `app/api/me/route.ts` returns current user + membership list; Studio sidebar switcher writes `cs_active_workspace` cookie via `PATCH /api/workspaces/active` |
 | **Workspace invites (email delivery)** | **Implemented (M1)** | `POST /api/workspaces/[id]/members` triggers Resend via `lib/email/resend.ts`; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only) |
-| **LinkedIn OAuth connection (publishing)** | **Implemented (M1)** | `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` defines `linkedin_connections` + `linkedin_drafts` with RLS via `user_in_workspace` |
+| **LinkedIn OAuth connection (publishing)** | **Implemented (M1)** | `GET /api/auth/linkedin/start` + `/callback`; tables + RLS in `schema-linkedin.sql`. **No studio Connect UI** — visit `/start` while signed in. Operator runbook: `docs/linkedin-publishing-oauth-runbook.md`. Generate/publish is Phase 3 (§3.8) |
 | **LinkedIn token encryption at rest** | **Implemented (M2)** | pgsodium AEAD-DET via `lib/supabase/schema-linkedin-crypto.sql`; `linkedin_connections_decrypted` view + `upsert_linkedin_connection` RPC; wrapped by `lib/linkedin/store.ts` (§3.16) |
 | **Per-workspace billing surface** | Deferred | Stripe (or equivalent) plan tiers — pushed out of Phase 2A M2 (§8) |
 | Post analysis + content type derivation | Not started | New |
@@ -1390,9 +1420,9 @@ Phase 2A is sequenced in three milestones — **M0**, **M1**, **M2** — all shi
 
 #### M1 — RLS wave-2, onboarding wizard, invites, LinkedIn **(shipped, PR #92)**
 - ✅ **RLS wave-2 migration** — 42 user-facing routes converted from `supabaseAdmin()` to `supabaseUser()` + `requireWorkspace()`; `lib/supabase/schema-rls-wave2.sql` covers `brainstorm_sessions`, `brainstorm_messages`, `content_lanes`, `notification_approvals`, `ace_runs`, `podcast_episodes` (§3.16).
-- ✅ **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done) plus optional 5th LinkedIn-connect step (§3.9).
+- ✅ **Onboarding wizard** — 4-step flow at `app/onboarding/page.tsx` (workspace → brand voice → editorial setup → done). LinkedIn publishing OAuth is a separate `/api/auth/linkedin/*` flow, not a wizard step (§3.8 / §3.9).
 - ✅ **Invite SMTP** — Resend wired into `POST /api/workspaces/[id]/members`; `lib/email/resend.ts`; `RESEND_API_KEY` + `EMAIL_FROM` documented; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend`.
-- ✅ **LinkedIn OAuth (publishing) + tables** — `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` with `linkedin_connections` and `linkedin_drafts` (both RLS-enabled via `user_in_workspace`). Token encryption at rest was flagged as an M1 carryover and shipped in M2.
+- ✅ **LinkedIn OAuth (publishing) + tables** — `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` with `linkedin_connections` and `linkedin_drafts` (both RLS-enabled via `user_in_workspace`). No studio Connect UI; operator runbook `docs/linkedin-publishing-oauth-runbook.md`. Token encryption at rest was flagged as an M1 carryover and shipped in M2.
 - ✅ **Generic `CreatorBrandProfile` template flow** — templates extracted to `lib/brand-profile/templates/` (`idj.ts` + `blank.ts`); hardcoded `DEFAULT_IDJ_PROFILE` deprecated; wizard step 2 selects template by name.
 
 #### M2 — OAuth sign-in, env cleanup, token encryption **(shipped)**
