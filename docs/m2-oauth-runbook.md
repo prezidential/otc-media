@@ -8,6 +8,8 @@ nothing is required in `.env.local`.
 > for the M1 **publishing** OAuth flow (`/api/auth/linkedin/*`), which writes
 > `linkedin_connections` rows for posting on a user's behalf. That is a separate
 > integration from sign-in and uses a different LinkedIn app + client secret.
+> Operator runbook (connect URL, callback reasons, shipped-vs-not):
+> [`docs/linkedin-publishing-oauth-runbook.md`](linkedin-publishing-oauth-runbook.md).
 
 ## Common steps
 

@@ -99,7 +99,7 @@ Notes:
 - **PODCAST_AUDIO_STORAGE_BUCKET:** create the bucket in Supabase Storage (same name as this value). With a **saved** issue draft, TTS download persists script + MP3 (`podcast_episodes` + `audio_storage_*`). In-memory-only drafts skip persistence (no `draftId`).
 - `OPENAI_API_KEY` is required only when `LLM_PROVIDER=openai` or any `LLM_<ROLE>` uses `openai:<model>`.
 - Per-role LLM variables are optional overrides; unset roles fall back to `LLM_PROVIDER` + `LLM_MODEL`.
-- **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin-crypto.sql` first (M2: bootstraps the pgsodium key + `linkedin_encrypt`/`linkedin_decrypt` helpers), then `lib/supabase/schema-linkedin.sql` (creates `linkedin_connections` + `linkedin_drafts`, the `linkedin_connections_decrypted` view, and the `upsert_linkedin_connection` RPC) in the Supabase SQL editor before connecting an account.
+- **LinkedIn OAuth is optional in M1** — without `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, and `LINKEDIN_REDIRECT_URI`, the `/api/auth/linkedin/*` endpoints return 503. Apply `lib/supabase/schema-linkedin-crypto.sql` first (M2: bootstraps the pgsodium key + `linkedin_encrypt`/`linkedin_decrypt` helpers), then `lib/supabase/schema-linkedin.sql` (creates `linkedin_connections` + `linkedin_drafts`, the `linkedin_connections_decrypted` view, and the `upsert_linkedin_connection` RPC) in the Supabase SQL editor before connecting an account. There is **no Connect button** in `/integrations` or `/onboarding`; visit `GET /api/auth/linkedin/start` while signed in. Full operator runbook (callback reasons, workspace binding, what is not shipped): [`docs/linkedin-publishing-oauth-runbook.md`](docs/linkedin-publishing-oauth-runbook.md).
 - **Beehiiv MCP OAuth** — the Beehiiv MCP server uses OAuth 2.1 (DCR + PKCE), so a static API key is rejected (401). Apply `lib/supabase/schema-beehiiv-crypto.sql` first (pgsodium key + `beehiiv_encrypt`/`beehiiv_decrypt`), then `lib/supabase/schema-beehiiv-oauth.sql` (creates `beehiiv_oauth_connections` + decrypted view + `upsert_beehiiv_connection` RPC + the `mcp_oauth_clients` DCR registry) in the Supabase SQL editor. Then set `BEEHIIV_MCP_SERVER_URL` + `BEEHIIV_PUBLICATION_ID` and click **Connect Beehiiv** on `/integrations/beehiiv` (or the Analytics dashboard) to authorize. Tokens are encrypted at rest and auto-refreshed.
 - **LinkedIn tokens are encrypted at rest (M2).** `access_token` and `refresh_token` in `linkedin_connections` are pgsodium AEAD-DET ciphertext (`bytea`); the `pgsodium` extension must be enabled in the Supabase project. App code only ever sees plaintext (via the `linkedin_connections_decrypted` view and the `upsert_linkedin_connection` RPC, wrapped by `lib/linkedin/store.ts`). Pre-M2 deploys auto-migrate on re-running `schema-linkedin.sql` — see the file header for ordering.
 - **OAuth sign-in providers (M2) are not configured in `.env.local`.** Google and LinkedIn-as-auth (`linkedin_oidc`) client IDs and secrets are stored in the Supabase dashboard under **Authentication → Providers**. See `docs/m2-oauth-runbook.md` for setup steps. These are separate from the M1 publishing-OAuth `LINKEDIN_*` env vars above.
@@ -454,6 +454,20 @@ Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, an
 - `400 Draft has no structured content`: draft exists but `content_json` is null.
 - `403 Beehiiv integration is not enabled`: Beehiiv env vars are missing or `BEEHIIV_ENABLED` is not `true`.
 - `500 Beehiiv API error: ...`: Beehiiv rejected the request or returned an upstream error.
+
+## LinkedIn Publishing OAuth Runbook
+
+Publishing OAuth (`GET /api/auth/linkedin/start` → callback) stores per-user tokens for a future LinkedIn Draft Engine. It is **not** "Continue with LinkedIn" sign-in (`docs/m2-oauth-runbook.md`) and is **not** Supergrow LinkedIn analytics.
+
+Full operator steps, callback `reason` values, and SQL order: [`docs/linkedin-publishing-oauth-runbook.md`](docs/linkedin-publishing-oauth-runbook.md). Spec §3.8.
+
+| Constraint | Behavior |
+|------------|----------|
+| Env | All of `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI` required or both routes return **503** (checked before auth) |
+| Connect UI | None on `/integrations` or `/onboarding`. Visit `/api/auth/linkedin/start` while signed in with an active workspace |
+| Workspace binding | OAuth `state` is a random cookie; the row uses `requireWorkspace()` at callback (`cs_active_workspace`) |
+| After connect | Redirect `/dashboard?linkedin=connected` (or `error&reason=`). Dashboard does not render those params |
+| Not shipped | Generate/publish APIs, token refresh, disconnect, connection-status UI. `linkedin_drafts` table exists but has no writers |
 
 ## License
 
