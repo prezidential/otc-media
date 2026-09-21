@@ -120,8 +120,8 @@ Open [http://localhost:3000](http://localhost:3000).
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
 4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
 5. **Ingest signals:** Go to Research → click "Run All Directives"
-6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
-7. **Approve leads:** Review and approve leads on the Leads page
+6. **Generate leads:** Go to Leads → select brand profile → click "Generate leads" (see [Editorial Leads Runbook](#editorial-leads-runbook))
+7. **Approve leads:** Review pending leads and Approve (or Pass). Issues generation requires at least one approved lead; the Editor Agent treats ≥3 as sufficient
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
 9. **Publish (optional):** Use "Export HTML" or enable Beehiiv and use "Push to Beehiiv"
 
@@ -243,13 +243,13 @@ app/
 ├── components/          # Sidebar, page header
 ├── page.tsx             # Signals (homepage)
 ├── research/page.tsx    # Research console
-├── leads/page.tsx       # Editorial leads
+├── leads/page.tsx       # Editorial leads (generate / approve / dismiss)
 ├── issues/page.tsx      # Issue draft generation
 ├── outlines/page.tsx    # Content outlines CRUD UI
 └── api/
     ├── ingest/rss/          # Single RSS feed ingest
     ├── research/            # Directives, run-directives, run-all
-    ├── leads/               # Generate, list, approve
+    ├── leads/               # Generate, list, approve, dismiss, from-signal
     ├── issues/              # Generate, latest, regenerate-section
     ├── content-outlines/    # List/create/seed; [id] get/patch/delete (soft-disable)
     ├── brand-profiles/      # List, seed
@@ -274,7 +274,141 @@ docs/                    # System specification (v2.3)
 
 ## Architecture
 
-See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap.
+See [`docs/cornerstone-system-spec.md`](docs/cornerstone-system-spec.md) for the current system specification including design principles, architecture details, guardrails, and roadmap. Leads pipeline details live in **§3.4**.
+
+## Editorial Leads Runbook
+
+Editorial leads are the human-gated angles between research signals and issue drafts. The `/leads` page is the review queue; approved rows are the only input `POST /api/issues/generate` will draft from.
+
+All `/api/leads/*` routes require an authenticated session and resolve the active workspace via `requireWorkspace()` (`lib/auth/session.ts`).
+
+### Intent
+
+- **Generate** structured angles from recent signals (LLM role `leads`).
+- **Review** with a human gate (`pending_review` → `approved` or `dismissed`).
+- **Consume** approved leads into an issue draft (status flips to `drafted`).
+
+There is no `channel` column and no LinkedIn-vs-newsletter routing on `editorial_leads` yet (still a Phase 2A cross-cutting item in the spec).
+
+### Status lifecycle
+
+```
+pending_review ─┬─► approved ─► drafted   (used by Issues generate)
+                └─► dismissed             (Pass / Dismiss all; no UI tab)
+```
+
+| Status | Who sets it | Meaning |
+|--------|-------------|---------|
+| `pending_review` | `POST /api/leads/generate`, Writer Agent, `POST /api/leads/from-signal` | Waiting in `/leads` Pending review |
+| `approved` | `POST /api/leads/approve` (UI Approve / Approve all) | Eligible for issue generation |
+| `drafted` | `POST /api/issues/generate` after a successful `issue_drafts` insert, for the curated `lead_ids` only | Shown on the Drafted tab as "Used in draft" |
+| `dismissed` | `POST /api/leads/dismiss` (UI Pass / Dismiss all) | Hidden from the three tabs; listable via `?status=dismissed` |
+
+Dismiss is a **reject path from pending**, not a step after drafted.
+
+### Two generation paths
+
+| Path | Entry | Signal pool | Dedup | Run audit |
+|------|-------|-------------|-------|-----------|
+| **Leads page / REST** | `POST /api/leads/generate` | Last `days` (default **14**) signals **with a `directive_id`**. Caps 12 signals per directive. **Ignores undirected signals** (`directive_id` null — the research-sources pipeline). | Exact angle match **or** substring overlap when the shorter angle is >20 chars, against the latest 100 `pending_review` + `approved` rows | Inserts `runs.run_type = lead_generation` |
+| **Writer Agent** | Pipeline stage `writer` (`lib/agents/writer.ts`) | Last **14 days**. `directive_groups` **and** `source_groups` (undirected / publisher). System prompt: skip a group with fewer than **3** signals; skip generation if **10+** already `pending_review` (prompt rules, not hard-coded gates). | Exact angle match only | Agent run on `runs` (`run_type` like `agent:writer`); does **not** write `lead_generation` |
+
+Both paths:
+
+- Call `callLLM("leads", …)` and validate with `LeadsOutputSchema` (`lib/leads/leadSchema.ts`): 1–6 leads (prompt asks for 2–4); each lead needs `angle` (≥10), `why_now` (≥10), `who_it_impacts` (≥5), `contrarian_take` (≥10), `confidence` 0–1, and ≥1 `sources` URL.
+- Drop a lead if **none** of its `sources` URLs match the signal URL set for that group.
+- Append surviving URLs onto `contrarian_take` as `\n\nSources:\n<url>\n…` (Issues later parses this block in `extractSourcesFromContrarianTake`).
+- Insert `status: pending_review`. They **never** auto-approve.
+
+**Pitfall:** a workspace that only ingests via approved `research_sources` (signals with `directive_id = null`) will get `leadsInserted: 0` from the Leads page button. Use the Writer Agent / `POST /api/pipeline/run` (or promote a signal — below).
+
+### Promote a single signal
+
+Dashboard home and Signal Feed call `POST /api/leads/from-signal` with `{ title, url?, publisher? }`.
+
+- Requires a workspace brand profile (first `brand_profiles` row; **not** the Leads page selector).
+- `title` is required; `angle` is `title` truncated to 500 chars.
+- Sets `why_now` to a fixed "Pulled forward…" string, `who_it_impacts` from `publisher` (default `"Signal inbox"`), `confidence_score: 0.5`.
+- Does **not** run the LLM, does **not** dedup, does **not** write a `runs` row.
+- Still inserts `pending_review` — it must be approved before Issues will use it.
+
+### API
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/leads/generate` | `POST` | LLM generate from directive-tied signals |
+| `/api/leads/list` | `GET` | List workspace leads, newest first |
+| `/api/leads/approve` | `POST` | Set `status=approved` |
+| `/api/leads/dismiss` | `POST` | Set `status=dismissed` |
+| `/api/leads/from-signal` | `POST` | Promote one signal into a pending lead |
+
+#### Generate
+
+```bash
+curl -s -X POST http://localhost:3000/api/leads/generate \
+  -H "Content-Type: application/json" \
+  -d '{"brandProfileId":"<brand_profile_id>","days":14}'
+```
+
+- `brandProfileId` **required** (400 if omitted; 404 if that id is missing for this workspace). The UI always sends the selected profile and omits `days` (so 14).
+- Brand JSON fields (`voice_rules_json`, formatting, forbidden patterns, CTA, emoji, narrative) are injected into the system prompt.
+- Success: `{ ok, directivesProcessed, leadsInserted, details: [{ directive, inserted, discarded, discardedNote? }] }`. A workspace with no directive-tied signals in the window returns `ok: true` with zeros — not an error.
+- Invalid LLM JSON / Zod failure: **422** `{ ok: false, error: "Invalid Claude output" }` and the `lead_generation` run is marked `failed`.
+
+#### List
+
+```bash
+curl -s "http://localhost:3000/api/leads/list?status=pending_review&limit=50"
+```
+
+Query params: `status` (optional exact match), `limit` (default **50**). Columns: `id, angle, why_now, who_it_impacts, contrarian_take, confidence_score, status, created_at`.
+
+The `/leads` tab badges call this once per status and **count returned rows**, so counts cap at 50. Dashboard `GET /api/dashboard/stats` uses an exact `count` for pending instead.
+
+#### Approve / dismiss
+
+```bash
+curl -s -X POST http://localhost:3000/api/leads/approve \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<lead_id>"}'
+```
+
+Body accepts `leadId` or `id`. Approve returns `{ ok, lead: { id, status } }` or **404** `Lead not found`. Dismiss returns `{ ok: true }` even when no row matched (no 404). There is **no batch API** — Approve all / Dismiss all loop the current tab's ids one request at a time.
+
+#### From-signal
+
+```bash
+curl -s -X POST http://localhost:3000/api/leads/from-signal \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Agent identities skipped MFA","url":"https://example.com/post","publisher":"Example Daily"}'
+```
+
+Success: `{ ok: true, leadId }`.
+
+### Downstream: Issues + Editor Agent
+
+- `POST /api/issues/generate` loads up to 20 `approved` leads (newest first). **Zero approved → 400** `No approved leads available. Approve some leads first.`
+- Optional `leadLimit` (default **8**). An LLM curator picks 3–`leadLimit` of those; used ids are stored on `content_json.lead_ids` and those rows become `drafted`.
+- Editor Agent `get_approved_leads` uses the same approved query (limit 20) and reports `sufficient: leads.length >= 3`. The `/leads` page banner at ≥3 approved points at Issues for the same reason.
+- `content_lane_id` exists on `editorial_leads` (`lib/supabase/schema-content-lanes.sql`) for ACE lane balance. Generate / from-signal / Writer **do not set it**; Editor/Issues can still sort approved leads by lane when `laneBalanceContext` is present.
+- Command palette (`GET /api/search?q=`) matches lead **angles** (limit 8).
+
+### UI (`/leads`)
+
+- Brand profile select + **Generate leads** + optional **Get promo** (`POST /api/revenue/recommend` — not part of lead persistence).
+- Tabs: Pending review / Approved / Drafted. Pending shows Pass + Approve; Approved links to `/issues`; Drafted is read-only.
+- Banner at ≥2 pending ("clear the queue"); banner at ≥3 approved with Open Issues.
+
+### Troubleshooting
+
+- `400 brandProfileId required`: generate body omitted the profile id.
+- `404 Brand profile not found`: id is wrong or belongs to another workspace.
+- `ok: true` but `leadsInserted: 0`: no directive-tied signals in the window; all candidates failed citation/dedup; or only undirected research-sources signals exist (use Writer Agent or from-signal).
+- `422 Invalid Claude output`: model returned JSON that failed `LeadsOutputSchema` (short fields, bad URLs, 0 or >6 leads).
+- `400 title is required` / `400 No brand profile for workspace`: from-signal validation.
+- `400 No approved leads available...`: approve at least one pending lead before Issues generate.
+- Tab counts look stuck below the real queue: list `limit` defaults to 50 and the UI counts that page.
+- Writer Agent generated nothing: 10+ already pending or every signal group had fewer than 3 items in the last 14 days (those are prompt rules — confirm the `agent:writer` run summary).
 
 ## Content Outlines Runbook
 
