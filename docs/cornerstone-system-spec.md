@@ -4,7 +4,7 @@
 Owner: OnTheCorner Media  
 Module: Newsroom Engine + LinkedIn Module + ACE (Autonomous Content Engine)  
 Status: Active Development  
-Last updated: 2026-06-08
+Last updated: 2026-09-21
 
 > **This is the single canonical Cornerstone system spec.** It consolidates and supersedes the prior `cornerstone-system-spec-v1.md` (now a deprecation stub) and the `v2.x` series (this file was promoted from `v2.13`). Companion execution docs remain separate and are referenced inline: `docs/agent-execution-plan-v1.md`, `docs/Cornerstone-OS-ACE.md`, `docs/p1-newsroom-cohesion-build.md` (P1 build checklist), `docs/m2-oauth-runbook.md`, and the design handoffs under `docs/design_handoff_*`.
 
@@ -143,14 +143,14 @@ type AgentRunState = {
 #### Writer Agent
 - **Role:** Generate editorial leads from fresh signals
 - **LLM role:** `leads`
-- **Trigger:** Event (fires after Researcher completes, if new signals were ingested)
-- **Human gate:** No (leads are generated as `pending_review`)
-- **Tools:**
-  - `query_fresh_signals` — get signals from the last 14 days, ordered by `relevance_score` DESC then `captured_at` DESC
-  - `check_existing_leads` — check for duplicate angles before generating
-  - `generate_leads` — call LLM to produce leads from signals
-  - `save_leads` — persist leads to DB with proper deduplication
-- **Decision-making:** Skips sources that already have sufficient pending leads. Prioritizes high-`relevance_score` signals when the pool is large. Adjusts lead count based on signal volume.
+- **Trigger:** Event (fires after Researcher completes in `POST /api/pipeline/run`)
+- **Human gate:** No — inserts are `pending_review`. Humans approve on `/leads` before the Editor will draft (see §3.4).
+- **Tools** (shipped in `lib/agents/writer.ts`):
+  - `query_fresh_signals` — last **14 days**, ordered by `captured_at` DESC (not `relevance_score`; scoring is still Phase 3). Returns `directive_groups` (legacy `directive_id`) and `source_groups` (undirected research-sources pipeline, grouped by publisher).
+  - `check_existing_leads` — counts `pending_review` + `approved`. The system prompt tells the agent to **skip generation** when **10+** leads are already pending (not a hard-coded gate).
+  - `generate_leads_for_directive` — LLM 2–4 leads from up to 12 recent signals for one directive; citation URL allowlist + exact-angle dedup; insert `pending_review`.
+  - `generate_leads_for_source` — same for undirected signals; optional `publisher` scope, or all `directive_id IS NULL` signals when omitted.
+- **Decision-making:** System prompt: skip any group with fewer than **3** signals; quality over quantity — do not flood the review queue. Does **not** auto-approve. Manual `POST /api/leads/generate` is a separate, directive-only path (also §3.4).
 
 #### Editor Agent
 - **Role:** Editor-in-Chief. Reviews approved leads, makes all editorial decisions, and produces the newsletter draft.
@@ -411,7 +411,77 @@ The Signals page is organized into two tabs:
 ---
 
 ## 3.4 Leads Pipeline [REVISED]
-_Unchanged from v2.0. Will be wrapped by Writer Agent. Added field: `channel` on `editorial_leads`._
+
+Editorial leads are the structured angles between **signals** and **issue drafts**. They are workspace-scoped (`editorial_leads`), RLS-gated, and **human-approved** before the Editor / `POST /api/issues/generate` will consume them.
+
+Operator runbook (endpoints, curl, pitfalls): **README → Editorial Leads Runbook**.
+
+### Purpose
+
+Turn a 14-day window of ingested signals into reviewable editorial angles (lens, why-now, who it impacts, contrarian take, citation URLs), then let a human approve or pass them. Approved rows are the only lead input for newsletter generation.
+
+### Status lifecycle
+
+```
+pending_review ─┬─► approved ─► drafted
+                └─► dismissed
+```
+
+| Status | Set by | Notes |
+|--------|--------|-------|
+| `pending_review` | `POST /api/leads/generate`, Writer Agent, `POST /api/leads/from-signal` | `/leads` Pending review tab |
+| `approved` | `POST /api/leads/approve` | Eligible for Issues generate / Editor `get_approved_leads` |
+| `drafted` | `POST /api/issues/generate` after a successful `issue_drafts` insert, for curated `content_json.lead_ids` only | `/leads` Drafted tab |
+| `dismissed` | `POST /api/leads/dismiss` | Pass / Dismiss all; **no UI tab** |
+
+`dismissed` is a reject path from pending, not a step after `drafted`. There is **no** `channel` column on `editorial_leads` yet (LinkedIn vs newsletter routing remains a Phase 2A cross-cutting item). `content_lane_id` exists (`lib/supabase/schema-content-lanes.sql`) for ACE lane balance; generate / from-signal / Writer do not populate it.
+
+### Generation paths
+
+**1. Manual / REST — `POST /api/leads/generate`** (`app/api/leads/generate/route.ts`, UI `/leads`)
+
+- Body: `{ brandProfileId` (required), `days? }` default **14**.
+- Loads signals in the window, groups by `directive_id`, **drops `directive_id` null** (research-sources / undirected signals are invisible to this path). Caps **12** signals per directive.
+- `callLLM("leads")` + `LeadsOutputSchema` (`lib/leads/leadSchema.ts`): 1–6 leads (prompt asks 2–4); field minima; `sources` must be URLs.
+- Discard if no citation URL is in that directive’s signal URL set. Dedup against the latest 100 `pending_review` + `approved` angles (exact match **or** substring overlap when the shorter string is >20 chars).
+- Appends surviving URLs onto `contrarian_take` as `\n\nSources:\n…` (Issues parses this in `extractSourcesFromContrarianTake`).
+- Inserts `pending_review`. Audits via `runs.run_type = lead_generation`. Never auto-approves.
+- No directive-tied signals → `{ ok: true, leadsInserted: 0 }` (not an error). Schema-invalid LLM output → **422** and the run is `failed`.
+
+**2. Writer Agent — pipeline stage `writer`** (`lib/agents/writer.ts`)
+
+See §3.1 Writer Agent. Covers **both** directive groups and undirected `source_groups`. System prompt skips a group with <3 signals and skips all generation if 10+ pending (not hard-coded). Exact-angle dedup only. Does **not** write a `lead_generation` run (the pipeline `agent:writer` run is the audit trail).
+
+**3. Promote-to-lead — `POST /api/leads/from-signal`**
+
+Used by `/dashboard` and Signal Feed. Body `{ title` (required), `url?`, `publisher? }`. Binds the first workspace `brand_profiles` row (not the Leads page selector). No LLM, no dedup, no `runs` row. Still `pending_review`.
+
+### Review API + UI
+
+| Path | Method | Behavior |
+|------|--------|----------|
+| `/api/leads/list` | `GET` | `?status=` exact filter, `?limit=` default **50**, `created_at` desc |
+| `/api/leads/approve` | `POST` | `{ leadId \| id }` → `approved`; **404** if missing |
+| `/api/leads/dismiss` | `POST` | `{ leadId \| id }` → `dismissed`; **no 404** if missing |
+| `/api/leads/from-signal` | `POST` | Promote one signal (above) |
+
+`/leads` tabs: Pending review / Approved / Drafted. Tab badges count **list rows** (so they cap at 50). Dashboard `GET /api/dashboard/stats` uses an exact pending `count`. Approve all / Dismiss all loop per-id; there is no batch endpoint. Optional **Get promo** calls `POST /api/revenue/recommend` and does not persist a lead.
+
+Command palette `GET /api/search?q=` matches lead **angles** (limit 8).
+
+### Consumption (Issues + Editor)
+
+- `POST /api/issues/generate` loads up to **20** `approved` leads (newest first). Zero approved → **400** `No approved leads available. Approve some leads first.`
+- Optional `leadLimit` (default **8**). Curator selects 3–`leadLimit`; used ids stored as `content_json.lead_ids` and those rows flip to `drafted`.
+- Editor Agent `get_approved_leads` uses the same approved query (limit 20) and sets `sufficient` when count **≥ 3**. The `/leads` banner at ≥3 approved matches that threshold.
+- When `laneBalanceContext` is present, approved leads can be sorted by `content_lane_id` / ring even if the lead row’s lane is null.
+
+### Constraints / pitfalls
+
+- Citation enforcement is URL-set membership, not web fetch. Hallucinated URLs are dropped; a lead with zero surviving URLs is discarded.
+- Manual generate **cannot** see undirected research-sources signals — use Writer Agent or from-signal.
+- from-signal does not copy `signals.id`; it is a new `editorial_leads` row seeded from title/url/publisher.
+- Human approval remains non-negotiable: neither generate path writes `approved`.
 
 ---
 
@@ -1265,7 +1335,7 @@ Stretch:
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Research Engine | Implemented | Used by Researcher Agent tools for staleness checks + RSS ingest |
-| Leads pipeline | Implemented | Lifecycle: pending → approved → drafted → dismissed; 14-day window; dedup |
+| Leads pipeline | Implemented | §3.4 — `/leads` + REST (`generate` / `list` / `approve` / `dismiss` / `from-signal`); statuses `pending_review` / `approved` / `drafted` / `dismissed` (dismiss is a reject path, not after drafted); 14-day window; citation + angle dedup |
 | Thesis + Angle + Draft | Implemented | Editor Agent curation, editorial angle with title uniqueness |
 | Draft persistence | Implemented | `content_json` with `DraftObject` + runtime validation |
 | Deterministic renderer | Implemented | `renderDraftMarkdown()` + `renderDraftHtml()` |
@@ -1346,7 +1416,7 @@ Stretch:
 ## Phase 1 — Agent Framework + Autonomous Pipeline
 - **Landed:** agent abstraction (`lib/agents/framework.ts`) — definition, tool registry, run loop, role-routed LLM calls
 - **Landed:** Researcher Agent — `check_signal_freshness`, `ingest_directive`, `report_summary` (`lib/agents/researcher.ts`)
-- **Landed:** Writer Agent — `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive` (`lib/agents/writer.ts`)
+- **Landed:** Writer Agent — `query_fresh_signals`, `check_existing_leads`, `generate_leads_for_directive`, `generate_leads_for_source` (`lib/agents/writer.ts`); see §3.4
 - **Landed:** Pipeline Orchestrator — `POST /api/pipeline/run` (staged researcher → writer → editor)
 - **Landed:** agent run persistence via **`runs`** (`run_type` prefix `agent:`)
 - **Hardening:** structured errors, clearer stage contracts, optional abort / human gate between stages; formalize `runs` contract in UI filters or migrate to **`agent_runs`** if queries outgrow `runs`
