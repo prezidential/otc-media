@@ -8,8 +8,8 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
-| **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, The Last Word, Promo, Close) with thesis-driven editorial angles |
+| **Revision** | Regenerates Title, Opening Hook, Deep Dive, or The Last Word on a saved issue, then lint-checks that section before saving |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
 ## Tech Stack
@@ -360,6 +360,93 @@ Resolution behavior:
 - `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
+
+## Section Revision Runbook
+
+`POST /api/issues/regenerate-section` rewrites one section of a **saved** newsletter draft. It does not generate a new issue and it does not edit Fresh Signals, Promo, or Close. Those stay as stored. Hand-edits of any section, including the ones below, go through the inline editor (`PATCH /api/issues/[id]`), which is a separate path.
+
+The Issues page shows **Regenerate Section** only after a draft has an id. The panel defaults to Title and offers Title, Opening Hook, Deep Dive, and The Last Word. The instruction field is optional.
+
+### Endpoint
+
+| Field | Required | Values |
+|-------|----------|--------|
+| `draftId` (or `draft_id`) | yes | `issue_drafts.id` in the active workspace |
+| `section` | yes | `title`, `hook`, `deep_dive`, `last_word` |
+| `instruction` | no | Free text. Empty becomes "Improve or refine this section while keeping the same thesis and voice." |
+
+```bash
+curl -s -X POST http://localhost:3000/api/issues/regenerate-section \
+  -H "Content-Type: application/json" \
+  -d '{"draftId":"<issue_draft_id>","section":"last_word","instruction":"Tighten the close for operators."}'
+```
+
+Success (`200`):
+
+```json
+{ "ok": true, "draft": "<full markdown>", "content_json": { } }
+```
+
+`draft` is the re-rendered issue. `content_json` is the previous object with only the requested field replaced.
+
+### What the model sees
+
+The route calls `callLLM("revision", …)` (`LLM_REVISION`, else `LLM_PROVIDER` / `LLM_MODEL`) with `max_tokens: 4096`.
+
+Prompt context:
+
+- Brand voice, formatting rules, and forbidden patterns from the draft's `brand_profile_id`. Emoji policy and narrative preferences are loaded and not sent.
+- Up to six **newest approved** leads in the workspace (`created_at` desc). This is not the lead set or steering preset used when the issue was generated. URLs are pulled out of each lead's `contrarian_take` `Sources:` block.
+- The full stored markdown (`issue_drafts.content`) plus the current body of the target section, sliced from that markdown.
+- A fixed editorial bias (name an IAM domain, state a business consequence, take a position) and the same dash / forbidden-phrase rules the linter enforces.
+
+Requested shape (prompt only; the handler does not count words):
+
+| Section | Stored field | Prompt asks for |
+|---------|--------------|-----------------|
+| `title` | `title` (first line only) | One line, max 6 words |
+| `hook` | `hook_paragraphs` (split on blank lines) | 2–3 short paragraphs |
+| `deep_dive` | `deep_dive` | 600–900 words, first person |
+| `last_word` | `last_word` | One paragraph, 2–3 sentences, first person |
+
+### Lint before save
+
+1. `applyDashReplaceMap` rewrites a fixed hyphen list (`nation-state`, `machine-speed`, `real-time`, `proof-of-concept`, `pre-authorized`). It does not remove em dashes, en dashes, or space-dash-space.
+2. `lintDraft` rejects `the real issue/risk/problem is`, em dash, en dash, and space-dash-space. Lines that are `Sources:`, a `- https://…` bullet, or `---` are skipped.
+3. On a hit, `rewriteLintViolations` calls `callLLM("lint", …)` (`LLM_LINT`) and expects a JSON array of corrected lines. Up to **2** rewrites run (3 lint passes). A rewrite that throws, or whose JSON length does not match, stops the repair.
+4. If lint still fails, the route returns **422** and does **not** update the row:
+
+```json
+{
+  "ok": false,
+  "error": "Section \"title\" still has lint violations after 2 retries",
+  "violations": [{ "type": "forbidden_phrase", "snippet": "the real risk is", "lineNumber": 1 }]
+}
+```
+
+The Issues UI shows `error` only. It does not render `violations`.
+
+A clean section is merged onto `content_json`, checked with `validateDraftObject`, and both `content` and `content_json` are written. Status, `metadata` (including `beehiiv_post_id` and `thesis`), Fresh Signals, promo, close, and sources are left as they were. Markdown is rebuilt with `renderDraftMarkdown`, not by splicing the old string.
+
+### Constraints
+
+- Needs a signed-in session and an active workspace (`requireWorkspace()`). `401` is `Not authenticated`. `403` is `No workspaces`.
+- The draft must have non-empty `content`, a `brand_profile_id` in this workspace, and a `content_json` that already validates (`metadata.model` and `metadata.thesis` non-empty). A markdown-only row is parsed into an object with empty metadata and then fails that check; the handler does not catch the throw, so nothing is saved.
+- `fresh_signals` is rejected with `400`. Use the inline editor for This Week / Fresh Signals, promo, and close.
+- The "current section" excerpt is taken from markdown headers. After `renderDraftMarkdown`, the title is a single `**…**` line, so that excerpt is empty (the full draft is still in the prompt). The hook excerpt drops the first paragraph, because the slicer treats the first line as a header.
+- Regenerating while **Edit Draft** is open updates the preview but not the open fields. Saving the editor afterward merges those stale fields back over the new section.
+
+### Troubleshooting
+
+- `400 draftId required`: body omitted `draftId` and `draft_id`.
+- `400 section required: one of title, hook, deep_dive, last_word`: missing or unsupported `section` (`fresh_signals`, `promo_slot`, `close` included).
+- `400 Draft has no content. Generate a new draft first.`: `content` is empty.
+- `400 Draft has no brand profile`: `brand_profile_id` is null.
+- `404 Draft not found`: id is wrong or the row is in another workspace.
+- `404 Brand profile not found`: the profile id on the draft is missing in this workspace.
+- `422 Section "…" still has lint violations after 2 retries`: repair could not clear dash or forbidden-phrase hits. The saved draft is unchanged. Adjust `instruction` and retry.
+- `500` with `No content generated for section`, an LLM error, or a Supabase error: nothing was written (LLM and validation failures happen before the update).
+- Button missing on Issues: the loaded draft has no id yet. Generate and save, or open one from history, first.
 
 ## Autonomous Pipeline Runbook
 
