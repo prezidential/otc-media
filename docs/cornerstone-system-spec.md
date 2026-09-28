@@ -421,7 +421,40 @@ _Unchanged from v2.0. Will be wrapped by Editor Agent._
 ---
 
 ## 3.6 Revision Engine
-_Unchanged from v2.0._
+
+Section revision rewrites **one** part of an existing newsletter draft. It is not a second full generation and it is not the inline editor.
+
+**Implemented:** `POST /api/issues/regenerate-section` (`app/api/issues/regenerate-section/route.ts`), Issues **Regenerate Section** panel (`app/issues/page.tsx`). Operator steps and error strings: `README.md` § Section Revision Runbook.
+
+### Scope
+
+| `section` | `content_json` field | Issues label |
+|-----------|----------------------|--------------|
+| `title` | `title` (first line of the model output) | Title |
+| `hook` | `hook_paragraphs` (blank-line split) | Opening Hook |
+| `deep_dive` | `deep_dive` | Deep Dive |
+| `last_word` | `last_word` | The Last Word |
+
+`fresh_signals`, `promo_slot`, and `close` are not regeneratable (`400`). Edit those with `PATCH /api/issues/[id]`. LinkedIn section regen is not this endpoint (§3.8).
+
+### Flow
+
+1. Resolve the caller with `requireWorkspace()` and load `issue_drafts` (`id`, `content`, `content_json`, `brand_profile_id`) in that workspace.
+2. Require non-empty `content` and a brand profile row. If `content_json` is missing, parse the markdown (`parseDraftToStructured`) or fall back to an empty object. Either fallback leaves `metadata` empty, and `validateDraftObject` then requires `metadata.model` and `metadata.thesis`, so a structured row that already validates is the path that can save.
+3. Build context from that brand profile (voice, formatting, forbidden patterns only) and the six newest **approved** `editorial_leads` in the workspace. Steering presets and the leads used at generation time are not reloaded.
+4. `callLLM("revision")` (`LLM_REVISION`, `max_tokens: 4096`). The system prompt applies IAM editorial bias and the lint rules. The user prompt includes the full markdown, a sliced "current section" body, and an optional `instruction` (default: improve or refine, same thesis and voice). The model must return the section body only.
+5. `applyDashReplaceMap`, then `lintDraft`. Up to two `callLLM("lint")` rewrites (`LLM_LINT`) via `rewriteLintViolations`.
+6. On remaining violations, return **422** `{ ok: false, error, violations }` and do not write. On a clean section, merge the field onto `content_json`, `validateDraftObject`, `renderDraftMarkdown`, and update `content` plus `content_json`.
+
+The update does not change `status` or `metadata` (`thesis`, `beehiiv_post_id`, and the rest ride along on the object spread). `replaceSectionInContent` in `lib/draft/parse.ts` is not used by this route.
+
+### Prompt excerpt caveat
+
+`getSectionBlocks` treats the first line of a section as a header. Drafts rendered by `renderDraftMarkdown` store the title as a single bold line and the hook as paragraphs with no header line, so the excerpt for `title` is empty and the excerpt for `hook` omits the first paragraph. The full draft is still in the prompt. Deep Dive and The Last Word excerpts match the body under `**Deep Dive**` and `**The Last Word**`.
+
+### UI
+
+The panel is shown only when the page has a `draftId`. Success replaces the on-screen markdown and `content_json` and closes the panel. Failure surfaces `error` and not the `violations` array. An open inline editor keeps the fields it captured when it opened; saving it merges those fields and can overwrite a section just regenerated.
 
 ---
 
@@ -1272,7 +1305,7 @@ Stretch:
 | Guardrails — system level | Implemented | Lint + auto-rewrite; em/en dash, forbidden phrases, editorial bias |
 | Guardrails — creator level | Not started | Requires brand profile refactor |
 | Guardrails — LinkedIn patterns | Not started | New |
-| Revision Engine | Implemented | Section-level regen with lint retries |
+| Revision Engine | Implemented | §3.6 — `POST /api/issues/regenerate-section`; title / hook / deep_dive / last_word; lint retries; 422 leaves the row unchanged |
 | Publishing — HTML + Beehiiv | Implemented | HTML export always on; Beehiiv feature-flagged |
 | Publishing — LinkedIn export | Not started | New |
 | **LLM Abstraction Layer** | **Implemented** | Anthropic + OpenAI; per-role config via env vars |
