@@ -8,7 +8,7 @@ AI-powered newsroom engine by [OnTheCorner Media](https://github.com/prezidentia
 |-------|-------------|
 | **Research** | Ingests RSS feeds across 8 directives (Identity + AI, Agentic AI Security, CIEM, ITDR, etc.) covering 13+ cybersecurity sources |
 | **Leads** | Generates editorial leads from signals via role-configured LLM calls, with citation enforcement and human approval workflow |
-| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, Dojo Checklist, Promo, Close) with thesis-driven editorial angles |
+| **Drafting** | Produces full newsletter issues (Title, Hook, Fresh Signals, Deep Dive, The Last Word, Promo, Close) from a scored thesis and editorial angle |
 | **Revision** | Regenerates individual sections with lint guardrails and editorial bias injection |
 | **Outlines** | Manages workspace-scoped content outlines (newsletter + Insider Access) for generation structure |
 
@@ -325,6 +325,8 @@ For `kind: insider_access`, use `insiderSystemPrompt` instead of `systemPromptSu
 
 ### Issues Generation + Outline Resolution
 
+Outline id checks for `POST /api/issues/generate` are below. Curation, thesis selection, angle, lint, and what gets stored are in the [Angle + Draft Engine Runbook](#angle--draft-engine-runbook).
+
 `POST /api/issues/generate` supports:
 
 - `outputMode`: `full_issue` | `insider_access` | `bundle`
@@ -360,6 +362,64 @@ Resolution behavior:
 - `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
+
+## Angle + Draft Engine Runbook
+
+`POST /api/issues/generate` (`app/api/issues/generate/route.ts`) is the issue generator. The Issues page calls it with the signed-in session. The Editor Agent tool `generate_newsletter_draft` calls the same route. Spec detail is [§3.5](docs/cornerstone-system-spec.md).
+
+### What the route does
+
+For `full_issue` (the default) and the public half of `bundle`:
+
+1. Load up to 20 newest **approved** leads in the active workspace.
+2. Ask the `editor` model to keep between 3 and `leadLimit` of them. If that JSON is unusable, keep the first `leadLimit` (default **8**).
+3. Ask the `editor` model for three one-sentence theses and pick one in code (`full_issue` ignores the model's `selected_id` and weights operator usefulness highest).
+4. Fill `promo_slot` from `POST /api/revenue/recommend`. If that call is not ok, the slot is the literal `Subscribe.`
+5. Ask the `editor` model for one editorial angle, then the `drafting` model for JSON sections: `title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `last_word`.
+6. Lint prose (`lib/draft/lint.ts`), render markdown, insert `issue_drafts`, and mark the curated leads `drafted`.
+
+`close` is always the code constant `DEFAULT_CLOSE`, not model output. `sources` are URLs found in `fresh_signals`.
+
+`insider_access` returns markdown and does **not** insert a row. Pass `sourceDraftId` to extend the loaded issue instead of re-reading leads. `bundle` stores the public issue, then returns Insider as `insiderDraft`.
+
+### Example
+
+```bash
+curl -s -X POST http://localhost:3000/api/issues/generate \
+  -H "Content-Type: application/json" \
+  -H "Cookie: <session cookies>" \
+  -d '{
+    "brandProfileId": "<brand_profile_id>",
+    "outputMode": "full_issue",
+    "leadLimit": 6,
+    "aggressionLevel": 3,
+    "audienceLevel": "practitioner",
+    "focusArea": "architecture",
+    "toneMode": "strategic"
+  }'
+```
+
+A saved run includes `ok`, `draft`, `stored`, `draftId`, `curation`, `selectedThesis`, and `lintFixed` / `lintViolations`. `stored: false` with `storeError` means the markdown came back but the row was not inserted (leads stay `approved`).
+
+### Constraints
+
+- Zero approved leads → **400** `No approved leads available. Approve some leads first.` One or two approved leads still generate; only the Editor Agent prompt tells itself to stop below 3.
+- Lead citation URLs must sit in a `Sources:` block inside `contrarian_take`. There is no separate URL column.
+- A bad thesis set (not exactly three, a thesis that is not one sentence, a URL, or a forbidden "the real issue/risk/problem is" phrase) replaces the thesis with `Identity programs are misclassified, not underfunded.` and sets `thesisError: true`. Drafting continues.
+- Angle JSON without `title` or `deep_dive_thesis` throws before the drafting error handler. The Issues page then shows a status code, not `data.error`.
+- `last_word` is dash-normalized only. Hook, Fresh Signals, and Deep Dive can be rewritten by the `lint` model. `lintFixed: true` means a rewrite call returned, not that a second lint passed.
+- `bundle` can return **500** after the public draft is already stored, if the Insider half throws. The error body does not include `draftId`.
+- `generate_newsletter_draft` does not forward the user session. `/api/issues/generate` is not a public route, so that server-side POST does not run as the user who started the pipeline.
+- The promo hop is also a cookieless server-side POST, so `promo_slot` is often `Subscribe.` even when an active `revenue_items` row exists.
+
+### Troubleshooting
+
+- `400 brandProfileId required` / `404 Brand profile not found`: missing id, or the profile is not in the active workspace.
+- `400 No approved leads available...`: approve leads first. The `sourceDraftId` Insider shortcut does not need leads.
+- Generated, not saved (`storeError` in the Issues banner): `validateDraftObject` rejected the JSON (empty `metadata.model` or `metadata.thesis` is the usual cause) or the insert failed. The response `draft` is still usable.
+- Same thesis on unrelated lead sets: the thesis engine fell back. Check `thesisErrorReason`.
+- Insider from the open draft ignored new leads: `insider_access` plus `sourceDraftId` uses the stored issue (thesis, body, URLs) and skips curation.
+- Pipeline Editor stage fails immediately: `generate_newsletter_draft` is calling this route without a session cookie.
 
 ## Autonomous Pipeline Runbook
 

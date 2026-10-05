@@ -415,8 +415,131 @@ _Unchanged from v2.0. Will be wrapped by Writer Agent. Added field: `channel` on
 
 ---
 
-## 3.5 Angle + Draft Engine
-_Unchanged from v2.0. Will be wrapped by Editor Agent._
+## 3.5 Angle + Draft Engine **[REVISED]**
+
+### Purpose
+
+`POST /api/issues/generate` turns approved editorial leads into a newsletter draft (and, when asked, an Insider Access companion). The Issues page calls it directly. The Editor Agent (`lib/agents/editor.ts`) calls the same route from `generate_newsletter_draft` after it has chosen steering and output mode.
+
+Outline id checks and template placeholders stay in §3.10. This section is the generation pipeline inside the route (`app/api/issues/generate/route.ts`).
+
+### Request
+
+Workspace scope comes from `requireWorkspace()` (active session). There is no `WORKSPACE_ID` fallback.
+
+| Field | Behavior |
+|-------|----------|
+| `brandProfileId` | Required. **400** `brandProfileId required` if missing. **404** `Brand profile not found` if it is not in the active workspace. |
+| `outputMode` | `full_issue` (default), `insider_access`, or `bundle`. Any other value is treated as `full_issue`. |
+| `aggressionLevel` | Clamped to 1–5. Missing or non-numeric becomes **3**. |
+| `audienceLevel` | `practitioner` (default), `ciso`, `board`. |
+| `focusArea` | `strategic`, `tactical`, `architecture` (default). |
+| `toneMode` | `reflective`, `confrontational`, `analytical`, `strategic` (default). |
+| `leadLimit` | Positive number. Missing, non-numeric, or `< 1` becomes **8**. Caps how many leads curation may keep. The query itself always loads the **20** newest `status=approved` leads. |
+| `contentOutlineId` / `insiderContentOutlineId` | Optional. Checked only when that outline is actually used (§3.10). |
+| `sourceDraftId` | Optional. Used only for `insider_access` (shortcut below). |
+| `contentLaneId` | Optional UUID stored on the inserted `issue_drafts` row. It does **not** filter the lead query. |
+| `laneBalanceContext` | Optional `BalanceSummary` (`innerRingFloorMet`, `lanes`, `highestPriorityLane`). When it parses and `innerRingFloorMet` is false, approved leads are reordered so inner-ring lanes (then `highestPriorityLane`) sort first (`sortApprovedLeadsForLaneContext`). The Issues UI does not send this; the Editor Agent does when ACE lane context is present. |
+
+The Issues page sends steering from the form or from a preset (CISO Aggressive, Board Brief, Practitioner Tactical, Reflective Operator). Its lead-count control defaults to **6**.
+
+### Paths
+
+```
+full_issue / bundle
+  approved leads → curate → thesis → promo → angle → draft JSON → lint → insert
+
+insider_access (no sourceDraftId)
+  approved leads → curate → thesis → insider markdown → lint
+  (not inserted)
+
+insider_access + sourceDraftId
+  load stored DraftObject → insider markdown from that JSON → lint
+  (skips leads, curation, thesis engine, angle, and promo)
+```
+
+`bundle` runs the public-issue path, then drafts Insider from the new `content_json` using a **second** thesis pass with mode `insider_access`.
+
+### Curation
+
+`curateLeads` calls `callLLM("editor")` and asks for 3 to `leadLimit` lead numbers plus a one-sentence rationale. Angle diversity, narrative tension, timeliness, audience fit, and coverage breadth are the prompt criteria.
+
+On invalid JSON, an empty selection, or an LLM error, the route keeps the first `leadLimit` rows of the (possibly lane-reordered) list and sets rationale to `Default selection (most recent leads).` That fallback still runs when only one or two leads are approved. The Editor Agent prompt refuses to draft below 3 leads; the HTTP route does not. The route returns **400** `No approved leads available. Approve some leads first.` only when the approved set is empty.
+
+Citation URLs are not a column. They are `http`/`https` lines under a `Sources:` block inside `contrarian_take`. That block is stripped before the lead text is shown to later prompts.
+
+### Thesis
+
+`runThesisEngine` calls `callLLM("editor")` for exactly three one-sentence theses. Each thesis must have no newline, at most one `.` `!` or `?`, no URL, and none of `the real issue is` / `the real risk is` / `the real problem is`. One failure rejects the whole set.
+
+Fallback thesis (also `selectedBy: "editor"`, `theses: []`, `thesisError: true`):
+
+`Identity programs are misclassified, not underfunded.`
+
+The fallback string is fixed. It does not read the brand profile.
+
+When all three pass, selection depends on mode:
+
+- `full_issue` ignores the model's `selected_id`. The route ranks by weighted score `operator_usefulness * 2 + mode_fit * 1.5 + tension + distinctiveness`. A gap larger than 0.5 wins; otherwise it tie-breaks on operator usefulness, then mode fit, then distinctiveness. `selectedBy` is `editor`.
+- `insider_access` uses `selected_id` when that id exists (`selectedBy: "model"`). Otherwise it uses the same editor ranking.
+
+`bundle` runs the engine twice and returns `selectedThesisFull` / `selectedThesisInsider` (plus `thesesFull` / `thesesInsider` and per-side error fields). It does not also return the single-thesis payload.
+
+The `sourceDraftId` shortcut uses `content_json.metadata.thesis`, or the fallback sentence if thesis is missing. It returns `theses: []` and `selectedBy: "editor"` with no `thesisError` flag.
+
+### Angle, drafting, lint
+
+Public-issue generation (not the Insider-only paths):
+
+1. **Promo.** Server-side `POST /api/revenue/recommend` with `{ brandProfileId }` and no session cookie. Any non-ok result, including that hop failing auth, becomes promo text `Subscribe.`
+2. **Angle.** `callLLM("editor")` (`temperature: 0.6`) returns title, hook line, hook paragraphs, deep-dive thesis, uncomfortable truth, reframe, 5–7 outline bullets, and `last_word_seed`. The prompt includes up to five recent `issue_drafts` titles and forbids reuse. Missing `title` or `deep_dive_thesis` throws `Editorial angle generation failed to produce valid JSON` **outside** the drafting try/catch, so the client does not get `{ ok: false, error }`.
+3. **Draft.** `callLLM("drafting")` (`temperature: 0.82`, `max_tokens: 8192`) must return JSON: `title`, `hook_paragraphs`, `fresh_signals`, `deep_dive`, `last_word`. The user prompt is the newsletter outline template filled with thesis, steering, angle, leads, and promo, plus an anti-repetition suffix (banned stock openers and up to eight recent hook first lines). A parse failure returns **500** `{ ok: false, error }`.
+4. **Assemble.** `promo_slot` is the promo text. `close` is `DEFAULT_CLOSE` from `lib/draft/content.ts` (not model output). `sources` are unique `http(s)` URLs found in `fresh_signals`. `metadata` is `{ thesis, model }` from the drafting call.
+5. **Lint** (`lib/draft/lint.ts`). `applyDashReplaceMap` rewrites a fixed hyphen list (`nation-state`, `machine-speed`, `real-time`, `proof-of-concept`, `pre-authorized`). `lintDraft` flags forbidden phrases, em dash, en dash, and space-hyphen-space. Source lines, `Sources:` lines, and `---` are skipped. `rewriteLintViolations` calls `callLLM("lint")` to replace offending lines. Hook paragraphs are dash-normalized, then linted as one block and split back on blank lines. `deep_dive` and `fresh_signals` are linted. `last_word` is dash-normalized only. A thrown rewrite keeps the prior text. A rewrite whose JSON array length does not match is returned unchanged by `rewriteLintViolations`, and the route still sets `lintFixed: true`. `lintViolations` is the pre-rewrite list.
+
+Insider text (`callLLM("drafting")`, no temperature override) is dash-normalized and linted once. Allowed URLs are the curated lead sources, or, on the shortcut, `content_json.sources` when non-empty, otherwise URLs regex-extracted from `fresh_signals`.
+
+### Persistence
+
+Only the public issue in `full_issue` and `bundle` is inserted into `issue_drafts`. The handler adds `lead_ids` and `curation_rationale` onto `content_json` (extra keys; `validateDraftObject` does not strip them), then inserts `content` (`renderDraftMarkdown`), `content_json`, `brand_profile_id`, and when present `content_outline_id` and `content_lane_id`.
+
+On insert success the curated leads are updated to `status: "drafted"`. On validation or insert failure the response is still `{ ok: true, stored: false, storeError }` and those leads stay `approved`.
+
+Insider markdown is returned as `draft` (`insider_access`) or `insiderDraft` (`bundle`) and is not stored.
+
+If Insider generation throws after the public row is inserted, `bundle` returns **500** `{ ok: false, error }` and omits `draftId`. The row and the `drafted` lead updates from the public half can already be committed.
+
+### Response sketch (`full_issue`)
+
+```json
+{
+  "ok": true,
+  "draft": "**Title**\n\n...",
+  "stored": true,
+  "draftId": "<uuid>",
+  "lintFixed": false,
+  "lintViolations": [],
+  "curation": { "leadsUsed": 4, "leadsAvailable": 12, "rationale": "..." },
+  "contentOutlineId": "<uuid-or-omitted-when-built-in-default>",
+  "selectedThesis": "...",
+  "theses": [],
+  "selectedThesisSelectedBy": "editor"
+}
+```
+
+`thesisError` / `thesisErrorReason` appear only when the thesis engine fell back. `contentOutlineId` is omitted when resolution used the built-in spec (`id: null`).
+
+### Editor Agent wrapper
+
+`generate_newsletter_draft` POSTs steering, `outputMode`, `leadLimit`, optional `contentLaneId`, and optional `laneBalanceContext`. It does not send outline ids or `sourceDraftId`, and it does not forward the caller session. Middleware treats `/api/issues/generate` as a signed-in route, so a cookieless server-side call does not run as the user who started the pipeline. The tool maps a non-ok body to `{ success: false, error }`.
+
+### LLM roles
+
+| Step | `callLLM` role |
+|------|----------------|
+| Curation, thesis, angle | `editor` (`LLM_EDITOR`) |
+| Newsletter JSON, Insider markdown, promo copy | `drafting` (`LLM_DRAFTING`) |
+| Lint line rewrite | `lint` (`LLM_LINT`) |
 
 ---
 
@@ -533,7 +656,7 @@ Built-in defaults live in code (`lib/content-outlines/default-specs.ts`). They a
 
 **Issue generation**
 
-- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter, when `outputMode` is `full_issue` or `bundle`), `insiderContentOutlineId` (when `bundle` or `insider_access`), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`.
+- `POST /api/issues/generate` accepts optional `contentOutlineId` (newsletter, when `outputMode` is `full_issue` or `bundle`), `insiderContentOutlineId` (when `bundle` or `insider_access`), and optional `sourceDraftId` when `outputMode` is `insider_access` to generate Insider from a saved issue’s `content_json`. Curation, thesis selection, angle, lint, and persistence are §3.5.
 - When an outline **id is provided**, the server **asserts** the row exists, is **not** disabled, and **`kind`** matches; otherwise **400/404** — no silent fallback to the code default for a bad id.
 - When **no** outline id is sent, resolution uses DB default or **code default** spec (same text as seeded defaults).
 
@@ -1266,7 +1389,7 @@ Stretch:
 |-----------|--------|-------|
 | Research Engine | Implemented | Used by Researcher Agent tools for staleness checks + RSS ingest |
 | Leads pipeline | Implemented | Lifecycle: pending → approved → drafted → dismissed; 14-day window; dedup |
-| Thesis + Angle + Draft | Implemented | Editor Agent curation, editorial angle with title uniqueness |
+| Thesis + Angle + Draft | Implemented | §3.5 — `POST /api/issues/generate`: curate approved leads, score a thesis, extract an editorial angle, draft, lint, persist the public issue |
 | Draft persistence | Implemented | `content_json` with `DraftObject` + runtime validation |
 | Deterministic renderer | Implemented | `renderDraftMarkdown()` + `renderDraftHtml()` |
 | Guardrails — system level | Implemented | Lint + auto-rewrite; em/en dash, forbidden phrases, editorial bias |
