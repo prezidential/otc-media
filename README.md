@@ -117,7 +117,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 1. **Seed brand profile:** `POST /api/brand-profiles/seed` (creates the Identity Jedi Newsletter profile)
 2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
-3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
+3. **Seed revenue items:** `POST /api/revenue/seed` (inserts two default promo items only when the workspace has none). See [Revenue Items Runbook](#revenue-items-runbook).
 4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
 5. **Ingest signals:** Go to Research → click "Run All Directives"
 6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
@@ -360,6 +360,79 @@ Resolution behavior:
 - `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
+
+## Revenue Items Runbook
+
+`revenue_items` is the workspace promo catalog. Recommend turns the single highest-priority active row into short practitioner copy. There is no revenue admin page and no create, update, or delete route — after the first seed, catalog changes are direct table edits.
+
+The repo has no `CREATE TABLE` or RLS policy for `revenue_items`. Routes use `requireWorkspace()` and `supabaseUser()`, and they also filter `workspace_id`. Columns the routes read or write: `id`, `workspace_id`, `type`, `title`, `description`, `priority_score`, `link`, `active`, `start_date`, `end_date`, plus `created_at` (sort only; not returned).
+
+### Seed
+
+`POST /api/revenue/seed` takes no body. If the workspace already has any row (active or not), the response is `{ "inserted": 0 }` and nothing is overwritten. Otherwise it inserts two active rows:
+
+| title | type | priority_score |
+|-------|------|----------------|
+| Identity Jedi Newsletter Premium | `premium` | `0.9` |
+| Workshop-in-a-Box | `product` | `0.8` |
+
+`description` is set; `link`, `start_date`, and `end_date` are null. Onboarding step 3 calls this same route in parallel with the other editorial seeds, including for a blank brand template, so those Identity Jedi titles are what a new workspace gets. Skipping that step leaves the catalog empty.
+
+```bash
+curl -s -X POST http://localhost:3000/api/revenue/seed
+```
+
+### List
+
+`GET /api/revenue/list` returns `{ "items": [...] }` for **active** rows only, oldest `created_at` first. `start_date` and `end_date` are included and are not used as a window.
+
+### Recommend
+
+`POST /api/revenue/recommend` with `{ "brandProfileId": "<uuid>" }`.
+
+Selection is one active row, `priority_score` descending, `limit 1`. Ties are unordered. On Postgres, `DESC` sorts null scores first, so a null `priority_score` beats `0.9`. Dates are not a filter. The brand profile must belong to the active workspace.
+
+The `drafting` LLM role (`callLLM`, `max_tokens: 512`) sees **title and type only**. `description` and `link` are returned on `item` and are not in the prompt. Voice tuning uses `forbidden_patterns_json`, `emoji_policy_json`, `formatting_rules_json`, and `cta_rules_json`. `name` is loaded and unused.
+
+Instructed copy shape:
+
+- 3 to 5 lines, one sentence per line
+- final line exactly `Subscribe.`
+- no hyphens or dashes inside a sentence
+- plain text; empty model text becomes `(No content generated)` with `ok: true`
+
+```bash
+curl -s -X POST http://localhost:3000/api/revenue/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"brandProfileId":"<brand_profile_id>"}'
+```
+
+```json
+{
+  "ok": true,
+  "item": { "id": "...", "type": "premium", "title": "Identity Jedi Newsletter Premium", "priority_score": 0.9 },
+  "promoText": "...\nSubscribe."
+}
+```
+
+### Where the copy is used
+
+| Caller | What happens |
+|--------|----------------|
+| Leads → **Get promo** | Browser `fetch` with the session cookie. Renders title, type, and `promoText`. A non-OK response clears the panel and shows no error. |
+| `POST /api/issues/generate` | `full_issue` and `bundle` only. `insider_access` returns before this call. The route `fetch`es recommend on the same origin **without** forwarding cookies. Middleware then treats it as signed-out and redirects to `/sign-in`. Generate logs the failure and stores `content_json.promo_slot` as `Subscribe.` |
+| Sponsorship alignment | Separate route. It reads up to 10 active items and does not call recommend. See spec §3.11. |
+
+`promo_slot` is copied into the draft as returned (lint does not rewrite it) and renders under **Promo Slot** when non-empty. The Issues editor can change it later.
+
+### Troubleshooting
+
+- `400 brandProfileId required`: body omitted `brandProfileId` (invalid JSON is treated as `{}`).
+- `404 Brand profile not found`: id is missing or belongs to another workspace.
+- `404 No active revenue item found`: catalog empty or every row has `active = false`. Seed will not repair the inactive case (`inserted: 0`).
+- `500` with a PostgREST message: table missing, or RLS is on without a policy the user client can pass.
+- Leads **Get promo** does nothing visible: recommend returned non-OK, or no brand profile is selected (the button stays disabled).
+- Generated issues always say `Subscribe.` in the promo slot: expected for the cookieless server hop. Use **Get promo** on Leads, or edit `promo_slot`, to place real copy.
 
 ## Autonomous Pipeline Runbook
 

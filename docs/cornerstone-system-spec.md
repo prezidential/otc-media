@@ -616,7 +616,7 @@ flowchart LR
 
 ### Sponsorship alignment
 
-**Endpoint:** `POST /api/content-products/sponsorship-alignment` — aligns draft context with revenue / sponsorship slots (experimental; same draft loading pattern as other content products).
+**Endpoint:** `POST /api/content-products/sponsorship-alignment` — aligns draft context with revenue / sponsorship slots (experimental; same draft loading pattern as other content products). The catalog is §3.20. This route reads up to 10 active `revenue_items` by `priority_score` and does not call `/api/revenue/recommend`.
 
 ---
 
@@ -1224,6 +1224,47 @@ A creator can run a full loop without leaving the app or losing context: open th
 
 ---
 
+## 3.20 Revenue Items (promo catalog) **[NEW]**
+
+### Purpose
+
+Give each workspace a small catalog of offers and a single brand-tuned promo block. The block is previewed on Leads and is the intended `promo_slot` for a public newsletter draft. It is not a billing system and not the sponsorship-alignment matcher (§3.11), which reads the same table and picks thematically.
+
+### Data
+
+Table `revenue_items`. This repo does not ship a `CREATE TABLE` or an RLS policy for it. Routes still use `requireWorkspace()` → `supabaseUser()` and filter `workspace_id`.
+
+Columns the API reads or writes: `workspace_id`, `type`, `title`, `description`, `priority_score`, `link`, `active`, `start_date`, `end_date`. `created_at` is a sort key on list and is not selected. `start_date` / `end_date` are stored and returned; no route treats them as an active window.
+
+### API
+
+All three routes are session-scoped. There is no insert-your-own, update, or deactivate endpoint.
+
+| Path | Method | Behavior |
+|------|--------|----------|
+| `/api/revenue/seed` | `POST` | No body. If any row exists for the workspace, `{ inserted: 0 }`. Otherwise inserts two active defaults: Identity Jedi Newsletter Premium (`type` `premium`, `priority_score` `0.9`) and Workshop-in-a-Box (`type` `product`, `priority_score` `0.8`). Descriptions are set; link and dates are null. |
+| `/api/revenue/list` | `GET` | `{ items }` of `active = true` rows, `created_at` ascending. |
+| `/api/revenue/recommend` | `POST` | Body `{ brandProfileId }`. Loads that profile in the active workspace, then one active item ordered by `priority_score` descending (`limit 1`). |
+
+Recommend calls `callLLM("drafting", …, { max_tokens: 512 })`. The prompt includes the item **title** and **type** plus brand `forbidden_patterns_json`, `emoji_policy_json`, `formatting_rules_json`, and `cta_rules_json`. It does not include `description`, `link`, or the profile `name`. Contract told to the model: 3–5 lines, one sentence each, last line exactly `Subscribe.`, no in-sentence dashes, plain text. Success is `{ ok: true, item, promoText }`. An empty completion is still `ok: true` with `promoText` `"(No content generated)"`.
+
+Postgres `ORDER BY priority_score DESC` places nulls first, so a null score outranks `0.9`. Equal scores have no tie-break.
+
+### Callers
+
+- **Onboarding step 3** (`app/onboarding/page.tsx`) POSTs seed with the session cookie, in parallel with research, outlines, and lanes. The two default titles are Identity Jedi copy even when the brand template is `blank`.
+- **Leads** (`app/leads/page.tsx`) button **Get promo** POSTs recommend with the selected brand profile. Failure leaves the promo card hidden; the page does not surface `error`.
+- **Issue generation** (`app/api/issues/generate/route.ts`) calls recommend only for `full_issue` and `bundle`. `insider_access` returns before the call. The server `fetch` does not forward cookies, so middleware redirects it to `/sign-in`. Generate then persists `content_json.promo_slot` as `Subscribe.` The slot is not lint-rewritten. `renderDraftMarkdown` prints it as **Promo Slot** when non-empty.
+
+### Constraints
+
+- Seed is idempotent for the whole table, not for inactive rows. Deactivating every item does not allow a re-seed.
+- A workspace that skipped onboarding step 3 has no catalog; recommend returns `404 No active revenue item found`.
+- Catalog edits after seed are SQL, not an app workflow.
+- If RLS is enabled on `revenue_items` without a membership policy, the user client cannot read or insert. No policy file in this repo covers that table.
+
+---
+
 # 4. Brand Profile Schema
 _Unchanged from v2.0. Voice-only concerns; structural templates moved to §3.10._
 
@@ -1314,6 +1355,7 @@ Stretch:
 | **Content products — Podcast script + signal grounding** | **Implemented** | `POST /api/content-products/podcast-script`; URL → `signals` resolution; TTS-ready segments |
 | **Content products — ElevenLabs TTS** | **Partial** | `POST /api/content-products/podcast-tts`; download + optional persist to `podcast_episodes` + Storage when `PODCAST_AUDIO_STORAGE_BUCKET` + saved `draftId` — §3.11 |
 | **Content products — Sponsorship alignment** | **Implemented** | `POST /api/content-products/sponsorship-alignment` (experimental) |
+| **Revenue items (promo catalog)** | **Implemented** | §3.20 — idempotent `POST /api/revenue/seed`, `GET /api/revenue/list`, `POST /api/revenue/recommend`. No mutate API. No schema or RLS file in repo. Issue-generate promo hop is cookieless and falls back to `Subscribe.` |
 | **Brainstormer Agent (Ideation)** | **Implemented** | §3.1 / §3.13 — tool loop: `query_signals`, `get_signal`, `trigger_signal_ingest`, `propose_manual_signal`, `save_artifact_draft`; `brainstorm` LLM role |
 | **Brainstorming Hub** | **Implemented (MVP/M1)** | §3.13 — sessions/messages CRUD; chat UI; streaming; tools as above; Promote to `DraftObject` → `issue_drafts` |
 | **Blog draft (longform)** | **Not started** | §3.13 M2 — `BlogDraftObject`, `POST /api/content-products/blog-draft`, export UI; see agent plan Phase 6 |
