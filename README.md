@@ -455,6 +455,98 @@ Successful response includes `beehiiv.id`, `beehiiv.title`, `beehiiv.status`, an
 - `403 Beehiiv integration is not enabled`: Beehiiv env vars are missing or `BEEHIIV_ENABLED` is not `true`.
 - `500 Beehiiv API error: ...`: Beehiiv rejected the request or returned an upstream error.
 
+## Issue Draft History Runbook
+
+History lists rows in `issue_drafts`. `full_issue` and `bundle` generation insert the public issue; `insider_access` returns text and leaves this table unchanged. The History panel on `/issues` requests the 10 newest rows. Compare is two markdown strings rendered in the browser: the open draft beside another row's stored `content`.
+
+All four routes below call `requireWorkspace()`. Middleware treats them as signed-in routes. RLS policy `issue_drafts_workspace_rw` is `FOR ALL` for any workspace member, so a viewer can list, change status, and delete.
+
+### Endpoints
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/api/issues/list?limit=` | `GET` | Newest drafts for the active workspace. Default `limit` is 10. |
+| `/api/issues/latest` | `GET` | Single newest draft (`created_at` descending). |
+| `/api/issues/update-status` | `POST` | Set `status` to `draft`, `reviewed`, or `published`. |
+| `/api/issues/delete` | `POST` | Delete one draft in the active workspace. |
+
+`GET /api/issues/[id]` (the `?draft=<id>` deep link) returns `status` with the draft. `GET /api/issues/latest` returns `id`, `draft`, `created_at`, and `content_json` only.
+
+### List and latest
+
+List selects `id`, `content`, `content_json`, `brand_profile_id`, `status`, `created_at`, orders by `created_at` descending, and applies `limit`. It returns every status. `limit` is `Number(searchParams.get("limit") || "10")`, so an omitted or empty value is 10. The History panel always sends `limit=10`.
+
+```bash
+curl -s "http://localhost:3000/api/issues/list?limit=10"
+curl -s http://localhost:3000/api/issues/latest
+```
+
+Latest returns `{ id, draft, created_at, content_json? }`. `draft` is the stored markdown `content`, or `""` when that column is null. When the workspace has no `issue_drafts` row the route returns **404** `No draft found. Generate an issue draft first.` A query error is **503** with `detail`.
+
+The Issues page loads history on mount (the panel stays collapsed until **History** is opened) and loads either `?draft=<id>` or latest into the editor. `loadLatestDraft` ignores a non-OK response and also skips a row whose `draft` string is empty.
+
+### Status
+
+Allowed values are `draft`, `reviewed`, and `published`. The request accepts `draftId` or `id`.
+
+```bash
+curl -s -X POST http://localhost:3000/api/issues/update-status \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<issue_draft_id>","status":"reviewed"}'
+```
+
+Success is `{ ok: true, id, status }` taken from the request. The handler does not check that a row changed, so an id that matches nothing in this workspace still returns 200.
+
+Who writes the column:
+
+| Writer | What it sets |
+|--------|----------------|
+| Issues History rocket | `published` on that row. Shown whenever `status !== "published"` (including a missing status). |
+| Editor tool `update_draft_status` | `draft`, `reviewed`, or `published` on the **newest** `issue_drafts` row (`created_at`). The tool picks that row itself. The Editor system prompt's numbered workflow has no step that calls it. |
+| Publisher `recordPublication` | `published` on the draft that was just pushed, and stores `content_json.metadata.beehiiv_post_id`. |
+
+The History rocket writes `issue_drafts.status` only. Beehiiv publish stays on `POST /api/publish/beehiiv`, which is what stores `content_json.metadata.beehiiv_post_id`. Home counts follow the column: `GET /api/dashboard/stats` puts null/`draft` in `newsroom.drafts.draft`, `reviewed` in `newsroom.drafts.reviewed`, and `published` in `newsroom.drafts.published`. `newsroom.lastPublished` is the newest **published** row ordered by `created_at`. The pipeline "in draft" count is null, `draft`, or `reviewed`.
+
+`status` is absent from `lib/supabase/schema-issue_drafts.sql`. The `ALTER` in spec §3.1 is the only SQL in the repo. Generation's insert omits `status`, so new rows need a database default. While the column is missing, `GET /api/issues/list` selects `status` and returns **500**, and the History panel renders **No drafts yet**. Latest still loads, because its select list omits `status`. When the newsroom status queries error, those three buckets are `0` and `lastPublished` is null; the pipeline in-draft count falls back to every `issue_drafts` row.
+
+### Compare
+
+Open **History**, load one draft (click the row), then click the columns icon on a **different** row. The icon is hidden when the editor has no markdown loaded, and on the row that is already open.
+
+The panel is two `<pre>` blocks:
+
+- **Current** — the editor's `draft` string (last generate, load, or successful inline save).
+- **Comparing** — that history row's stored `content`.
+
+Title text comes from `content_json.title`. The comparing column falls back to the row's `created_at` date. Unsaved inline edits stay in the editor fields until save; compare keeps showing the previous markdown until `PATCH /api/issues/[id]` returns and the page replaces `draft`.
+
+### Delete
+
+```bash
+curl -s -X POST http://localhost:3000/api/issues/delete \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<issue_draft_id>"}'
+```
+
+`draftId` is accepted as well. Missing both is **400** `draftId or id required`. A response of `{ ok: true }` covers both a deleted row and zero rows matched (unknown id or another workspace). The History trash control deletes on click. When the deleted id is the open draft, the editor clears. Lead rows already marked `drafted` stay `drafted`.
+
+Foreign keys:
+
+| Table | Column | On draft delete |
+|-------|--------|-----------------|
+| `ace_runs` | `draft_id` | No `ON DELETE` clause (`schema-ace-runs.sql`). Postgres blocks the delete; the route returns **500** with the database message. |
+| `podcast_episodes` | `issue_draft_id` | `ON DELETE SET NULL` |
+| `linkedin_drafts` | `source_issue_draft_id` | `ON DELETE SET NULL` |
+
+### Troubleshooting
+
+- History says **No drafts yet** while latest still shows a draft: list is selecting `status` and failing. Apply the §3.1 `status` column, then reload.
+- `400 status must be draft, reviewed, or published`: body status was missing or outside `draft`, `reviewed`, and `published`.
+- `400 draftId required` on update-status: body had neither `draftId` nor `id`.
+- Rocket click and the home "published" card disagree with Beehiiv: the rocket only updates `issue_drafts.status`. A Beehiiv post id is written by the Publisher path.
+- Delete returns `{ ok: true }` and the row is still there: the id was already gone, or it belongs to another workspace. A real failure is **500** (often `ace_runs.draft_id`).
+- Compare looks stale after typing: save the inline editor first. Compare reads the saved markdown string.
+
 ## License
 
 Private — OnTheCorner Media.
