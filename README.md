@@ -186,15 +186,16 @@ In the Supabase SQL editor, run:
 | `GET  /api/me` | Current user, every workspace they belong to, active workspace id |
 | `POST /api/workspaces` | Create a workspace, become its owner, set active cookie |
 | `POST /api/workspaces/active` | Switch the active workspace (RLS-gated) |
-| `GET/POST/DELETE /api/workspaces/[id]/members` | List members + invites; create invite token; remove member (owner-only via RLS) |
-| `GET  /api/workspaces/invites/[token]` | Public invite landing — redirects to /sign-in then accepts the invite |
+| `GET/POST/DELETE /api/workspaces/[id]/members` | List members + pending invites; create invite token; remove member (owner-only via RLS) |
+| `GET  /api/workspaces/invites/[token]` | Accept an invite while signed in as the invited email. Signed-out browsers go to `/sign-in?next=...` first |
 
-Email delivery for invites uses Resend when `RESEND_API_KEY` + `EMAIL_FROM` are
-set; without them, owners still get the invite URL in the response and can
-share it manually. The POST response includes
-`email: { sent: boolean, error: string | null }` so the UI can show a banner
-when delivery falls back. A one-click resend endpoint is available at
-`POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only).
+There is no Studio page for members. Email delivery uses Resend when
+`RESEND_API_KEY` + `EMAIL_FROM` are set; without them, owners still get the
+invite URL in the response and can share it manually. The POST response
+includes `email: { sent: boolean, error: string | null }`. A resend endpoint
+is `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only). Invites
+are consumed by opening the token URL, not by sign-in. Contract, role limits,
+and failure modes: [`docs/workspace-invites-runbook.md`](docs/workspace-invites-runbook.md).
 
 ### Migration status (M2 — `WORKSPACE_ID` removed)
 

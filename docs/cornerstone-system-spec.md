@@ -62,7 +62,7 @@ Cornerstone OS is **workspace-scoped by default**. Every domain row (`signals`, 
 |-------|---------|
 | `workspaces` | One row per tenant. Carries `name`, `slug`, `onboarding_completed_at`. |
 | `workspace_members` | Many-to-many join `(workspace_id, user_id, role)` with role enum **`owner` \| `editor` \| `viewer`**. A user can belong to many workspaces. |
-| `workspace_invites` | Pending invitations addressed by email; consumed on first sign-in matching the address. |
+| `workspace_invites` | Pending invitations addressed by email. Consumed when that person opens `GET /api/workspaces/invites/:token` while signed in — not by sign-in itself. See `docs/workspace-invites-runbook.md`. |
 
 **Active workspace selection** — a user's currently-selected workspace is persisted in the **`cs_active_workspace`** cookie (see `lib/auth/session.ts`). The cookie holds a `workspace_id`; helpers `getActiveWorkspaceId()` / `setActiveWorkspaceId()` read/write it, and the workspace switcher in the Studio sidebar updates it via **`PATCH /api/workspaces/active`**. If the cookie is missing or points to a workspace the user is no longer a member of, the session helper falls back to the user's first membership.
 
@@ -896,6 +896,7 @@ There are exactly two Supabase server clients, both exported from `lib/supabase/
   - **Webhooks** — `app/api/notifications/webhook/[provider]/route.ts`. Inbound from Telegram (and future providers); the caller is the provider, not a user.
   - **Workspace-creation bootstrap** — `app/api/workspaces/route.ts` (POST). The new user has zero memberships at this instant, so RLS on `workspaces` / `workspace_members` would (correctly) reject the insert. The route uses `supabaseAdmin()` to create both rows atomically, then RLS resumes for every subsequent request.
   - **Admin-level user listing** — `app/api/workspaces/[id]/members/route.ts` (GET) calls `admin.auth.admin.listUsers` to resolve emails for the members list. `auth.users` is not exposed to the `authenticated` role, so this lookup must go through the admin API. The workspace-membership check that gates the route still runs against `workspace_members` under the user client.
+  - **Invite acceptance** — `app/api/workspaces/invites/[token]/route.ts` (GET) reads and stamps `workspace_invites`, and upserts `workspace_members`, with `supabaseAdmin()`. The invitee is not a member yet, so RLS would hide the invite row. The session user still comes from `supabaseUser()`. See `docs/workspace-invites-runbook.md`.
 
 Any new use of `supabaseAdmin()` outside this list is a review-blocker.
 
@@ -1008,6 +1009,12 @@ Email + password remains the default. Two OAuth providers are wired in via Supab
 Both are presented as "Continue with …" buttons on `/sign-in` and `/sign-up` and call `signInWithProvider()` from `lib/auth/oauth.ts`, which builds the redirect URL from `window.location.origin + "/api/auth/callback"` and invokes `supabase.auth.signInWithOAuth()` with scopes `openid email profile`. The existing callback handler already exchanges the OAuth code for a session and forwards the `next` query param so deep links survive the round-trip.
 
 Provider credentials live in the **Supabase dashboard → Authentication → Providers**, not in `.env.local`. The provider-side redirect URI to register is `https://<project-ref>.supabase.co/auth/v1/callback`. Operator setup steps are in `docs/m2-oauth-runbook.md`.
+
+### Workspace invites
+
+Owners mint a 14-day token with `POST /api/workspaces/:id/members` (`email`, optional `role`, default `editor`). The invite is consumed only by `GET /api/workspaces/invites/:token` while that email is signed in. The handler upserts membership (and overwrites `role` if they were already a member), sets `cs_active_workspace`, and redirects to `/`. Sign-in and `/onboarding` do not accept invites; onboarding creates a separate workspace.
+
+`editor` and `viewer` are not distinct on wave-1 tables (any member can write). Wave-2 writes and invite administration are owner-only. There is no members UI. Operator steps and failure modes: **`docs/workspace-invites-runbook.md`**.
 
 ---
 
@@ -1294,7 +1301,7 @@ Stretch:
 | **`WORKSPACE_ID` env removal** | **Implemented (M2)** | Removed from all production code paths. User-facing routes use `requireWorkspace()`; cron iterates `workspace_settings.ace_enabled`; webhooks moved to per-workspace URL paths (§3.16) |
 | **Auth middleware (session refresh + onboarding gate)** | **Implemented** | `middleware.ts` — refreshes Supabase session, redirects unauth to `/sign-in`, members-of-zero-workspaces to `/onboarding` |
 | **Workspace switcher + sidebar identity** | **Implemented** | `app/api/me/route.ts` returns current user + membership list; Studio sidebar switcher writes `cs_active_workspace` cookie via `PATCH /api/workspaces/active` |
-| **Workspace invites (email delivery)** | **Implemented (M1)** | `POST /api/workspaces/[id]/members` triggers Resend via `lib/email/resend.ts`; one-click resend at `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only) |
+| **Workspace invites (email delivery)** | **Implemented (M1)** | `POST /api/workspaces/[id]/members` triggers Resend via `lib/email/resend.ts`; resend at `POST /api/workspaces/[id]/members/[inviteId]/resend` (owner-only). Consumed by the token URL, not by sign-in. Runbook: `docs/workspace-invites-runbook.md` |
 | **LinkedIn OAuth connection (publishing)** | **Implemented (M1)** | `GET /api/auth/linkedin/start|callback`; `lib/supabase/schema-linkedin.sql` defines `linkedin_connections` + `linkedin_drafts` with RLS via `user_in_workspace` |
 | **LinkedIn token encryption at rest** | **Implemented (M2)** | pgsodium AEAD-DET via `lib/supabase/schema-linkedin-crypto.sql`; `linkedin_connections_decrypted` view + `upsert_linkedin_connection` RPC; wrapped by `lib/linkedin/store.ts` (§3.16) |
 | **Per-workspace billing surface** | Deferred | Stripe (or equivalent) plan tiers — pushed out of Phase 2A M2 (§8) |
