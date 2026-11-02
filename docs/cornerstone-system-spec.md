@@ -410,6 +410,18 @@ The Signals page is organized into two tabs:
 
 ---
 
+### Manual cadence ingest on `/research`
+
+Shipped beside the intent/sources model above. Operator detail is in the README section **Research Console Ingest**.
+
+`POST /api/research/run-directives` (`cadence`: `daily` \| `weekly`, `limitPerFeed` default 15) calls `runCadenceIngest` (`lib/research/runCadenceIngest.ts`) for the active workspace. It loads every `research_directives` row for that cadence — the `active` flag is not applied — and fetches `RSS_FEED_MAP` (`lib/research/rssFeedMap.ts`) by directive name. Inserted signals set `directive_id`. The run is `runs.run_type = directive_ingest`. The Research console **Run daily** and **Run weekly** buttons call this route from the browser (they send `limitPerFeed: 10` and the session cookies).
+
+`POST /api/research/run-all` does not call the ingester. It `fetch`es `/api/research/run-directives` once per cadence with `Content-Type` only and does not copy `Cookie` or `Authorization`. Middleware redirects that hop to `/sign-in`. `fetch` follows the redirect, JSON parse fails, and each cadence is recorded `ok: true`, `inserted: 0`, `skipped: 0`, with no `error`. The outer response is HTTP 200 and `ok: true`, so **Run all directives** can show a successful empty ingest when nothing ran and no `directive_ingest` row was written.
+
+`trigger_signal_ingest` (Brainstorm) calls `runCadenceIngest` in-process. The Researcher stage of `POST /api/pipeline/run` uses `ingest_approved_sources` on approved `research_sources` and does not call `run-all`.
+
+---
+
 ## 3.4 Leads Pipeline [REVISED]
 _Unchanged from v2.0. Will be wrapped by Writer Agent. Added field: `channel` on `editorial_leads`._
 

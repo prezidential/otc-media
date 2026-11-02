@@ -119,7 +119,7 @@ Open [http://localhost:3000](http://localhost:3000).
 2. **Seed directives:** `POST /api/research/seed-directives` (creates the 8 research directives)
 3. **Seed revenue items:** `POST /api/revenue/seed` (creates default promo items)
 4. **(Optional) Seed default outlines:** `POST /api/content-outlines/seed`, or on Issues use "Seed default outlines" when the workspace has no `content_outlines` rows yet
-5. **Ingest signals:** Go to Research → click "Run All Directives"
+5. **Ingest signals:** Go to Research → **Run daily**, then **Run weekly**. **Run all directives** does not forward the session and can report `+0 inserted` without fetching feeds. See [Research Console Ingest](#research-console-ingest).
 6. **Generate leads:** Go to Leads → select brand profile → click "Generate Leads"
 7. **Approve leads:** Review and approve leads on the Leads page
 8. **Generate draft:** Go to Issues → configure steering, output mode, and outlines → click "Generate Issue Draft"
@@ -360,6 +360,89 @@ Resolution behavior:
 - `400 insiderSystemPrompt is required for insider_access`: missing Insider system prompt on create/update.
 - `404 Draft not found or issue content is invalid for Insider generation.`: `sourceDraftId` row missing or has invalid/non-structured `content_json`.
 - Outlines list empty in Issues UI: generation still works via built-in defaults; seed or create DB rows if you want explicit editable templates.
+
+## Research Console Ingest
+
+`/research` has two manual ingest buttons that do not share a code path. **Run daily** and **Run weekly** reach the ingester. **Run all directives** does not.
+
+### Run daily / Run weekly
+
+The page `POST`s `/api/research/run-directives` from the browser, so the Supabase session cookies are sent. Body from the console:
+
+```json
+{ "cadence": "daily", "limitPerFeed": 10 }
+```
+
+`cadence` must be `"daily"` or `"weekly"` (`400` `{ error: "cadence required: 'daily' | 'weekly'" }` otherwise). A missing, zero, or non-numeric `limitPerFeed` becomes **15** (`Number(body.limitPerFeed) || 15`).
+
+The handler calls `requireWorkspace()`, then `runCadenceIngest` in `lib/research/runCadenceIngest.ts` with `source: "api_research_run_directives"`:
+
+- Loads `research_directives` for the active workspace and that cadence. The `active` column is selected by the list API and **not** applied here.
+- Looks up feed URLs in `RSS_FEED_MAP` (`lib/research/rssFeedMap.ts`) by **directive name**. The eight names from `POST /api/research/seed-directives` are all keys in that map. A name with no entry contributes no items.
+- Takes the first `limitPerFeed` items per feed. Items with no URL or title increment `skipped`. A failed `signals` insert also increments `skipped`.
+- Inserts `signals` with `directive_id` set, `relevance_score` 0.0, and `trust_score` 0.7.
+- Writes `runs.run_type = directive_ingest`. A feed parse or fetch error marks that run `failed` and returns `ok: false` with `error` after earlier feeds in the same request may already have inserted.
+
+Success body: `{ ok: true, inserted, skipped, details }`. `details` is one entry per directive and feed. The console prints only the totals (`+N inserted, M skipped`) and reloads Recent runs.
+
+`POST /api/research/seed-directives` inserts those eight directives only when the workspace has zero rows. Any existing row returns `{ inserted: 0 }` and does not add the missing names.
+
+### Run all directives drops the session
+
+**Run all directives** `POST`s `/api/research/run-all` with `{ limitPerFeed: 10 }`. That route does not call `requireWorkspace()` or `runCadenceIngest`. It loops `daily`, then `weekly`, and `fetch`es its own origin:
+
+```http
+POST ${origin}/api/research/run-directives
+Content-Type: application/json
+
+{ "cadence": "daily", "limitPerFeed": 10 }
+```
+
+The incoming `Cookie` and `Authorization` headers are not copied. `/api/research/*` is not a public path in `middleware.ts`, so the inner request has no user and is redirected to `/sign-in?next=/api/research/run-directives`. `fetch` follows redirects by default. The sign-in page is HTML, `res.json()` fails, and the route substitutes `{}`.
+
+Each cadence is then stored as:
+
+| Field | Value after the redirect |
+|---|---|
+| `ok` | `data.ok ?? res.ok` → **true** when the followed response is HTTP 200 |
+| `inserted`, `skipped` | **0** |
+| `error` | omitted — the HTML body has no `error` field |
+
+The outer handler always returns HTTP **200**:
+
+```json
+{
+  "ok": true,
+  "inserted": 0,
+  "skipped": 0,
+  "results": {
+    "daily": { "ok": true, "inserted": 0, "skipped": 0 },
+    "weekly": { "ok": true, "inserted": 0, "skipped": 0 }
+  }
+}
+```
+
+The console treats top-level `ok: true` as success and shows green `+0 inserted, 0 skipped`. Recent runs does not gain a `directive_ingest` row, because `run-directives` never executed.
+
+A network error on the inner `fetch` is different: that cadence is `ok: false` with `error` set to the exception message, and the outer `ok` is false. The console still only reads the top-level `error`, which this route never sets, so the banner is `Error: 200`. Per-cadence errors live on `results.daily.error` and `results.weekly.error`.
+
+The same shape happens if the inner hop reaches the route without a session: `requireWorkspace()` returns **401** `{ error: "Not authenticated" }`, each cadence is `ok: false` with that error, and the banner is still `Error: 200`.
+
+### Paths that do ingest
+
+| Action | How the workspace is resolved | What runs |
+|---|---|---|
+| **Run daily** / **Run weekly** | Browser cookies on `POST /api/research/run-directives` | `runCadenceIngest` for that cadence |
+| **Run all directives** | Not forwarded on the inner fetch | Neither cadence |
+| Brainstorm tool `trigger_signal_ingest` | In-process Supabase client from the session | `runCadenceIngest` (limit defaults to 12, clamped to 5–30). Does not call `run-all`. |
+| **Research + write leads** / **Run full pipeline** | Browser cookies on `POST /api/pipeline/run` | Researcher `ingest_approved_sources` against approved `research_sources`. Does not read `RSS_FEED_MAP`. |
+
+### Troubleshooting
+
+- Green `+0 inserted` after **Run all directives**, and no new `directive_ingest` row: the session was dropped. Run **Run daily** and **Run weekly** instead (or `POST /api/research/run-directives` from a client that sends the session cookies).
+- `+0 inserted` after **Run daily** with a new completed `directive_ingest` run: the route did run. Likely causes are no directives for that cadence, directive names missing from `RSS_FEED_MAP`, or every item skipped.
+- `Error: 200` on the console: the page received HTTP 200 with `ok: false` and no top-level `error`. Inspect `results.daily` and `results.weekly` in the network response.
+- `curl` without the browser session cookies is redirected to `/sign-in` the same way. Cookie-less examples elsewhere in this README do not authenticate these routes.
 
 ## Autonomous Pipeline Runbook
 
