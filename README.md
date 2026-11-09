@@ -222,8 +222,56 @@ the workspace explicitly:
   provider-level signature (e.g. Telegram's secret-token header); the path
   parameter is a routing hint and is cross-checked against the resolved
   approval row.
-- **Health probe** (`GET /api/health`) — no longer checks `WORKSPACE_ID`. It
-  reports Supabase reachability via a trivial `select` against `workspaces`.
+- **Health probe** (`GET /api/health`) — readiness only. It does not read
+  `WORKSPACE_ID`. See [Health Probe](#health-probe).
+
+## Health Probe
+
+`GET /api/health` answers "can this process reach Supabase?" It is the public
+readiness URL. It is not the Subscriber Health report
+(`GET`/`POST /api/pipelines/health-report`, which requires `CRON_SECRET` and
+writes `subscriber_health_history`).
+
+No session cookie is required. `middleware.ts` marks `/api/health` public, but
+the function still constructs the Supabase session client
+(`NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) and calls
+`getUser()` before that public return. The handler itself does not call
+`requireWorkspace()`.
+
+```bash
+curl -sS -D - http://localhost:3000/api/health
+```
+
+`ok` is true only when all of these hold:
+
+- `NEXT_PUBLIC_SUPABASE_URL` is non-empty after trim
+- `SUPABASE_SECRET_KEY` is non-empty after trim
+- `supabaseAdmin()` can run `select id` against `workspaces` (`head: true`,
+  `limit 1`) without an error
+
+An empty `workspaces` table is still success. The probe does not check that a
+workspace row exists, and it does not read `WORKSPACE_ID`.
+
+HTTP status is **200** when `ok` is true and **503** otherwise. Body:
+
+| Field | Meaning |
+|---|---|
+| `ok` | Readiness result above |
+| `service` | Always `"otc-media"` |
+| `supabase` | `"ok"`, `"error"` (query returned an error, or the client threw), or `"skipped"` (URL or secret missing, so no query is attempted) |
+| `supabase_error` | Present only when `supabase` is `"error"`; the Postgrest or exception message |
+| `checks.supabase_url` / `checks.supabase_secret` / `checks.supabase_reachable` | The three inputs to `ok` |
+| `checks.anthropic_api_key` | `ANTHROPIC_API_KEY` is non-empty after trim. Reported only — a missing key does not flip `ok` or the status code |
+| `timestamp` | ISO time of the response |
+
+There is no `workspace_id` field.
+
+What a green check does not prove:
+
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` is set (sign-in and middleware need it; the handler does not)
+- Auth, RLS, or `requireWorkspace()` work
+- Anthropic or OpenAI credentials work
+- Subscriber Health, Beehiiv, or any workspace-scoped route is configured
 
 ## Available Scripts
 
