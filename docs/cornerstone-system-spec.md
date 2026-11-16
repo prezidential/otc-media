@@ -222,7 +222,7 @@ Accepts:
 - `stages`: which agents to run (default: all non-gated)
 - `triggered_by`: run provenance label (default: `manual`)
 
-Workspace scope is taken from `WORKSPACE_ID` environment configuration.
+Workspace scope is the active session from `requireWorkspace()`. This route does not read `WORKSPACE_ID`. See **Orchestrator failure shapes** at the end of this section.
 
 Behavior:
 1. Runs Researcher Agent — checks staleness, ingests stale directives
@@ -255,6 +255,18 @@ INSERT INTO runs (
   :finished_at
 );
 ```
+
+### Orchestrator failure shapes
+
+`POST /api/pipeline/run` (`app/api/pipeline/run/route.ts`) does not use one error envelope. Operators should read `ok`, `aborted`, and which keys exist on `stages`.
+
+- **No session.** The path is not public in `middleware.ts`. An unauthenticated request is redirected (**307**) to `/sign-in?next=/api/pipeline/run` before the handler. A signed-in user with no `workspace_members` row is redirected to `/onboarding` (a failed membership read does the same, and logs `[middleware] workspace_members lookup failed`). `requireWorkspace()` returns JSON `401` `{ error: "Not authenticated" }` or `403` `{ error: "No workspaces" }` only when that middleware gate is not in front of the handler.
+- **No brand profile.** The handler loads `brand_profiles.id` for the active workspace (`limit 1`, `maybeSingle()`, no `order`) with the session client, so RLS `brand_profiles_workspace_rw` applies. A query error is ignored and looks like zero rows. `researcher` still runs. `writer` and `editor` do not call `runAgent` or `saveAgentRun`; each `stages` entry is `{ success: false, summary: "No brand profile found", decisions: [], data: {} }` and the loop continues, so `aborted` stays `false`. `ok` is `false` if any recorded stage has `success: false`.
+- **Iteration cap.** `runAgent` returns `success: false` with summary `Agent reached max iterations without completing` only after the cap (researcher 15, writer 15, editor 10) with no `{"done": true}` signal. Tool throws and unparseable replies stay inside the loop. The route persists that stage as `runs.status = failed`, sets `aborted` true, and omits every later stage from `stages`. The HTTP object does not include the framework's `error: "max_iterations_reached"`.
+- **Stage list.** Names other than `researcher`, `writer`, and `editor` are skipped (not stored, not logged). `stages: []` does not restore the default trio — `??` replaces only `null` or a missing field. A string is iterated character by character and those characters are unknown. When nothing was recorded, the response is `{ ok: true, aborted: false, stages: {} }`.
+- **Draft id.** `generate_newsletter_draft` calls `POST /api/issues/generate` without the caller session. The tool does not throw on that failure, so the editor stage can still finish `success: true`. `returnDraftId: true` adds `draftId: null` unless `data.generate_newsletter_draft.draft_id` is a string.
+- **Bad JSON.** `req.json()` failure becomes `{}`, and the defaults above apply.
+- **`runs` insert.** `saveAgentRun` uses the service-role client. A failed insert is warned only when `NODE_ENV !== "production"` and does not change `ok`. A successful HTTP body does not prove the audit row exists.
 
 ---
 
