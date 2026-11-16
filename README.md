@@ -388,8 +388,27 @@ Response includes:
 
 Operational constraints:
 
-- `WORKSPACE_ID` must be configured.
-- `writer` and `editor` require an existing brand profile in `brand_profiles` for the workspace.
+- The handler calls `requireWorkspace()` (session and active workspace). It does not read `WORKSPACE_ID`.
+- A missing `brand_profiles` row does not stop the loop. `writer` and `editor` are recorded as failed and the route continues. See Failure shapes.
+
+### Failure shapes
+
+`app/api/pipeline/run/route.ts` and `runAgent` in `lib/agents/framework.ts`. The `ok` / `aborted` bullets above do not describe these paths.
+
+| Situation | HTTP result |
+|-----------|-------------|
+| No Supabase session | Middleware redirects (**307**) to `/sign-in?next=/api/pipeline/run`. The `curl` above sends no `Cookie`, so the handler never runs. Following the redirect does not return `{ ok, stages }`. |
+| Signed in, zero workspace memberships | Middleware redirects to `/onboarding`. A failed `workspace_members` read takes the same path (console warning `[middleware] workspace_members lookup failed`). |
+| `writer` or `editor` with no visible brand profile | That stage is `{ success: false, summary: "No brand profile found", decisions: [], data: {} }`. The loop **continues** (`aborted` stays `false`). `ok` is `false` when any recorded stage failed. No `runs` insert for that stage. |
+| `runAgent` hits its iteration cap | Stage `summary` is `Agent reached max iterations without completing`. `aborted` becomes `true`, so later stage names are omitted from `stages`. The failed stage is inserted into `runs` with status `failed`. |
+| Unknown names, `stages: []`, or a string `stages` | Those names are dropped and not saved. `ok` is `true` and `stages` is `{}` when every requested name was dropped. Only `null` or an omitted `stages` falls back to the three default stages. |
+
+Constraints behind that table:
+
+- The profile lookup is `brand_profiles.id` for the active workspace, `limit 1`, `maybeSingle()`, no `order`, on the session client (RLS `brand_profiles_workspace_rw`). A query error is discarded and treated as no row. `researcher` does not check the profile. With more than one row, which id is used is not ordered.
+- Caps are researcher **15**, writer **15**, editor **10**. A thrown tool or a non-JSON model reply stays in the loop. `runAgent` sets `success: false` only when the cap is reached. The HTTP stage object copies `success`, `summary`, `decisions`, and `data` — not `error: "max_iterations_reached"`.
+- `generate_newsletter_draft` POSTs `/api/issues/generate` with `Content-Type` only. That hop does not throw, so the editor stage can still be `success: true` with no `draft_id`. When `returnDraftId` is true and `data.generate_newsletter_draft.draft_id` is not a string, the response includes `draftId: null`.
+- A body that is not valid JSON is treated as `{}` (defaults apply). `requireWorkspace()` JSON (`401` `{ error: "Not authenticated" }`, `403` `{ error: "No workspaces" }`) is reached only when the handler runs without the middleware redirect.
 
 ## Publishing Runbook
 
