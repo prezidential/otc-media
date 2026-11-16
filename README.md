@@ -409,6 +409,7 @@ Constraints behind that table:
 - Caps are researcher **15**, writer **15**, editor **10**. A thrown tool or a non-JSON model reply stays in the loop. `runAgent` sets `success: false` only when the cap is reached. The HTTP stage object copies `success`, `summary`, `decisions`, and `data` — not `error: "max_iterations_reached"`.
 - `generate_newsletter_draft` POSTs `/api/issues/generate` with `Content-Type` only. That hop does not throw, so the editor stage can still be `success: true` with no `draft_id`. When `returnDraftId` is true and `data.generate_newsletter_draft.draft_id` is not a string, the response includes `draftId: null`.
 - A body that is not valid JSON is treated as `{}` (defaults apply). `requireWorkspace()` JSON (`401` `{ error: "Not authenticated" }`, `403` `{ error: "No workspaces" }`) is reached only when the handler runs without the middleware redirect.
+- `saveAgentRun` logs a failed `runs` insert only when `NODE_ENV` is not `production`, and it does not change the HTTP body. `ok: true` does not prove a `runs` row was written.
 
 ## Publishing Runbook
 

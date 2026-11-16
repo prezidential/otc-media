@@ -266,6 +266,7 @@ INSERT INTO runs (
 - **Stage list.** Names other than `researcher`, `writer`, and `editor` are skipped (not stored, not logged). `stages: []` does not restore the default trio — `??` replaces only `null` or a missing field. A string is iterated character by character and those characters are unknown. When nothing was recorded, the response is `{ ok: true, aborted: false, stages: {} }`.
 - **Draft id.** `generate_newsletter_draft` calls `POST /api/issues/generate` without the caller session. The tool does not throw on that failure, so the editor stage can still finish `success: true`. `returnDraftId: true` adds `draftId: null` unless `data.generate_newsletter_draft.draft_id` is a string.
 - **Bad JSON.** `req.json()` failure becomes `{}`, and the defaults above apply.
+- **`runs` insert.** `saveAgentRun` uses the service-role client. A failed insert is warned only when `NODE_ENV !== "production"` and does not change `ok`. A successful HTTP body does not prove the audit row exists.
 
 ---
 
