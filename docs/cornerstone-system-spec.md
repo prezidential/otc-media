@@ -926,6 +926,18 @@ Key contract details:
 - **Response short-circuit.** When the user is unauthenticated (401) or has no workspaces (403), `requireWorkspace()` returns a ready-to-return `Response`. The `instanceof Response` guard is mandatory at the top of every route — TypeScript will not catch a missed guard because the success branch widens to the same union.
 - **Explicit `.eq("workspace_id", workspaceId)` filters remain useful** for query shape and clarity, but they are no longer the security boundary. RLS is. Removing them is safe; missing them is not a vulnerability.
 
+### Identity endpoint (`GET /api/me`)
+
+`app/api/me/route.ts` is the exception to the recipe above. The Studio sidebar needs a membership list before a workspace is selected, so the handler calls `supabaseUser()` directly and does not call `requireWorkspace()`.
+
+`/api/me` is not a middleware public path. A request with no session receives **307** (`NextResponse.redirect` with no status override) to `/sign-in?next=<pathname + search>`. For this route that `next` value is `/api/me`, or `/api/me` plus the original query string. The handler's signed-out branch — **200** `{ user: null, workspaces: [], activeWorkspaceId: null }` — does not run on that request. The comment at the top of the route file describes that branch.
+
+A signed-in caller with zero `workspace_members` rows reaches the handler: **200**, `workspaces: []`, `activeWorkspaceId: null`. A failed membership query is **500** `{ error }` with the Postgrest message. Middleware does not turn that failure into an onboarding redirect on this path.
+
+Success rows are ordered by `workspace_members.created_at` ascending (no secondary sort). The select is an inner join, `workspaces!inner(id, slug, name, onboarding_completed_at)`. `activeWorkspaceId` is the `cs_active_workspace` cookie when that id is in the list; otherwise it is the earliest row. A stale cookie is left unchanged and does not 403.
+
+`app/components/studio-app-shell.tsx` shows `name` and `role` for `activeWorkspaceId`. Operator steps and the shell's **500** render failure are in the README section **Identity endpoint**.
+
 ### Edge runtime caveat — middleware
 
 Middleware (`middleware.ts`) runs on the Next.js **Edge runtime**, where `@supabase/ssr` exhibits a quirk we must work around. **Do not use `{ count: "exact", head: true }` queries in Edge code.** In the Edge runtime, the underlying `fetch` strips the HEAD response body and `@supabase/ssr` surfaces the result as a `PostgrestError` whose only payload is:

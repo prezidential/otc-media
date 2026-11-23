@@ -163,6 +163,59 @@ In the Supabase SQL editor, run:
    `SET app.legacy_workspace_id = '<your-old-WORKSPACE_ID-uuid>';` first; the
    migration will flip its `ace_enabled` to true.
 
+### Identity endpoint (`GET /api/me`)
+
+The Studio sidebar (`app/components/studio-app-shell.tsx`) calls this route and renders the signed-in email plus the active workspace `name` and `role`. The sidebar does not write `cs_active_workspace`.
+
+`/api/me` is absent from the middleware public-path list, so the handler in `app/api/me/route.ts` runs only after middleware lets the request through.
+
+| Caller | Response |
+|---|---|
+| No session | **307** to `/sign-in?next=/api/me`. `next` is the path plus the original query string (`/api/me?x=1` when one was sent). |
+| Signed in, zero memberships | **200**. `workspaces` is `[]`. `activeWorkspaceId` is `null`. |
+| Signed in, `workspace_members` query error | **500** `{ "error": "<Postgrest message>" }`. |
+| Signed in, rows loaded | **200** with the shape below. |
+
+`NextResponse.redirect` is called with only the URL, which is status **307**. A cookieless `curl` stops on that redirect. `curl -L` follows it and receives the sign-in page HTML.
+
+The comment at the top of `app/api/me/route.ts` describes a **200** body `{ user: null, workspaces: [], activeWorkspaceId: null }` for a signed-out caller. Middleware returns the **307** before that branch runs.
+
+```bash
+curl -sS -D - -o /dev/null http://localhost:3000/api/me
+```
+
+Success body:
+
+```json
+{
+  "user": { "id": "<auth user uuid>", "email": "<email or null>" },
+  "workspaces": [
+    {
+      "id": "<workspace uuid>",
+      "slug": "identity-jedi",
+      "name": "Identity Jedi",
+      "role": "owner",
+      "onboarding_completed_at": null
+    }
+  ],
+  "activeWorkspaceId": "<workspace uuid>"
+}
+```
+
+`email` is `user.email` from Supabase Auth, or `null` when the auth user has none. `role` is the membership role (`owner`, `editor`, or `viewer`).
+
+Ordering is `workspace_members.created_at` ascending on the parent table (`.order("created_at", { ascending: true })`). There is no tie-break column. The embed is `workspaces!inner(id, slug, name, onboarding_completed_at)`, so a membership with no visible workspace row is omitted.
+
+The handler calls `supabaseUser()` and relies on RLS. `workspace_members_self_read` allows `user_id = auth.uid()`. The embedded workspace must pass `workspaces_member_read`. This route does not call `requireWorkspace()`, so it does not use that helper's 401/403 responses.
+
+`activeWorkspaceId` is the `cs_active_workspace` cookie when that value matches a returned workspace id. Otherwise it is the first row's id (`workspaces[0]`), or `null` when the list is empty. A missing or stale cookie stays as it was. The status stays **200**.
+
+#### Troubleshooting
+
+- Cookieless client receives a redirect or sign-in HTML. Send the Supabase session cookie to reach the JSON handler.
+- Sidebar workspace line reads "No workspace" for a signed-in user with an empty `workspaces` array. That user still gets **200** from this route.
+- A **500** `{ "error": "..." }` can crash the Studio shell. The shell assigns the JSON to state and then evaluates `me.workspaces.find` without checking `res.ok`. An error object has no `workspaces` array.
+
 ### Auth flow
 
 - `/sign-in` and `/sign-up` use `supabaseBrowser` for email + password, plus
